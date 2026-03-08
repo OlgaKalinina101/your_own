@@ -1,0 +1,14 @@
+# LLM provider and model configuration.
+# Define which model to use per mode (foundation, tools, vision, etc.)
+
+foundation:
+  provider: openai        # openai | xai | deepseek
+  model: gpt-4o
+  temperature: 0.8
+  max_tokens: 2000
+
+tools:
+  provider: openai
+  model: gpt-4o
+  temperature: 0.3
+  max_tokens: 1000

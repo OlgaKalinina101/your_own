@@ -1,0 +1,53 @@
+# Python
+.env
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+env/
+
+# Next.js / Electron
+frontend/.next/
+frontend/node_modules/
+frontend/out/
+frontend/dist/
+frontend/release/
+
+# Database
+*.sqlite
+*.sqlite3
+*.db
+
+# Logs
+*.log
+logs/
+
+# ChromaDB persistent storage
+chroma_data/
+infrastructure/vector_store/*.bin
+infrastructure/vector_store/*.sqlite3
+infrastructure/vector_store/*/
+
+# IDE
+.idea/
+.vscode/
+.cursor/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Electron build artifacts
+frontend/*.tgz
+frontend/*.zip
