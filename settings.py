@@ -28,14 +28,9 @@ class Settings(BaseSettings):
     MEMORY_CUTOFF_DAYS_MIN: int = 1
     MEMORY_CUTOFF_DAYS_MAX: int = 10
 
-    # ── Storage paths ─────────────────────────────────────────────────────────
-    SESSION_CONTEXT_DIR: str = "infrastructure/context_store/sessions"
+    # ── ChromaDB ──────────────────────────────────────────────────────────────
     VECTOR_STORE_DIR: str = "infrastructure/vector_store"
     CHROMA_COLLECTION_NAME: str = "key_info"
-
-    # ── Core ──────────────────────────────────────────────────────────────────
-    CREATOR_ACCOUNT_ID: str = "my_user"
-    TIMEZONE: str = "Europe/Moscow"
 
 
 settings = Settings()
