@@ -24,6 +24,7 @@ frontend/release/
 *.sqlite
 *.sqlite3
 *.db
+generated_images
 
 # Logs
 *.log
