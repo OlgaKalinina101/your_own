@@ -461,9 +461,12 @@ async def chat(
             "If you already have enough context without it, just continue the reply."
         )
 
+    _CMD_OPEN_RE = re.compile(r"\[(SEARCH_MEMORIES|WEB_SEARCH|SAVE_MEMORY):")
+
     async def event_stream():
         assistant_parts: list[str] = []
         stream_completed = False
+        buffering = False
         try:
             logger.info("[chat] initial stream start")
             async for chunk in client.stream(
@@ -475,55 +478,83 @@ async def chat(
                 if not chunk:
                     continue
                 assistant_parts.append(chunk)
+
+                if buffering:
+                    continue
+
+                accumulated = "".join(assistant_parts)
+                if _CMD_OPEN_RE.search(accumulated):
+                    buffering = True
+                    _dbg("BUFFER_START — command detected, buffering rest of stream")
+                    continue
+
                 for sse_line in _yield_chunk(chunk):
                     yield sse_line
 
             stream_completed = True
             full_text = "".join(assistant_parts).strip()
-            _dbg(f"STREAM_DONE full_text_len={len(full_text)}")
+            _dbg(f"STREAM_DONE full_text_len={len(full_text)} buffered={buffering}")
             _dbg(f"FULL_TEXT>>>{full_text}<<<END")
             logger.info("[chat] initial stream done text=%s", _preview(full_text, 260))
             assistant_text, save_matches, search_matches, web_matches = _strip_skills(full_text)
-            assistant_text_full = full_text
-            _dbg(f"PARSED saves={len(save_matches)} searches={len(search_matches)} web={len(web_matches)} clean_len={len(assistant_text)}")
+            assistant_text_full = assistant_text  # start with clean text; commands + continuations appended in order
+
+            all_action_matches = sorted(search_matches + web_matches, key=lambda m: m.start())
+            has_actions = bool(all_action_matches)
+
+            _dbg(f"PARSED saves={len(save_matches)} actions={len(all_action_matches)} clean_len={len(assistant_text)}")
             logger.info(
-                "[chat] parsed skills saves=%d searches=%d web=%d clean=%s",
+                "[chat] parsed skills saves=%d actions=%d clean=%s",
                 len(save_matches),
-                len(search_matches),
-                len(web_matches),
+                len(all_action_matches),
                 _preview(assistant_text, 220),
             )
-            if not save_matches and not search_matches and not web_matches:
+
+            if not save_matches and not all_action_matches:
                 _dbg("NO_SKILLS_DETECTED")
                 logger.info("[chat] no skill commands detected in initial reply")
 
-            # ── Agentic loop: SEARCH_MEMORIES / WEB_SEARCH ──────────────────
-            MAX_AGENT_LOOPS = 5
-            agent_loop = 0
-            _dbg(f"AGENT_LOOP_CHECK search={len(search_matches)} web={len(web_matches)}")
-            while agent_loop < MAX_AGENT_LOOPS and (search_matches or web_matches):
-                agent_loop += 1
-                _dbg(f"AGENT_LOOP #{agent_loop}")
+            # Flush buffered text when no action commands (normal message or save-only)
+            if not has_actions and buffering:
+                _dbg("BUFFER_FLUSH — no actions, flushing buffered save-only text")
+                yield "event: rewrite\n"
+                yield f"data: {json.dumps({'text': full_text})}\n\n"
 
-                next_kind = None
-                next_match = None
-                next_candidates = []
-                if search_matches:
-                    next_candidates.append(("search", search_matches[0]))
-                if web_matches:
-                    next_candidates.append(("web", web_matches[0]))
-                if next_candidates:
-                    next_kind, next_match = min(next_candidates, key=lambda item: item[1].start())
-                if next_kind is None or next_match is None:
-                    break
-
+            # When actions exist, rewrite to show only clean text before first command
+            if has_actions:
+                _dbg(f"REWRITE clean_text before actions len={len(assistant_text)}")
                 yield "event: rewrite\n"
                 yield f"data: {json.dumps({'text': assistant_text})}\n\n"
 
-                if next_kind == "search":
-                    remaining_search_matches = search_matches[1:]
-                    remaining_web_matches = web_matches
-                    search_query = next_match.group(1).strip()
+            # Extract trailing text after the last action command
+            trailing_text = ""
+            if all_action_matches:
+                last_action_end = max(m.end() for m in all_action_matches)
+                raw_tail = full_text[last_action_end:].strip()
+                tail_clean, _, _, _ = _strip_skills(raw_tail)
+                trailing_text = tail_clean.strip()
+
+            # ── Sequential agentic loop ──────────────────────────────────────
+            MAX_AGENT_LOOPS = 5
+            agent_loop = 0
+            pending_actions: list[tuple[str, re.Match]] = []
+            for m in all_action_matches:
+                kind = "search" if "SEARCH_MEMORIES" in m.group(0) else "web"
+                pending_actions.append((kind, m))
+            _dbg(f"AGENT_LOOP_CHECK pending={len(pending_actions)}")
+
+            while agent_loop < MAX_AGENT_LOOPS and pending_actions:
+                agent_loop += 1
+                action_kind, action_match = pending_actions.pop(0)
+                is_last_initial = not pending_actions
+                cmd_text = action_match.group(0)
+                _dbg(f"AGENT_LOOP #{agent_loop} kind={action_kind} cmd={cmd_text[:80]}")
+
+                for sse_line in _yield_chunk("\n" + cmd_text + "\n"):
+                    yield sse_line
+
+                if action_kind == "search":
+                    search_query = action_match.group(1).strip()
                     logger.info("[chat] SEARCH_MEMORIES #%d triggered: %s", agent_loop, search_query[:100])
 
                     yield "event: search_start\n"
@@ -557,9 +588,7 @@ async def chat(
                     continuation_web_search = False
                     logger.info("[chat] continuation #%d mode=search prompt=%s", agent_loop, _preview(continuation_prompt, 220))
                 else:
-                    remaining_search_matches = search_matches
-                    remaining_web_matches = web_matches[1:]
-                    web_query = next_match.group(1).strip()
+                    web_query = action_match.group(1).strip()
                     _dbg(f"WEB_SEARCH #{agent_loop} query={web_query[:120]}")
                     logger.info("[chat] WEB_SEARCH #%d triggered: %s", agent_loop, web_query[:100])
 
@@ -579,6 +608,14 @@ async def chat(
                     continuation_web_search = True
                     logger.info("[chat] continuation #%d mode=web query=%s", agent_loop, _preview(web_query, 120))
 
+                if is_last_initial and trailing_text:
+                    hint_prefix = (
+                        "\n\nТы уже начал(а) отвечать так (продолжай с этого места, не повторяй):\n"
+                        if prompt_language == "ru" else
+                        "\n\nYou already started replying like this (continue from here, don't repeat):\n"
+                    )
+                    continuation_prompt += hint_prefix + trailing_text
+
                 continuation_messages = list(llm_messages)
                 continuation_messages.append({"role": "assistant", "content": assistant_text})
                 continuation_messages.append({"role": "user", "content": continuation_prompt})
@@ -588,7 +625,7 @@ async def chat(
                 for sse_line in _yield_chunk(separator):
                     yield sse_line
 
-                if next_kind == "web":
+                if action_kind == "web":
                     yield "event: web_done\n"
                     yield f"data: {json.dumps({'query': web_query})}\n\n"
 
@@ -617,10 +654,16 @@ async def chat(
                 )
                 if cont_clean:
                     assistant_text = assistant_text + "\n\n" + cont_clean
-                assistant_text_full = assistant_text_full + "\n\n" + continuation_text
+                assistant_text_full = assistant_text_full + "\n" + cmd_text + "\n\n" + continuation_text
                 save_matches = save_matches + cont_saves
-                search_matches = remaining_search_matches + cont_searches
-                web_matches = remaining_web_matches + cont_web
+                for cm in sorted(cont_searches + cont_web, key=lambda m: m.start()):
+                    kind = "search" if "SEARCH_MEMORIES" in cm.group(0) else "web"
+                    pending_actions.append((kind, cm))
+
+            # Append initial SAVE_MEMORY commands to full text for persistent rendering
+            for sm in sorted(save_matches, key=lambda m: m.start()):
+                if sm.group(0) not in assistant_text_full:
+                    assistant_text_full += "\n" + sm.group(0)
 
             # ── [SAVE_MEMORY] — extract and store facts ──────────────────────
             save_memory_results = await _run_save_memory(assistant_text, save_matches)

@@ -19,11 +19,17 @@ from infrastructure.memory.focus_point import (
     extract_focus_fast,
 )
 
+import logging
+
+_logger = logging.getLogger(__name__)
+
 KNN_LIMIT = 200
 KW_BOOST_PER = 0.10
 KW_BOOST_MAX = 0.25
 EXACT_BOOST = 0.15
 SUBSET_BOOST = 0.10
+MIN_COSINE_SIM = 0.35
+MIN_TOTAL_SCORE = 0.40
 
 
 @dataclass
@@ -253,10 +259,14 @@ async def retrieve_relevant_pairs(
         if str(msg.pair_id) in exclude_set:
             continue
         cosine = sim_map.get(msg.message_id, 0.0)
+        if cosine < MIN_COSINE_SIM:
+            continue
         sent_tokens = set(msg.focus_point or [])
         kw_boost = _keyword_boost(fast_tokens, sent_tokens)
         exact_boost = _exact_boost(norm_query, _normalise(msg.text), fast_tokens, sent_tokens)
         total = min(1.0, cosine + kw_boost + exact_boost)
+        if total < MIN_TOTAL_SCORE:
+            continue
         scored.append((total, cosine, kw_boost, exact_boost, msg))
 
     scored.sort(key=lambda item: item[0], reverse=True)
@@ -270,6 +280,7 @@ async def retrieve_relevant_pairs(
 
     top_pairs = sorted(best_per_pair.values(), key=lambda item: item[0], reverse=True)[:top_n]
     if not top_pairs:
+        _logger.info("[retrieval] no pairs passed threshold (cosine>=%.2f total>=%.2f)", MIN_COSINE_SIM, MIN_TOTAL_SCORE)
         return []
 
     render_rows = await repo.get_pairs_render_data(
@@ -283,6 +294,11 @@ async def retrieve_relevant_pairs(
         render = render_map.get(str(best_msg.pair_id))
         if not render:
             continue
+        _logger.info(
+            "[retrieval] pair score=%.3f cosine=%.3f kw=%.3f exact=%.3f text=%s",
+            total, cosine, kw_boost, exact_boost,
+            (best_msg.text or "")[:80],
+        )
         results.append(
             RetrievedPair(
                 pair_id=str(best_msg.pair_id),

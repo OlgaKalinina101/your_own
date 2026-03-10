@@ -6,6 +6,9 @@ Stores AI-extracted facts (via KEY_INFO_PROMPTS) as documents with metadata:
 
 Retrieval is multi-query with keyword boost, impressive boost, and recency penalty.
 Ported from the Kotlin/Android victor_ai project PersonaEmbeddingPipeline.
+
+NLP (lemmatisation, synonyms, stop-words) is delegated to focus_point.py which
+supports both Russian (pymorphy3 + RuWordNet) and English (NLTK WordNet).
 """
 from __future__ import annotations
 
@@ -65,22 +68,6 @@ def _safe_metadata(**kwargs) -> dict:
     return {k: v for k, v in kwargs.items() if v is not None}
 
 
-def _get_morph():
-    try:
-        import pymorphy3
-        return pymorphy3.MorphAnalyzer()
-    except Exception:
-        return None
-
-
-def _get_ruwordnet():
-    try:
-        from ruwordnet import RuWordNet
-        return RuWordNet()
-    except Exception:
-        return None
-
-
 # ── Pipeline ──────────────────────────────────────────────────────────────────
 
 class ChromaMemoryPipeline:
@@ -95,15 +82,7 @@ class ChromaMemoryPipeline:
     """
 
     def __init__(self) -> None:
-        self._morph = _get_morph()
-        self._wn = None   # lazy, only loaded if needed
-        self._wn_loaded = False
-
-    def _ruwordnet(self):
-        if not self._wn_loaded:
-            self._wn = _get_ruwordnet()
-            self._wn_loaded = True
-        return self._wn
+        pass
 
     # ── Write ──────────────────────────────────────────────────────────────────
 
@@ -210,6 +189,7 @@ class ChromaMemoryPipeline:
         deduplicates, applies keyword/impressive/recency boosts, returns top_k.
         """
         keywords = self._extract_keywords(message)
+        norm_query = re.sub(r"[^\w\s]", " ", message.lower()).strip()
 
         queries = [message]
         if len(message) > 80:
@@ -222,11 +202,22 @@ class ChromaMemoryPipeline:
                     all_results[r["id"]] = r
 
         all_results = self._apply_keyword_boost(all_results, keywords)
+        all_results = self._apply_exact_boost(all_results, norm_query, keywords)
         all_results = self._apply_impressive_boost(all_results)
         all_results = self._apply_recency_boost(all_results)
 
         sorted_results = sorted(all_results.values(), key=lambda x: x["score"])
-        return sorted_results[:top_k]
+        top = sorted_results[:top_k]
+        for r in top:
+            logger.info(
+                "[chroma] fact score=%.3f imp=%s text=%s",
+                r["score"],
+                r.get("metadata", {}).get("impressive", "?"),
+                r["text"][:80],
+            )
+        return top
+
+    MAX_DISTANCE = 0.65
 
     def _query_similar(
         self,
@@ -265,6 +256,10 @@ class ChromaMemoryPipeline:
             results["metadatas"][0],
             results["distances"][0],
         ):
+            if score > self.MAX_DISTANCE:
+                logger.debug("[chroma] skip id=%s dist=%.3f > %.2f text=%s", res_id, score, self.MAX_DISTANCE, doc[:60])
+                continue
+
             created_str = meta.get("created_at") or meta.get("last_used")
             if created_str:
                 try:
@@ -323,6 +318,16 @@ class ChromaMemoryPipeline:
                     r["score"] = max(0.01, r["score"] - boost)
         return results
 
+    def _apply_exact_boost(self, results: dict, norm_query: str, query_tokens: set[str]) -> dict:
+        for r in results.values():
+            norm_text = re.sub(r"[^\w\s]", " ", r["text"].lower()).strip()
+            text_tokens = set(norm_text.split())
+            if norm_query == norm_text:
+                r["score"] = max(0.01, r["score"] - 0.15)
+            if query_tokens and query_tokens.issubset(text_tokens):
+                r["score"] = max(0.01, r["score"] - 0.10)
+        return results
+
     def _apply_impressive_boost(self, results: dict) -> dict:
         for r in results.values():
             try:
@@ -356,67 +361,26 @@ class ChromaMemoryPipeline:
                 pass
         return results
 
-    # ── NLP helpers ───────────────────────────────────────────────────────────
+    # ── NLP helpers (delegated to focus_point.py for RU+EN) ─────────────────
 
-    def _split_to_sentences(self, message: str) -> list[str]:
-        parts = re.split(r"[.!?]+", message)
-        return [s.strip() for s in parts if len(s.strip()) > 25]
+    @staticmethod
+    def _split_to_sentences(message: str) -> list[str]:
+        from infrastructure.memory.focus_point import split_to_sentences
+        return [s for s in split_to_sentences(message, min_len=25)]
 
-    def _normalize_word(self, word: str) -> str:
-        if self._morph:
-            try:
-                return self._morph.parse(word)[0].normal_form
-            except Exception:
-                pass
-        return word
+    @staticmethod
+    def _extract_keywords(message: str, expand_synonyms: bool = True) -> set[str]:
+        from infrastructure.memory.focus_point import FocusPointPipeline, detect_language
+        lang = detect_language(message)
+        pipeline = FocusPointPipeline(language=lang, expand_synonyms=expand_synonyms)
+        return set(pipeline.extract(message))
 
-    def _get_synonyms(self, word: str) -> set[str]:
-        wn = self._ruwordnet()
-        if not wn:
-            return set()
-        synonyms: set[str] = set()
-        try:
-            for synset in wn.get_synsets(word)[:3]:
-                for sense in synset.senses:
-                    lemma = sense.name.lower()
-                    if lemma != word:
-                        synonyms.add(lemma)
-                for hypo in synset.hyponyms[:5]:
-                    for sense in hypo.senses[:3]:
-                        synonyms.add(sense.name.lower())
-        except Exception:
-            pass
-        return synonyms
-
-    _STOP = frozenset({
-        "а", "и", "в", "на", "с", "у", "к", "о", "из", "за", "по", "от", "до",
-        "что", "как", "это", "так", "ты", "я", "мы", "он", "она", "они", "вы",
-        "не", "да", "но", "же", "ли", "бы", "то", "ещё", "еще", "уже", "вот",
-        "все", "всё", "мне", "меня", "тебе", "тебя", "нам", "нас", "мой", "твой",
-        "если", "когда", "чтобы", "потому", "очень", "только", "просто", "прям",
-        "хочешь", "хочу", "могу", "можешь", "буду", "будет", "есть", "был", "была",
-        "опять", "снова", "теперь", "сейчас", "тоже", "также", "быть", "этот",
-    })
-
-    def _extract_keywords(self, message: str, expand_synonyms: bool = True) -> set[str]:
-        clean = re.sub(r"[^\w\s]", " ", message.lower())
-        words = clean.split()
-        keywords: set[str] = set()
-        base_lemmas: list[str] = []
-        for w in words:
-            if len(w) > 3 and w not in self._STOP:
-                lemma = self._normalize_word(w)
-                if lemma not in self._STOP:
-                    keywords.add(lemma)
-                    base_lemmas.append(lemma)
-        if expand_synonyms:
-            for lemma in base_lemmas:
-                keywords.update(self._get_synonyms(lemma))
-        return keywords
-
-    def _extract_lemmas(self, text: str) -> set[str]:
-        clean = re.sub(r"[^\w\s]", " ", text.lower())
-        return {self._normalize_word(w) for w in clean.split() if len(w) > 3}
+    @staticmethod
+    def _extract_lemmas(text: str) -> set[str]:
+        from infrastructure.memory.focus_point import FocusPointPipeline, detect_language
+        lang = detect_language(text)
+        pipeline = FocusPointPipeline(language=lang, expand_synonyms=False)
+        return set(pipeline.extract(text))
 
 
 # ── Module-level singleton ─────────────────────────────────────────────────────
