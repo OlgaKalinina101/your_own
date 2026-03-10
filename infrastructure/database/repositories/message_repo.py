@@ -37,16 +37,12 @@ class MessageRepository:
         _INSERT = (
             "INSERT INTO messages ("
             "  message_id, pair_id, account_id, conversation_id,"
-            "  created_at, role, text, message_kind, source, chunk_index, focus_point,"
-            "  memory, impressive, frequency, last_used,"
-            "  insight, user_mood, assistant_mood, assistant_intensity,"
-            "  emoji, embedding"
+            "  created_at, role, text, message_kind, source, chunk_index,"
+            "  focus_point, emoji, embedding"
             ") VALUES ("
             "  :message_id, :pair_id, :account_id, :conversation_id,"
-            "  :created_at, :role, :text, :message_kind, :source, :chunk_index, :focus_point,"
-            "  :memory, :impressive, :frequency, :last_used,"
-            "  :insight, :user_mood, :assistant_mood, :assistant_intensity,"
-            "  :emoji, {emb_expr}"
+            "  :created_at, :role, :text, :message_kind, :source, :chunk_index,"
+            "  :focus_point, :emoji, {emb_expr}"
             ") ON CONFLICT (message_id) DO NOTHING"
         )
 
@@ -64,27 +60,19 @@ class MessageRepository:
             await self._session.execute(
                 text(_INSERT.format(emb_expr=emb_expr)),
                 {
-                    "message_id":          str(m.message_id),
-                    "pair_id":             str(m.pair_id),
-                    "account_id":          m.account_id,
-                    "conversation_id":     m.conversation_id,
-                    "created_at":          m.created_at,
-                    "role":                m.role,
-                    "text":                m.text,
-                    "message_kind":        m.message_kind,
-                    "source":              m.source,
-                    "chunk_index":         m.chunk_index,
-                    "focus_point":         m.focus_point,
-                    "memory":              m.memory,
-                    "impressive":          m.impressive,
-                    "frequency":           m.frequency,
-                    "last_used":           m.last_used,
-                    "insight":             m.insight,
-                    "user_mood":           m.user_mood,
-                    "assistant_mood":      m.assistant_mood,
-                    "assistant_intensity": m.assistant_intensity,
-                    "emoji":               m.emoji,
-                    "embedding":           emb_str,
+                    "message_id":      str(m.message_id),
+                    "pair_id":         str(m.pair_id),
+                    "account_id":      m.account_id,
+                    "conversation_id": m.conversation_id,
+                    "created_at":      m.created_at,
+                    "role":            m.role,
+                    "text":            m.text,
+                    "message_kind":    m.message_kind,
+                    "source":          m.source,
+                    "chunk_index":     m.chunk_index,
+                    "focus_point":     m.focus_point,
+                    "emoji":           m.emoji,
+                    "embedding":       emb_str,
                 },
             )
 

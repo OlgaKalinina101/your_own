@@ -394,11 +394,13 @@ async def chat(
                     extraction_pairs.append({"role": "assistant", "content": item["assistant_text"]})
             extraction_pairs.append({"role": "user", "content": current_user_text})
             extraction_pairs.append({"role": "assistant", "content": clean_text})
-            for _ in save_matches:
+            for m in save_matches:
+                hint = m.group(1).strip() if m.group(1) else ""
                 r = await extract_and_store(
                     api_key=api_key,
                     account_id=account_id or "default",
                     recent_pairs=extraction_pairs,
+                    hint=hint,
                 )
                 if r:
                     results.append(r)
@@ -482,6 +484,7 @@ async def chat(
             _dbg(f"FULL_TEXT>>>{full_text}<<<END")
             logger.info("[chat] initial stream done text=%s", _preview(full_text, 260))
             assistant_text, save_matches, search_matches, web_matches = _strip_skills(full_text)
+            assistant_text_full = full_text
             _dbg(f"PARSED saves={len(save_matches)} searches={len(search_matches)} web={len(web_matches)} clean_len={len(assistant_text)}")
             logger.info(
                 "[chat] parsed skills saves=%d searches=%d web=%d clean=%s",
@@ -614,6 +617,7 @@ async def chat(
                 )
                 if cont_clean:
                     assistant_text = assistant_text + "\n\n" + cont_clean
+                assistant_text_full = assistant_text_full + "\n\n" + continuation_text
                 save_matches = save_matches + cont_saves
                 search_matches = remaining_search_matches + cont_searches
                 web_matches = remaining_web_matches + cont_web
@@ -626,14 +630,23 @@ async def chat(
                 len(save_memory_results),
             )
 
-            if assistant_text and not assistant_text.startswith("[OpenRouter error"):
+            for sr in save_memory_results:
+                if sr.get("dedup") == "skipped":
+                    continue
+                stars = sr.get("impressive", 0)
+                marker = f"\n[SAVED_FACT: {sr['category']} | {stars} | {sr['fact']}]"
+                assistant_text_full += marker
+                for sse_line in _yield_chunk(marker):
+                    yield sse_line
+
+            if assistant_text_full and not assistant_text_full.startswith("[OpenRouter error"):
                 assistant_created_at = now_utc()
                 assistant_rows = [
                     build_canonical_row(
                         pair_id=pair_id,
                         account_id=account_id or "default",
                         role="assistant",
-                        text=assistant_text,
+                        text=assistant_text_full,
                         created_at=assistant_created_at,
                     ),
                     *build_chunk_rows(
@@ -690,9 +703,7 @@ async def chat(
             yield "event: memory\n"
             yield f"data: {json.dumps({'chroma_facts': chroma_for_ui})}\n\n"
 
-            if save_memory_results:
-                yield "event: skill\n"
-                yield f"data: {json.dumps({'action': 'saved_memory', 'results': save_memory_results})}\n\n"
+            # save_memory_results are now embedded in the text as [SAVED_FACT: ...] markers
 
         except Exception as e:
             import traceback

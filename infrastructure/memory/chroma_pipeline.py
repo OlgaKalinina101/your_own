@@ -107,7 +107,45 @@ class ChromaMemoryPipeline:
 
     # ── Write ──────────────────────────────────────────────────────────────────
 
-    DEDUP_DISTANCE_THRESHOLD = 0.35  # cosine distance; below = "same fact"
+    DEDUP_DISTANCE_THRESHOLD = 0.35  # cosine distance; below = "potentially same fact"
+
+    def find_similar(
+        self,
+        account_id: str,
+        memory: str,
+    ) -> Optional[dict]:
+        """
+        Find the most similar existing fact. Returns dict with
+        id, text, metadata, distance — or None if nothing close enough.
+        """
+        from infrastructure.memory.embedder import embed_one
+        col = _get_collection()
+        if col is None:
+            return None
+
+        embedding = embed_one(memory)
+        if embedding is None:
+            return None
+
+        try:
+            existing = col.query(
+                query_embeddings=[embedding],
+                n_results=1,
+                where={"account_id": account_id},
+                include=["documents", "metadatas", "distances"],
+            )
+            if existing and existing["ids"] and existing["ids"][0]:
+                distance = existing["distances"][0][0]
+                if distance < self.DEDUP_DISTANCE_THRESHOLD:
+                    return {
+                        "id": existing["ids"][0][0],
+                        "text": existing["documents"][0][0],
+                        "metadata": existing["metadatas"][0][0],
+                        "distance": distance,
+                    }
+        except Exception as exc:
+            logger.warning("[chroma] find_similar failed: %s", exc)
+        return None
 
     def add_entry(
         self,
@@ -117,15 +155,7 @@ class ChromaMemoryPipeline:
         impressive: int = 1,
         external_id: Optional[str] = None,
     ) -> str:
-        """
-        Store one fact with deduplication.
-
-        Before saving, queries Chroma for the most similar existing fact.
-        If cosine distance < DEDUP_DISTANCE_THRESHOLD:
-          - If the new fact is more impressive or longer, replace the old one.
-          - Otherwise skip (return old ID).
-        Returns the document ID.
-        """
+        """Store one fact (no dedup — caller handles dedup via find_similar + AI)."""
         from infrastructure.memory.embedder import embed_one
         col = _get_collection()
         if col is None:
@@ -137,42 +167,6 @@ class ChromaMemoryPipeline:
             logger.warning("[chroma] add_entry skipped — embedding unavailable")
             return external_id or str(uuid.uuid4())
 
-        # ── Dedup check ───────────────────────────────────────────────────────
-        try:
-            existing = col.query(
-                query_embeddings=[embedding],
-                n_results=1,
-                where={"account_id": account_id},
-                include=["documents", "metadatas", "distances"],
-            )
-            if existing and existing["ids"] and existing["ids"][0]:
-                old_id = existing["ids"][0][0]
-                old_doc = existing["documents"][0][0]
-                old_meta = existing["metadatas"][0][0]
-                distance = existing["distances"][0][0]
-
-                if distance < self.DEDUP_DISTANCE_THRESHOLD:
-                    old_imp = int(old_meta.get("impressive", 1))
-                    new_is_better = (
-                        impressive > old_imp
-                        or (impressive == old_imp and len(memory) > len(old_doc))
-                    )
-                    if new_is_better:
-                        col.delete(ids=[old_id])
-                        logger.info(
-                            "[chroma] dedup: replacing old fact id=%s (dist=%.3f, imp %d→%d)",
-                            old_id, distance, old_imp, impressive,
-                        )
-                    else:
-                        logger.info(
-                            "[chroma] dedup: skipping — existing fact id=%s is good enough (dist=%.3f)",
-                            old_id, distance,
-                        )
-                        return old_id
-        except Exception as exc:
-            logger.warning("[chroma] dedup check failed (proceeding with save): %s", exc)
-
-        # ── Save ──────────────────────────────────────────────────────────────
         doc_id = external_id or str(uuid.uuid4())
         metadata = _safe_metadata(
             account_id=account_id,
@@ -189,6 +183,17 @@ class ChromaMemoryPipeline:
         )
         logger.info("[chroma] saved fact id=%s cat=%s impressive=%d", doc_id, category, impressive)
         return doc_id
+
+    def delete_entry(self, doc_id: str) -> None:
+        """Delete a fact by ID."""
+        col = _get_collection()
+        if col is None:
+            return
+        try:
+            col.delete(ids=[doc_id])
+            logger.info("[chroma] deleted fact id=%s", doc_id)
+        except Exception as exc:
+            logger.warning("[chroma] delete_entry failed for %s: %s", doc_id, exc)
 
     # ── Read ───────────────────────────────────────────────────────────────────
 
