@@ -42,6 +42,21 @@ const SKILLS: SkillDef[] = [
     status: "active",
     example: "[WEB_SEARCH: погода Ереван Ленинградян 21/15]",
   },
+  {
+    cmd: "[GENERATE_IMAGE: model | prompt]",
+    label: "Image Generation",
+    labelRu: "Генерация изображений",
+    description:
+      "AI creates images using GPT-5 Image (photorealistic, detailed) or Gemini 3 Pro (design, diagrams, text). " +
+      "The AI chooses the model and writes the prompt itself — it can share images spontaneously, not only when asked. " +
+      "One image per reply. Generated images are saved to disk and displayed inline in chat with lightbox and download.",
+    descriptionRu:
+      "AI создаёт изображения через GPT-5 Image (фотореализм, детали) или Gemini 3 Pro (дизайн, схемы, текст). " +
+      "AI сам выбирает модель и пишет промпт — может делиться картинками спонтанно, не только по запросу. " +
+      "Одно изображение за ответ. Сгенерированные изображения сохраняются на диск и отображаются в чате с просмотром и скачиванием.",
+    status: "active",
+    example: "[GENERATE_IMAGE: gpt5 | night sky over Yerevan rooftops, stars, a single lit window, cinematic mood]",
+  },
 ];
 
 // ── How it works steps ────────────────────────────────────────────────────────
@@ -49,23 +64,23 @@ const SKILLS: SkillDef[] = [
 const HOW_IT_WORKS = [
   {
     step: "01",
-    text: "AI decides a fact is worth saving and adds [SAVE_MEMORY: ...] to the end of its reply",
-    textRu: "AI решает что факт стоит сохранить и добавляет [SAVE_MEMORY: ...] в конец ответа",
+    text: "AI streams its reply. If skill commands appear, the backend parses them from the text",
+    textRu: "AI стримит ответ. Если появляются команды навыков, бэкенд парсит их из текста",
   },
   {
     step: "02",
-    text: "Backend strips the command from the visible text, extracts fact + category via LLM, rates importance 1–4",
-    textRu: "Бэкенд убирает команду из видимого текста, извлекает факт + категорию через LLM, оценивает важность 1–4",
+    text: "For [SEARCH_MEMORIES] or [WEB_SEARCH], the backend executes the action, feeds results back — AI continues with new context",
+    textRu: "Для [SEARCH_MEMORIES] или [WEB_SEARCH] бэкенд выполняет действие, возвращает результат — AI продолжает с новым контекстом",
   },
   {
     step: "03",
-    text: "Fact is stored in ChromaDB with embeddings. You see a small ✦ note under the message",
-    textRu: "Факт сохраняется в ChromaDB с эмбеддингами. Под сообщением появляется пометка ✦",
+    text: "For [GENERATE_IMAGE], the backend calls GPT-5 or Gemini, saves the PNG, and shows it inline with a pulsing shimmer during generation",
+    textRu: "Для [GENERATE_IMAGE] бэкенд вызывает GPT-5 или Gemini, сохраняет PNG и показывает его в чате с пульсирующей анимацией во время генерации",
   },
   {
     step: "04",
-    text: "On next messages, relevant facts are automatically pulled from Chroma and placed in AI context",
-    textRu: "В следующих сообщениях релевантные факты автоматически подтягиваются из Chroma в контекст AI",
+    text: "For [SAVE_MEMORY], a key fact is extracted via LLM, rated 1–4, deduplicated by AI, and stored in ChromaDB",
+    textRu: "Для [SAVE_MEMORY] ключевой факт извлекается через LLM, оценивается 1–4, дедуплицируется с помощью AI и сохраняется в ChromaDB",
   },
 ];
 
@@ -190,21 +205,25 @@ export default function SkillsPage() {
           {/* ── Context flow note ── */}
           <div className="border border-white/8 p-6 flex flex-col gap-4">
             <p className="text-[0.6rem] tracking-[0.24em] uppercase text-white/20">
-              memory context flow
+              agentic pipeline flow
             </p>
             <div className="flex items-center gap-0 flex-wrap">
               {[
                 { label: "user message", sub: "query text" },
                 { label: "→" },
-                { label: "chroma search", sub: "multi-query" },
+                { label: "chroma + pgvector", sub: "context retrieval" },
                 { label: "→" },
-                { label: "facts block", sub: "in context" },
+                { label: "ai streams reply", sub: "with skills" },
                 { label: "→" },
-                { label: "ai reply", sub: "aware of past" },
+                { label: "[SEARCH_MEMORIES]", sub: "raw history" },
+                { label: "[WEB_SEARCH]", sub: "live internet" },
+                { label: "[GENERATE_IMAGE]", sub: "gpt5 / gemini" },
                 { label: "→" },
-                { label: "[SAVE_MEMORY]", sub: "if needed" },
+                { label: "results injected", sub: "continuation" },
                 { label: "→" },
-                { label: "chroma store", sub: "new fact" },
+                { label: "[SAVE_MEMORY]", sub: "key facts" },
+                { label: "→" },
+                { label: "chromadb", sub: "long-term store" },
               ].map((node, i) =>
                 node.sub === undefined ? (
                   <span key={i} className="text-[0.7rem] text-white/20 px-1">{node.label}</span>
