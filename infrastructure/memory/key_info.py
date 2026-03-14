@@ -360,7 +360,29 @@ async def extract_and_store(
     except (ValueError, IndexError):
         impressive = 2
 
-    # Step 3: dedup check — ask AI if a similar fact already exists
+    # Step 3+4: dedup + store
+    return await store_fact_with_dedup(
+        api_key=api_key,
+        account_id=account_id,
+        fact=fact,
+        category=category,
+        impressive=impressive,
+    )
+
+
+async def store_fact_with_dedup(
+    *,
+    api_key: str,
+    account_id: str,
+    fact: str,
+    category: str,
+    impressive: int = 2,
+) -> Optional[dict]:
+    """Check for duplicates via LLM, then store in Chroma.
+
+    Used by both ``extract_and_store`` (chat) and the workbench rotator.
+    Returns dict with fact/category/impressive/id on success, None on skip.
+    """
     pipeline = get_chroma_pipeline()
     similar = pipeline.find_similar(account_id=account_id, memory=fact)
 
@@ -371,8 +393,8 @@ async def extract_and_store(
             similar["distance"], similar["id"], old_fact[:120],
         )
         from infrastructure.memory.focus_point import detect_language
-        lang = detect_language(fact + " " + old_fact)
-        if lang == "ru":
+        dup_lang = detect_language(fact + " " + old_fact)
+        if dup_lang == "ru":
             dedup_sys = _DEDUP_SYSTEM_RU
             dedup_user = _DEDUP_USER_TEMPLATE_RU.format(old_fact=old_fact, new_fact=fact)
         else:
@@ -404,7 +426,6 @@ async def extract_and_store(
             pipeline.delete_entry(similar["id"])
             logger.info("[key_info] dedup: deleted old fact id=%s, saving new one", similar["id"])
 
-    # Step 4: store in Chroma
     doc_id = pipeline.add_entry(
         account_id=account_id,
         memory=fact,

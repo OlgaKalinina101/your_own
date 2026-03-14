@@ -1,11 +1,11 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useChatSession, Message, ChromaFact } from "@/context/ChatSessionContext";
 import MarkdownMessage from "@/components/chat/MarkdownMessage";
 
-const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
+import { apiGet, apiFetch } from "@/lib/api";
 const HISTORY_BATCH_SIZE = 25;
 const MAX_CHAT_IMAGES = 8;
 
@@ -16,10 +16,6 @@ const VISION_MODELS = new Set([
   "openai/gpt-5.4",
 ]);
 
-
-function isElectron(): boolean {
-  return typeof window !== "undefined" && "yourOwn" in window;
-}
 
 function makeMessageId(prefix: string) {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
@@ -66,36 +62,13 @@ function pairToMessages(pair: HistoryPair): Message[] {
   return output;
 }
 
-async function getSettings() {
-  if (!isElectron()) {
-    return {
-      apiKey: "",
-      model: "anthropic/claude-opus-4.6",
-      temperature: 7,
-      topP: 9,
-      soul: "",
-      historyPairs: 6,
-      memoryCutoffDays: 2,
-    };
+async function getServerModel(): Promise<string> {
+  try {
+    const data = await apiGet<Record<string, unknown>>("/api/settings/raw");
+    return (data.model as string) || "anthropic/claude-opus-4.6";
+  } catch {
+    return "anthropic/claude-opus-4.6";
   }
-  const [key, model, temp, tp, soul, historyPairs, cutoff] = await Promise.all([
-    window.yourOwn.getApiKey(),
-    window.yourOwn.getModel(),
-    window.yourOwn.getTemperature(),
-    window.yourOwn.getTopP(),
-    window.yourOwn.getSoul(),
-    window.yourOwn.getHistoryPairs(),
-    window.yourOwn.getMemoryCutoffDays(),
-  ]);
-  return {
-    apiKey:      key   ?? "",
-    model:       model ?? "anthropic/claude-opus-4.6",
-    temperature: temp  ? Number(temp) : 7,
-    topP:        tp    ? Number(tp)   : 9,
-    soul:        soul  ?? "",
-    historyPairs:     historyPairs ? Number(historyPairs) : 6,
-    memoryCutoffDays: cutoff ? Number(cutoff) : 2,
-  };
 }
 
 export default function ChatPage() {
@@ -123,9 +96,23 @@ export default function ChatPage() {
   const messagePaneRef = useRef<HTMLDivElement>(null);
   const isPrependingRef = useRef(false);
 
-  const scrollToBottom = (behavior: ScrollBehavior = "smooth") => {
+  // SSE text chunk buffer — accumulated between rAF flushes
+  const chunkBufRef = useRef("");
+  const rafRef      = useRef<number | null>(null);
+
+  const scrollToBottom = useCallback((behavior: ScrollBehavior = "smooth") => {
     bottomRef.current?.scrollIntoView({ behavior });
-  };
+  }, []);
+
+  // Only auto-scroll during streaming if user is already near the bottom
+  const scrollIfNearBottom = useCallback(() => {
+    const el = messagePaneRef.current;
+    if (!el) return;
+    const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    if (distFromBottom < 120) {
+      bottomRef.current?.scrollIntoView({ behavior: "auto" });
+    }
+  }, []);
 
   const loadHistory = async (before?: string | null, prepend = false) => {
     if (loadingHistory) return;
@@ -143,7 +130,7 @@ export default function ChatPage() {
       });
       if (before) params.set("before", before);
 
-      const response = await fetch(`${BACKEND}/api/chat/history?${params.toString()}`);
+      const response = await apiFetch(`/api/chat/history?${params.toString()}`);
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
       const payload = await response.json() as HistoryResponse;
@@ -179,9 +166,9 @@ export default function ChatPage() {
 
   // Load model and persisted chat history on mount
   useEffect(() => {
-    getSettings().then(({ model }) => {
-      setModel(model);
-      setCanAttach(VISION_MODELS.has(model));
+    getServerModel().then((m) => {
+      setModel(m);
+      setCanAttach(VISION_MODELS.has(m));
     });
     void loadHistory(null, false);
   }, []);
@@ -191,10 +178,12 @@ export default function ChatPage() {
       isPrependingRef.current = false;
       return;
     }
-    if (!showScrollDown) {
+    // During active streaming, scrolling is handled per-chunk in scrollIfNearBottom.
+    // Only auto-scroll for non-streaming state changes (new user message, history load).
+    if (!streaming && !showScrollDown) {
       scrollToBottom(historyReady ? "smooth" : "auto");
     }
-  }, [messages, showScrollDown, historyReady]);
+  }, [messages, showScrollDown, historyReady, streaming, scrollToBottom]);
 
   const readPreview = (file: File) => new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
@@ -264,15 +253,7 @@ export default function ChatPage() {
     if (!text && images.length === 0) return;
     if (streaming) return;
 
-    const {
-      apiKey,
-      model: currentModel,
-      temperature,
-      topP,
-      soul,
-      historyPairs,
-      memoryCutoffDays,
-    } = await getSettings();
+    // Settings are now server-side — no need to send them per request
 
     // Optimistically add user message
     const userMsg: Message = {
@@ -300,15 +281,8 @@ export default function ChatPage() {
       body.append("messages", JSON.stringify(
         nextMessages.map((m) => ({ role: m.role, content: m.content }))
       ));
-      body.append("model", currentModel);
-      body.append("api_key", apiKey);
       body.append("web_search", String(webSearch));
       body.append("account_id", "default");
-      if (soul) body.append("system_prompt", soul);
-      body.append("temperature", String(temperature / 10)); // scale 1-10 → 0.1-1.0
-      body.append("top_p", String(topP / 10));
-      body.append("history_pairs", String(historyPairs));
-      body.append("memory_cutoff_days", String(memoryCutoffDays));
 
       for (const image of images) {
         body.append("images", image);
@@ -316,7 +290,7 @@ export default function ChatPage() {
 
       abortRef.current = new AbortController();
 
-      const response = await fetch(`${BACKEND}/api/chat`, {
+      const response = await apiFetch(`/api/chat`, {
         method: "POST",
         body,
         signal: abortRef.current.signal,
@@ -324,19 +298,50 @@ export default function ChatPage() {
 
       if (!response.ok || !response.body) throw new Error(`HTTP ${response.status}`);
 
+      // Flush buffered text into message state, then trigger a scroll check
+      const flushChunkBuf = () => {
+        rafRef.current = null;
+        const text = chunkBufRef.current;
+        if (!text) return;
+        chunkBufRef.current = "";
+        setMessages((prev) => {
+          const updated = [...prev];
+          const last = updated[updated.length - 1];
+          updated[updated.length - 1] = { ...last, role: "assistant", content: last.content + text };
+          return updated;
+        });
+        scrollIfNearBottom();
+      };
+
+      // Schedule a rAF flush; coalesces many tiny chunks into one render frame
+      const scheduleFlush = () => {
+        if (rafRef.current === null) {
+          rafRef.current = requestAnimationFrame(flushChunkBuf);
+        }
+      };
+
+      // Flush any pending buffer before a structural state change (rewrite, image…)
+      const flushNow = () => {
+        if (rafRef.current !== null) {
+          cancelAnimationFrame(rafRef.current);
+          rafRef.current = null;
+        }
+        flushChunkBuf();
+      };
+
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
-      let buffer = "";
+      let sseBuffer = "";
 
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        buffer += decoder.decode(value, { stream: true });
+        sseBuffer += decoder.decode(value, { stream: true });
 
         // SSE events are separated by double newline "\n\n"
-        const events = buffer.split("\n\n");
+        const events = sseBuffer.split("\n\n");
         // Keep the last incomplete event in the buffer
-        buffer = events.pop() ?? "";
+        sseBuffer = events.pop() ?? "";
 
         for (const event of events) {
           const eventType = event
@@ -359,6 +364,7 @@ export default function ChatPage() {
           if (eventType === "memory") {
             try {
               const payload = JSON.parse(chunk) as { chroma_facts?: ChromaFact[] };
+              flushNow();
               setMessages((prev) => {
                 const updated = [...prev];
                 const last = updated[updated.length - 1];
@@ -379,6 +385,7 @@ export default function ChatPage() {
             try {
               const payload = JSON.parse(chunk);
               const newText = payload.text ?? "";
+              flushNow();
               setMessages((prev) => {
                 const updated = [...prev];
                 const last = updated[updated.length - 1];
@@ -409,6 +416,7 @@ export default function ChatPage() {
             try {
               const { prompt: imgPrompt } = JSON.parse(chunk) as { prompt: string };
               const shimmerCmd = `[GENERATE_IMAGE: ${imgPrompt}]`;
+              flushNow();
               setMessages((prev) => {
                 const updated = [...prev];
                 const last = updated[updated.length - 1];
@@ -433,6 +441,7 @@ export default function ChatPage() {
                 prompt: string;
               };
               const marker = `[GENERATED_IMAGE: ${path} | ${model} | ${prompt}]`;
+              flushNow();
               setMessages((prev) => {
                 const updated = [...prev];
                 const last = updated[updated.length - 1];
@@ -456,18 +465,14 @@ export default function ChatPage() {
             continue;
           }
 
-          setMessages((prev) => {
-            const updated = [...prev];
-            const last = updated[updated.length - 1];
-            updated[updated.length - 1] = {
-              ...last,
-              role: "assistant",
-              content: last.content + chunk,
-            };
-            return updated;
-          });
+          // Plain text chunk — accumulate and schedule a single rAF flush
+          chunkBufRef.current += chunk;
+          scheduleFlush();
         }
       }
+
+      // Flush any remaining buffered text at end of stream
+      flushNow();
     } catch (err: unknown) {
       if (err instanceof Error && err.name === "AbortError") return;
       setMessages((prev) => {
@@ -481,6 +486,12 @@ export default function ChatPage() {
         return updated;
       });
     } finally {
+      // Cancel any pending rAF flush
+      if (rafRef.current !== null) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
+      chunkBufRef.current = "";
       setStreaming(false);
       abortRef.current = null;
       inputRef.current?.focus();

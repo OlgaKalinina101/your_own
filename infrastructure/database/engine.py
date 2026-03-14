@@ -30,3 +30,13 @@ Base = declarative_base()
 async def get_db():
     async with AsyncSessionLocal() as session:
         yield session
+
+
+from contextlib import asynccontextmanager
+
+
+@asynccontextmanager
+async def get_db_session():
+    """Context-manager variant of get_db for use outside FastAPI dependency injection."""
+    async with AsyncSessionLocal() as session:
+        yield session

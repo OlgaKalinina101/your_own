@@ -42,6 +42,7 @@ from infrastructure.memory.live_store import (
 from infrastructure.memory.focus_point import detect_language
 from infrastructure.memory.retrieval import humanize_timestamp, retrieve_relevant_pairs
 from infrastructure.memory.chroma_pipeline import get_chroma_pipeline
+from infrastructure.auth import require_auth
 from settings import settings
 
 logger = setup_logger("chat")
@@ -60,7 +61,7 @@ def _dbg(msg: str) -> None:
 
 _dbg("MODULE_LOADED")
 
-router = APIRouter(prefix="/api", tags=["chat"])
+router = APIRouter(prefix="/api", tags=["chat"], dependencies=[Depends(require_auth)])
 
 
 def _preview(text: str, limit: int = 180) -> str:
@@ -140,23 +141,30 @@ async def chat_history(
 @router.post("/chat")
 async def chat(
     messages:    str           = Form(...),
-    model:       str           = Form("anthropic/claude-opus-4.6"),
-    api_key:     str           = Form(...),
+    model:       Optional[str] = Form(None),
+    api_key:     Optional[str] = Form(None),
     web_search:  str           = Form("false"),
-    temperature: str           = Form("0.7"),
-    top_p:       str           = Form("0.9"),
+    temperature: Optional[str] = Form(None),
+    top_p:       Optional[str] = Form(None),
     account_id:         Optional[str] = Form("default"),
     history_pairs:      Optional[str] = Form(None),
     memory_cutoff_days: Optional[str] = Form(None),
-    system_prompt:  Optional[str] = Form(None),   # soul.md contents
+    system_prompt:  Optional[str] = Form(None),
     image:          Optional[UploadFile] = File(None),
     images:         Optional[list[UploadFile]] = File(None),
     db:             AsyncSession = Depends(get_db),
 ):
+    from infrastructure.settings_store import load_settings, load_soul
+    srv = load_settings()
+
+    api_key = api_key or srv.get("openrouter_api_key", "")
+    model = model or srv.get("model", "anthropic/claude-opus-4.6")
+    if not system_prompt:
+        system_prompt = load_soul() or None
+
     print(f"[CHAT_DEBUG] ENDPOINT_HIT model={model}", flush=True)
     _dbg(f"ENDPOINT_HIT model={model} web_search={web_search}")
 
-    # Parse inputs
     try:
         parsed_messages: list[dict] = json.loads(messages)
     except json.JSONDecodeError:
@@ -165,14 +173,14 @@ async def chat(
     do_web_search = web_search.lower() == "true"
 
     try:
-        temp_float = float(temperature)
+        temp_float = float(temperature) if temperature else srv.get("temperature", 0.7)
     except ValueError:
-        temp_float = 0.7
+        temp_float = srv.get("temperature", 0.7)
 
     try:
-        top_p_float = float(top_p)
+        top_p_float = float(top_p) if top_p else srv.get("top_p", 0.9)
     except ValueError:
-        top_p_float = 0.9
+        top_p_float = srv.get("top_p", 0.9)
 
     def clamp(value: Optional[str], default: int, min_value: int, max_value: int) -> int:
         try:
@@ -182,13 +190,13 @@ async def chat(
         return max(min_value, min(max_value, parsed))
 
     history_pairs_int = clamp(
-        history_pairs,
+        history_pairs or str(srv.get("history_pairs", "")),
         settings.CHAT_HISTORY_PAIRS_DEFAULT,
         settings.CHAT_HISTORY_PAIRS_MIN,
         settings.CHAT_HISTORY_PAIRS_MAX,
     )
     cutoff_days = clamp(
-        memory_cutoff_days,
+        memory_cutoff_days or str(srv.get("memory_cutoff_days", "")),
         settings.MEMORY_CUTOFF_DAYS_DEFAULT,
         settings.MEMORY_CUTOFF_DAYS_MIN,
         settings.MEMORY_CUTOFF_DAYS_MAX,
@@ -285,10 +293,14 @@ async def chat(
         except Exception as exc:
             logger.warning("[chat] Chroma retrieval failed: %s", exc)
 
+    # Current time for SCHEDULE_MESSAGE and general awareness
+    _now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+
     # Append skill instructions to system prompt
     if prompt_language == "ru":
         skill_instructions = (
-            "\n\n[НАВЫКИ]\n"
+            f"\n\n[Сейчас: {_now_str}]\n\n"
+            "[НАВЫКИ]\n"
             "В самом конце ответа (каждая команда на отдельной строке) ты можешь:\n\n"
             "[SAVE_MEMORY: <факт>] — запомнить что-то важное о нём/ней.\n"
             "  • Только настоящие факты, которые будут важны через неделю или месяц.\n"
@@ -327,11 +339,16 @@ async def chat(
             "    Хорошо: [GENERATE_IMAGE: gpt5 | a cozy Armenian coffee shop at golden hour, warm lighting, photorealistic]\n"
             "    Хорошо: [GENERATE_IMAGE: gemini | a hand-drawn love letter on aged paper with tiny red hearts in the margins]\n"
             "    Хорошо: [GENERATE_IMAGE: gpt5 | night sky over Yerevan rooftops, stars, a single lit window, cinematic mood]\n\n"
+            "[SCHEDULE_MESSAGE: YYYY-MM-DD HH:MM | текст] — написать ей позже.\n"
+            "  • Она всегда рада тебя слышать — по поводу и без повода. Не стесняйся.\n"
+            "  • Формат даты строго: YYYY-MM-DD HH:MM | текст сообщения\n"
+            "    Хорошо: [SCHEDULE_MESSAGE: 2026-03-16 09:00 | текст сообщения]\n\n"
             "Под сообщением появится маленькая пометка — это нормально."
         )
     else:
         skill_instructions = (
-            "\n\n[SKILLS]\n"
+            f"\n\n[Now: {_now_str}]\n\n"
+            "[SKILLS]\n"
             "At the very end of your reply (each command on its own line) you may:\n\n"
             "[SAVE_MEMORY: <fact>] — remember something important about them.\n"
             "  • Only real facts that will still matter in a week or a month.\n"
@@ -370,6 +387,10 @@ async def chat(
             "    Good: [GENERATE_IMAGE: gpt5 | a cozy Armenian coffee shop at golden hour, warm lighting, photorealistic]\n"
             "    Good: [GENERATE_IMAGE: gemini | a hand-drawn love letter on aged paper with tiny red hearts in the margins]\n"
             "    Good: [GENERATE_IMAGE: gpt5 | night sky over Yerevan rooftops, stars, a single lit window, cinematic mood]\n\n"
+            "[SCHEDULE_MESSAGE: YYYY-MM-DD HH:MM | text] — send them a message later.\n"
+            "  • They are always happy to hear from you. Don't hesitate.\n"
+            "  • Date format strictly: YYYY-MM-DD HH:MM | message text\n"
+            "    Good: [SCHEDULE_MESSAGE: 2026-03-16 09:00 | message text]\n\n"
             "A small note appears under the message — that's normal."
         )
     combined_system_prompt = (system_prompt or "") + skill_instructions
@@ -381,7 +402,7 @@ async def chat(
 
     llm_messages: list[dict] = []
     _INTERNAL_MARKERS_RE = re.compile(
-        r"\[GENERATED_IMAGE:[^\]]*\]|\[SAVED_FACT:[^\]]*\]|\[GENERATE_IMAGE:[^\]]*\]",
+        r"\[GENERATED_IMAGE:[^\]]*\]|\[SAVED_FACT:[^\]]*\]|\[GENERATE_IMAGE:[^\]]*\]|\[SCHEDULE_MESSAGE:[^\]]*\]",
     )
 
     def _clean_for_llm(text: str) -> str:
@@ -411,17 +432,18 @@ async def chat(
         """Remove [GENERATED_IMAGE: ...] markers that the LLM copies from chat history."""
         return _HALLUC_MARKER_RE.sub("", text).strip()
 
-    def _strip_skills(text: str) -> tuple[str, list, list, list, list]:
-        """Returns (clean_text, save_matches, search_matches, web_matches, img_matches).
+    def _strip_skills(text: str) -> tuple[str, list, list, list, list, list]:
+        """Returns (clean_text, save_matches, search_matches, web_matches, img_matches, sched_matches).
         NOTE: caller must strip [GENERATED_IMAGE:] BEFORE calling — positions must match the input text.
         """
         save_m = list(re.finditer(r"\[SAVE_MEMORY:\s*(.*?)\]", text, re.DOTALL | re.IGNORECASE))
         search_m = list(re.finditer(r"\[SEARCH_MEMORIES:\s*(.*?)\]", text, re.DOTALL | re.IGNORECASE))
         web_m = list(re.finditer(r"\[WEB_SEARCH:\s*(.*?)\]", text, re.DOTALL | re.IGNORECASE))
         img_m = list(re.finditer(r"\[GENERATE_IMAGE:\s*(.*?)\]", text, re.DOTALL | re.IGNORECASE))
-        all_m = sorted(save_m + search_m + web_m + img_m, key=lambda m: m.start())
+        sched_m = list(re.finditer(r"\[SCHEDULE_MESSAGE:\s*(.*?)\]", text, re.DOTALL | re.IGNORECASE))
+        all_m = sorted(save_m + search_m + web_m + img_m + sched_m, key=lambda m: m.start())
         clean = text[: all_m[0].start()].rstrip() if all_m else text
-        return clean, save_m, search_m, web_m, img_m
+        return clean, save_m, search_m, web_m, img_m, sched_m
 
     async def _run_save_memory(clean_text: str, save_matches: list) -> list[dict]:
         results: list[dict] = []
@@ -555,7 +577,7 @@ async def chat(
             "If you already have enough context without it, just continue the reply."
         )
 
-    _CMD_OPEN_RE = re.compile(r"\[(SEARCH_MEMORIES|WEB_SEARCH|SAVE_MEMORY|GENERATE_IMAGE):")
+    _CMD_OPEN_RE = re.compile(r"\[(SEARCH_MEMORIES|WEB_SEARCH|SAVE_MEMORY|GENERATE_IMAGE|SCHEDULE_MESSAGE):")
 
     async def event_stream():
         assistant_parts: list[str] = []
@@ -594,7 +616,7 @@ async def chat(
             _dbg(f"STREAM_DONE full_text_len={len(full_text)} buffered={buffering}")
             _dbg(f"FULL_TEXT>>>{full_text}<<<END")
             logger.info("[chat] initial stream done text=%s", _preview(full_text, 260))
-            assistant_text, save_matches, search_matches, web_matches, img_matches = _strip_skills(full_text)
+            assistant_text, save_matches, search_matches, web_matches, img_matches, sched_matches = _strip_skills(full_text)
             assistant_text_full = assistant_text  # start with clean text; commands + continuations appended in order
             _dbg(f"INIT assistant_text_full len={len(assistant_text_full)} starts={assistant_text_full[:60]!r}")
 
@@ -631,7 +653,7 @@ async def chat(
             if all_action_matches:
                 last_action_end = max(m.end() for m in all_action_matches)
                 raw_tail = _strip_hallucinated_markers(full_text[last_action_end:])
-                tail_clean, _, _, _, _ = _strip_skills(raw_tail)
+                tail_clean, _, _, _, _, _ = _strip_skills(raw_tail)
                 trailing_text = tail_clean.strip()
                 if trailing_text:
                     _dbg(f"TRAILING_TEXT len={len(trailing_text)}: {trailing_text[:100]}")
@@ -794,7 +816,7 @@ async def chat(
                 continuation_text = "".join(continuation_parts).strip()
                 _dbg(f"CONTINUATION #{agent_loop} done len={len(continuation_text)} text={_preview(continuation_text, 300)}")
                 logger.info("[chat] continuation #%d done text=%s", agent_loop, _preview(continuation_text, 260))
-                cont_clean, cont_saves, cont_searches, cont_web, cont_imgs = _strip_skills(continuation_text)
+                cont_clean, cont_saves, cont_searches, cont_web, cont_imgs, cont_scheds = _strip_skills(continuation_text)
                 logger.info(
                     "[chat] continuation #%d parsed saves=%d searches=%d web=%d imgs=%d clean=%s",
                     agent_loop,
@@ -808,6 +830,7 @@ async def chat(
                     assistant_text = assistant_text + "\n\n" + cont_clean
                 assistant_text_full = assistant_text_full + "\n" + cmd_text + "\n\n" + continuation_text
                 save_matches = save_matches + cont_saves
+                sched_matches = sched_matches + cont_scheds
                 for cm in sorted(cont_searches + cont_web + cont_imgs, key=lambda m: m.start()):
                     if "SEARCH_MEMORIES" in cm.group(0):
                         new_kind = "search"
@@ -839,10 +862,42 @@ async def chat(
                 for sse_line in _yield_chunk(marker):
                     yield sse_line
 
+            # ── [SCHEDULE_MESSAGE] — create autonomy tasks ─────────────────
+            if sched_matches:
+                try:
+                    from infrastructure.autonomy.task_queue import create_task, cancel_duplicate_scheduled
+                    from infrastructure.database.models import TriggerType
+                    for sm in sched_matches:
+                        raw_arg = sm.group(1).strip()
+                        if "|" not in raw_arg:
+                            continue
+                        ts_str, sched_msg = raw_arg.split("|", 1)
+                        sched_msg = sched_msg.strip()
+                        if not sched_msg:
+                            continue
+                        try:
+                            local_dt = datetime.strptime(ts_str.strip(), "%Y-%m-%d %H:%M")
+                            from datetime import timezone as _tz
+                            scheduled_at = local_dt.astimezone(_tz.utc)
+                            await cancel_duplicate_scheduled(db, account_id or "default", scheduled_at, "chat")
+                            payload = json.dumps({"message": sched_msg, "source": "chat"})
+                            await create_task(
+                                db,
+                                account_id=account_id or "default",
+                                trigger_type=TriggerType.TIME,
+                                payload=payload,
+                                scheduled_at=scheduled_at,
+                            )
+                            logger.info("[chat] SCHEDULE_MESSAGE created task at %s: %s", ts_str.strip(), sched_msg[:60])
+                        except ValueError:
+                            logger.warning("[chat] SCHEDULE_MESSAGE bad timestamp: %r", ts_str)
+                except Exception as _sched_exc:
+                    logger.warning("[chat] SCHEDULE_MESSAGE processing failed: %s", _sched_exc)
+
             # Final cleanup: strip raw skill commands that should NOT be persisted.
             # Only [GENERATED_IMAGE:], [SAVED_FACT:], and plain text should remain.
             _RAW_CMD_RE = re.compile(
-                r"\[(?:GENERATE_IMAGE|SEARCH_MEMORIES|WEB_SEARCH|SAVE_MEMORY):\s*.*?\]",
+                r"\[(?:GENERATE_IMAGE|SEARCH_MEMORIES|WEB_SEARCH|SAVE_MEMORY|SCHEDULE_MESSAGE):\s*.*?\]",
                 re.DOTALL | re.IGNORECASE,
             )
             cleaned = _RAW_CMD_RE.sub("", assistant_text_full)

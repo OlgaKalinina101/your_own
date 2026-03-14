@@ -9,12 +9,14 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
+
+from infrastructure.auth import require_auth
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/chroma", tags=["chroma"])
+router = APIRouter(prefix="/api/chroma", tags=["chroma"], dependencies=[Depends(require_auth)])
 
 
 def _pipeline():

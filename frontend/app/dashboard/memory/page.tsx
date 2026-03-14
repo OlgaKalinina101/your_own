@@ -2,8 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-
-const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
+import { apiFetch } from "@/lib/api";
 
 type ImportState =
   | { phase: "idle" }
@@ -55,7 +54,7 @@ async function startImport(file: File): Promise<number> {
     let total = 0;
 
     try {
-      const res = await fetch(`${BACKEND}/api/memory/import`, {
+      const res = await apiFetch(`/api/memory/import`, {
         method: "POST",
         body: form,
       });
@@ -130,7 +129,7 @@ export default function MemoryPage() {
 
   // Load existing message count on mount
   useEffect(() => {
-    fetch(`${BACKEND}/api/memory/stats?account_id=default`)
+    apiFetch(`/api/memory/stats?account_id=default`)
       .then((r) => r.json())
       .then((d) => setStats(d))
       .catch(() => {});

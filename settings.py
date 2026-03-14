@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     # ── ChromaDB ──────────────────────────────────────────────────────────────
     VECTOR_STORE_DIR: str = "infrastructure/vector_store"
     CHROMA_COLLECTION_NAME: str = "key_info"
+    CHROMA_ARCHIVE_COLLECTION_NAME: str = "workbench_archive"
 
 
 settings = Settings()

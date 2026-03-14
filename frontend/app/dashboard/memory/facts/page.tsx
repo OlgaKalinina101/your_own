@@ -2,8 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
-
-const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
+import { apiFetch } from "@/lib/api";
 const ACCOUNT_ID = "default";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -104,8 +103,8 @@ function FactCard({
   const handleSave = async () => {
     setSaving(true);
     try {
-      const res = await fetch(
-        `${BACKEND}/api/chroma/facts/${fact.id}?account_id=${ACCOUNT_ID}`,
+      const res = await apiFetch(
+        `/api/chroma/facts/${fact.id}?account_id=${ACCOUNT_ID}`,
         {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
@@ -123,8 +122,8 @@ function FactCard({
   };
 
   const handleRating = async (value: number) => {
-    const res = await fetch(
-      `${BACKEND}/api/chroma/facts/${fact.id}?account_id=${ACCOUNT_ID}`,
+    const res = await apiFetch(
+      `/api/chroma/facts/${fact.id}?account_id=${ACCOUNT_ID}`,
       {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
@@ -138,8 +137,8 @@ function FactCard({
 
   const handleDelete = async () => {
     if (!confirm("Delete this memory?")) return;
-    const res = await fetch(
-      `${BACKEND}/api/chroma/facts/${fact.id}?account_id=${ACCOUNT_ID}`,
+    const res = await apiFetch(
+      `/api/chroma/facts/${fact.id}?account_id=${ACCOUNT_ID}`,
       { method: "DELETE" }
     );
     if (res.ok || res.status === 204) {
@@ -241,8 +240,8 @@ export default function FactsPage() {
         ...(filterCategory ? { category: filterCategory } : {}),
       });
       const [factsRes, catsRes] = await Promise.all([
-        fetch(`${BACKEND}/api/chroma/facts?${params}`),
-        fetch(`${BACKEND}/api/chroma/categories?account_id=${ACCOUNT_ID}`),
+        apiFetch(`/api/chroma/facts?${params}`),
+        apiFetch(`/api/chroma/categories?account_id=${ACCOUNT_ID}`),
       ]);
       if (factsRes.ok) setFacts(await factsRes.json());
       if (catsRes.ok) {

@@ -2,10 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-
-function isElectron(): boolean {
-  return typeof window !== "undefined" && "yourOwn" in window;
-}
+import { apiGet, apiPut } from "@/lib/api";
 
 const PLACEHOLDER = `You are...
 
@@ -20,13 +17,14 @@ export default function SoulPage() {
   const textareaRef       = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
-    if (!isElectron()) return;
-    window.yourOwn.getSoul().then((val) => {
-      if (val) {
-        setText(val);
-        setChars(val.length);
-      }
-    });
+    apiGet<{ text: string }>("/api/settings/soul")
+      .then(({ text: val }) => {
+        if (val) {
+          setText(val);
+          setChars(val.length);
+        }
+      })
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -40,8 +38,10 @@ export default function SoulPage() {
   };
 
   const handleSave = async () => {
-    if (isElectron()) {
-      await window.yourOwn.saveSoul(text);
+    try {
+      await apiPut("/api/settings/soul", { text });
+    } catch (err) {
+      console.error("Failed to save soul:", err);
     }
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);

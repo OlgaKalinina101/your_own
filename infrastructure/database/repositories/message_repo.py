@@ -101,6 +101,17 @@ class MessageRepository:
         rows = result.scalars().all()
         return list(reversed(rows))  # chronological order
 
+    async def get_last_user_message_at(self, account_id: str) -> Optional[datetime]:
+        """Return created_at of the most recent user chat message (ignores pushes)."""
+        stmt = (
+            select(func.max(Message.created_at))
+            .where(Message.account_id == account_id)
+            .where(Message.role == "user")
+            .where(Message.source == "chat")
+        )
+        result = await self._session.execute(stmt)
+        return result.scalar_one_or_none()
+
     async def get_recent_canonical_pairs(
         self,
         account_id: str,
@@ -110,7 +121,7 @@ class MessageRepository:
         pair_stmt = (
             select(Message.pair_id)
             .where(Message.account_id == account_id)
-            .where(Message.source == "chat")
+            .where(Message.source.in_(("chat", "push")))
             .where(Message.message_kind == "canonical")
         )
         if exclude_pair_ids:
@@ -139,7 +150,7 @@ class MessageRepository:
                 func.max(Message.created_at).label("pair_created_at"),
             )
             .where(Message.account_id == account_id)
-            .where(Message.source == "chat")
+            .where(Message.source.in_(("chat", "push")))
             .where(Message.message_kind == "canonical")
             .group_by(Message.pair_id)
         )

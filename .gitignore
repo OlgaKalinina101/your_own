@@ -26,6 +26,9 @@ frontend/release/
 *.db
 generated_images
 
+# Server data (settings, auth token, soul, autonomy)
+data/
+
 # Logs
 *.log
 logs/

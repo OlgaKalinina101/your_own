@@ -19,6 +19,7 @@ def build_canonical_row(
     role: str,
     text: str,
     created_at: datetime | None = None,
+    source: str = "chat",
 ) -> Message:
     return Message(
         message_id=uuid.uuid4(),
@@ -28,7 +29,7 @@ def build_canonical_row(
         role=role,
         text=text,
         message_kind="canonical",
-        source="chat",
+        source=source,
         chunk_index=None,
         focus_point=None,
         embedding=None,

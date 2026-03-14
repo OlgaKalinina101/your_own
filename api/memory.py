@@ -29,6 +29,7 @@ from fastapi import APIRouter, Depends, File, Form, UploadFile
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from infrastructure.auth import require_auth
 from infrastructure.database.engine import get_db
 from infrastructure.database.models.message import Message
 from infrastructure.database.repositories.message_repo import MessageRepository
@@ -38,7 +39,7 @@ from infrastructure.memory.focus_point import extract_focus_fast, split_to_sente
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/memory", tags=["memory"])
+router = APIRouter(prefix="/api/memory", tags=["memory"], dependencies=[Depends(require_auth)])
 
 BATCH_SIZE = 20   # pairs per DB flush
 

@@ -61,6 +61,31 @@ def _get_collection():
     return _chroma_collection
 
 
+# ── Archive collection (workbench notes rotated out) ──────────────────────────
+
+_archive_collection = None
+
+
+def _get_archive_collection():
+    global _archive_collection
+    if _archive_collection is not None:
+        return _archive_collection
+    client = _get_client()
+    if client is None:
+        return None
+    try:
+        from settings import settings
+        _archive_collection = client.get_or_create_collection(
+            name=settings.CHROMA_ARCHIVE_COLLECTION_NAME,
+            metadata={"hnsw:space": "cosine"},
+        )
+        logger.info("[chroma] archive collection '%s' ready", settings.CHROMA_ARCHIVE_COLLECTION_NAME)
+    except Exception as exc:
+        logger.warning("[chroma] archive collection init failed: %s", exc)
+        _archive_collection = None
+    return _archive_collection
+
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _safe_metadata(**kwargs) -> dict:
@@ -173,6 +198,41 @@ class ChromaMemoryPipeline:
             logger.info("[chroma] deleted fact id=%s", doc_id)
         except Exception as exc:
             logger.warning("[chroma] delete_entry failed for %s: %s", doc_id, exc)
+
+    # ── Archive (workbench notes) ──────────────────────────────────────────────
+
+    def add_archive_entry(
+        self,
+        account_id: str,
+        text: str,
+        timestamp: str,
+    ) -> str:
+        """Store a rotated workbench note in the archive collection."""
+        from infrastructure.memory.embedder import embed_one
+        col = _get_archive_collection()
+        if col is None:
+            logger.warning("[chroma] add_archive_entry skipped — collection unavailable")
+            return str(uuid.uuid4())
+
+        embedding = embed_one(text)
+        if embedding is None:
+            logger.warning("[chroma] add_archive_entry skipped — embedding unavailable")
+            return str(uuid.uuid4())
+
+        doc_id = str(uuid.uuid4())
+        metadata = _safe_metadata(
+            account_id=account_id,
+            source="workbench",
+            created_at=timestamp,
+        )
+        col.add(
+            documents=[text],
+            embeddings=[embedding],
+            metadatas=[metadata],
+            ids=[doc_id],
+        )
+        logger.info("[chroma] archived note id=%s ts=%s len=%d", doc_id, timestamp, len(text))
+        return doc_id
 
     # ── Read ───────────────────────────────────────────────────────────────────
 

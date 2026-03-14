@@ -2,6 +2,14 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import {
+  getBackendUrl,
+  setBackendUrl,
+  getAuthToken,
+  setAuthToken,
+  apiGet,
+  apiPut,
+} from "@/lib/api";
 
 const MODELS = [
   { id: "anthropic/claude-opus-4.6",  label: "Claude Opus 4.6",  vision: true  },
@@ -18,10 +26,6 @@ const MODELS = [
 ] as const;
 
 type ModelId = (typeof MODELS)[number]["id"];
-
-function isElectron(): boolean {
-  return typeof window !== "undefined" && "yourOwn" in window;
-}
 
 function SliderRow({
   label,
@@ -65,35 +69,95 @@ function SliderRow({
 export default function SettingsPage() {
   const router = useRouter();
 
+  // ── Connection ─────────────────────────────────────────────
+  const [serverUrl, setServerUrl]   = useState("");
+  const [authToken, setAuthTokenSt] = useState("");
+  const [connected, setConnected]   = useState<boolean | null>(null);
+
+  // ── AI settings ────────────────────────────────────────────
+  const [aiName, setAiName]             = useState("");
   const [apiKey, setApiKey]             = useState("");
   const [model, setModel]               = useState<ModelId>(MODELS[0].id);
   const [temperature, setTemperature]   = useState(7);
   const [topP, setTopP]                 = useState(9);
   const [historyPairs, setHistoryPairs]       = useState(6);
   const [memoryCutoffDays, setMemoryCutoffDays] = useState(2);
-  const [saved, setSaved]               = useState(false);
-  const [masked, setMasked]             = useState(true);
-  const [open, setOpen]                 = useState(false);
-  const dropdownRef                     = useRef<HTMLDivElement>(null);
 
+  // ── Pushy notifications ────────────────────────────────────
+  const [pushyApiKey, setPushyApiKey]           = useState("");
+  const [pushyDeviceToken, setPushyDeviceToken] = useState("");
+  const [pushyMasked, setPushyMasked]           = useState(true);
+  const [reflectionCooldown, setReflectionCooldown]   = useState(4);
+  const [reflectionInterval, setReflectionInterval]   = useState(12);
+  const [triggeringReflection, setTriggeringReflection] = useState(false);
+
+  const [saved, setSaved]     = useState(false);
+  const [masked, setMasked]   = useState(true);
+  const [open, setOpen]       = useState(false);
+  const dropdownRef           = useRef<HTMLDivElement>(null);
+
+  // ── Load connection settings from localStorage ─────────────
   useEffect(() => {
-    if (!isElectron()) return;
-    (async () => {
-      const key  = await window.yourOwn.getApiKey();
-      if (key) setApiKey(key);
-      const m    = await window.yourOwn.getModel();
-      if (m && MODELS.find((x) => x.id === m)) setModel(m as ModelId);
-      const temp = await window.yourOwn.getTemperature();
-      if (temp) setTemperature(Number(temp));
-      const tp   = await window.yourOwn.getTopP();
-      if (tp) setTopP(Number(tp));
-      const history = await window.yourOwn.getHistoryPairs();
-      if (history) setHistoryPairs(Number(history));
-      const cutoff = await window.yourOwn.getMemoryCutoffDays();
-      if (cutoff) setMemoryCutoffDays(Number(cutoff));
-    })();
+    setServerUrl(getBackendUrl());
+    setAuthTokenSt(getAuthToken());
   }, []);
 
+  // ── Load AI settings from backend + migrate from keytar if needed ──
+  useEffect(() => {
+    loadRemoteSettings();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function loadRemoteSettings() {
+    try {
+      const data: Record<string, unknown> = await apiGet("/api/settings/raw");
+      const key = data.openrouter_api_key as string;
+
+      // One-time migration: if server has no API key but Electron keytar does, push it
+      if (!key && typeof window !== "undefined" && "yourOwn" in window) {
+        const keytarKey = await window.yourOwn.getApiKey();
+        if (keytarKey) {
+          const keytarModel = await window.yourOwn.getModel();
+          const keytarTemp = await window.yourOwn.getTemperature();
+          const keytarTopP = await window.yourOwn.getTopP();
+          const keytarHistory = await window.yourOwn.getHistoryPairs();
+          const keytarCutoff = await window.yourOwn.getMemoryCutoffDays();
+          const keytarSoul = await window.yourOwn.getSoul();
+
+          await apiPut("/api/settings", {
+            openrouter_api_key: keytarKey,
+            ...(keytarModel ? { model: keytarModel } : {}),
+            ...(keytarTemp ? { temperature: Number(keytarTemp) / 10 } : {}),
+            ...(keytarTopP ? { top_p: Number(keytarTopP) / 10 } : {}),
+            ...(keytarHistory ? { history_pairs: Number(keytarHistory) } : {}),
+            ...(keytarCutoff ? { memory_cutoff_days: Number(keytarCutoff) } : {}),
+          });
+          if (keytarSoul) {
+            await apiPut("/api/settings/soul", { text: keytarSoul });
+          }
+          console.log("[settings] Migrated from keytar to server");
+          return loadRemoteSettings();
+        }
+      }
+
+      if (data.ai_name) setAiName(data.ai_name as string);
+      if (key) setApiKey(key);
+      const m = data.model as string;
+      if (m && MODELS.find((x) => x.id === m)) setModel(m as ModelId);
+      if (data.temperature != null) setTemperature(Math.round((data.temperature as number) * 10));
+      if (data.top_p != null) setTopP(Math.round((data.top_p as number) * 10));
+      if (data.history_pairs != null) setHistoryPairs(data.history_pairs as number);
+      if (data.memory_cutoff_days != null) setMemoryCutoffDays(data.memory_cutoff_days as number);
+      if (data.pushy_api_key) setPushyApiKey(data.pushy_api_key as string);
+      if (data.pushy_device_token) setPushyDeviceToken(data.pushy_device_token as string);
+      if (data.reflection_cooldown_hours != null) setReflectionCooldown(data.reflection_cooldown_hours as number);
+      if (data.reflection_interval_hours != null) setReflectionInterval(data.reflection_interval_hours as number);
+      setConnected(true);
+    } catch {
+      setConnected(false);
+    }
+  }
+
+  // ── Close dropdown on outside click ────────────────────────
   useEffect(() => {
     const handler = (e: MouseEvent) => {
       if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
@@ -104,17 +168,46 @@ export default function SettingsPage() {
     return () => document.removeEventListener("mousedown", handler);
   }, []);
 
+  // ── Save connection settings ───────────────────────────────
+  const handleSaveConnection = async () => {
+    setBackendUrl(serverUrl);
+    setAuthToken(authToken);
+    await loadRemoteSettings();
+  };
+
+  // ── Save AI settings to backend ────────────────────────────
   const handleSave = async () => {
-    if (isElectron()) {
-      await window.yourOwn.saveApiKey(apiKey);
-      await window.yourOwn.saveModel(model);
-      await window.yourOwn.saveTemperature(String(temperature));
-      await window.yourOwn.saveTopP(String(topP));
-      await window.yourOwn.saveHistoryPairs(String(historyPairs));
-      await window.yourOwn.saveMemoryCutoffDays(String(memoryCutoffDays));
+    try {
+      await apiPut("/api/settings", {
+        ai_name: aiName,
+        openrouter_api_key: apiKey,
+        model,
+        temperature: temperature / 10,
+        top_p: topP / 10,
+        history_pairs: historyPairs,
+        memory_cutoff_days: memoryCutoffDays,
+        ...(pushyApiKey ? { pushy_api_key: pushyApiKey } : {}),
+        ...(pushyDeviceToken ? { pushy_device_token: pushyDeviceToken } : {}),
+        reflection_cooldown_hours: reflectionCooldown,
+        reflection_interval_hours: reflectionInterval,
+      });
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (err) {
+      console.error("Failed to save settings:", err);
     }
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
+  };
+
+  // ── Trigger reflection now ─────────────────────────────────
+  const handleTriggerReflection = async () => {
+    setTriggeringReflection(true);
+    try {
+      await apiPut("/api/settings/trigger-reflection", {});
+    } catch {
+      // endpoint may not exist yet, ignore
+    } finally {
+      setTimeout(() => setTriggeringReflection(false), 2000);
+    }
   };
 
   const selectedLabel = MODELS.find((m) => m.id === model)?.label ?? "";
@@ -138,6 +231,84 @@ export default function SettingsPage() {
 
       <div className="flex-1 overflow-auto py-12">
         <div className="mx-auto flex w-full max-w-xl flex-col gap-10 px-8">
+
+        {/* ── Server Connection ── */}
+        <div className="flex flex-col gap-5 border border-white/10 p-6">
+          <div className="flex items-center justify-between">
+            <label className="text-[0.68rem] tracking-[0.22em] uppercase text-white/55">
+              Server Connection
+            </label>
+            {connected === true && (
+              <span className="text-[0.6rem] tracking-[0.2em] uppercase text-emerald-400/70">
+                connected
+              </span>
+            )}
+            {connected === false && (
+              <span className="text-[0.6rem] tracking-[0.2em] uppercase text-red-400/70">
+                disconnected
+              </span>
+            )}
+          </div>
+
+          <div className="flex flex-col gap-2">
+            <label className="text-[0.6rem] tracking-[0.18em] uppercase text-white/35">
+              Server URL
+            </label>
+            <input
+              type="text"
+              value={serverUrl}
+              onChange={(e) => setServerUrl(e.target.value)}
+              placeholder="http://localhost:8000"
+              spellCheck={false}
+              className="border-b border-white/20 bg-transparent py-2 text-[0.9rem] font-light tracking-wide text-white placeholder:text-white/25 outline-none transition-colors focus:border-white/50"
+            />
+          </div>
+
+          <div className="flex flex-col gap-2">
+            <label className="text-[0.6rem] tracking-[0.18em] uppercase text-white/35">
+              Auth Token
+            </label>
+            <input
+              type="password"
+              value={authToken}
+              onChange={(e) => setAuthTokenSt(e.target.value)}
+              placeholder="paste token from backend console"
+              spellCheck={false}
+              className="border-b border-white/20 bg-transparent py-2 text-[0.9rem] font-light tracking-wide text-white placeholder:text-white/25 outline-none transition-colors focus:border-white/50"
+            />
+          </div>
+
+          <button
+            onClick={handleSaveConnection}
+            className="self-start border border-white/20 px-6 py-2 text-[0.65rem] tracking-[0.2em] uppercase text-white/50 transition-colors hover:border-white/50 hover:text-white/80"
+          >
+            connect
+          </button>
+        </div>
+
+        {/* ── Divider ── */}
+        <div className="border-t border-white/10" />
+
+        {/* AI Name */}
+        <div className="flex flex-col gap-3">
+          <label className="text-[0.68rem] tracking-[0.22em] uppercase text-white/55">
+            AI Name
+          </label>
+          <input
+            type="text"
+            value={aiName}
+            onChange={(e) => setAiName(e.target.value)}
+            placeholder="How your AI introduces itself"
+            spellCheck={false}
+            className="
+              border-b border-white/30 bg-transparent
+              py-3 text-[1rem] font-light tracking-wide text-white
+              placeholder:text-white/30 outline-none
+              transition-colors duration-300
+              focus:border-white/70
+            "
+          />
+        </div>
 
         {/* API Key */}
         <div className="flex flex-col gap-3">
@@ -263,6 +434,102 @@ export default function SettingsPage() {
           onChange={setTopP}
         />
 
+        {/* Divider */}
+        <div className="border-t border-white/10" />
+
+        {/* Pushy Push Notifications */}
+        <div className="flex flex-col gap-5">
+          <div className="flex items-baseline justify-between">
+            <label className="text-[0.68rem] tracking-[0.22em] uppercase text-white/55">
+              Push Notifications (Pushy)
+            </label>
+            <a
+              href="https://pushy.me/dashboard"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-[0.6rem] tracking-[0.14em] uppercase text-white/30 hover:text-white/60 transition-colors"
+            >
+              pushy.me ↗
+            </a>
+          </div>
+          <p className="text-[0.62rem] tracking-wide text-white/35 -mt-2">
+            Secret API Key from the Pushy dashboard. Device token is registered automatically by the mobile app.
+          </p>
+
+          <div className="flex flex-col gap-2">
+            <label className="text-[0.6rem] tracking-[0.18em] uppercase text-white/35">
+              Pushy Secret API Key
+            </label>
+            <div className="flex items-center gap-3">
+              <input
+                type={pushyMasked ? "password" : "text"}
+                value={pushyApiKey}
+                onChange={(e) => setPushyApiKey(e.target.value)}
+                placeholder="Your app's secret API key"
+                spellCheck={false}
+                className="flex-1 border-b border-white/20 bg-transparent py-2 text-[0.9rem] font-light tracking-wide text-white placeholder:text-white/25 outline-none transition-colors focus:border-white/50"
+              />
+              <button
+                onClick={() => setPushyMasked((v) => !v)}
+                className="shrink-0 text-[0.65rem] tracking-[0.14em] uppercase text-white/35 hover:text-white/70 transition-colors"
+              >
+                {pushyMasked ? "show" : "hide"}
+              </button>
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-2">
+            <label className="text-[0.6rem] tracking-[0.18em] uppercase text-white/35">
+              Device Token
+            </label>
+            <input
+              type="text"
+              value={pushyDeviceToken}
+              onChange={(e) => setPushyDeviceToken(e.target.value)}
+              placeholder="Auto-filled by the mobile app on first launch"
+              spellCheck={false}
+              className="border-b border-white/20 bg-transparent py-2 text-[0.9rem] font-light tracking-wide text-white placeholder:text-white/25 outline-none transition-colors focus:border-white/50"
+            />
+          </div>
+        </div>
+
+        {/* Divider */}
+        <div className="border-t border-white/10" />
+
+        {/* Reflection timing */}
+        <div className="flex flex-col gap-5">
+          <label className="text-[0.68rem] tracking-[0.22em] uppercase text-white/55">
+            Reflection Pipeline
+          </label>
+          <p className="text-[0.62rem] tracking-wide text-white/35 -mt-2">
+            Background worker that lets the AI reflect on conversations and send proactive messages.
+          </p>
+          <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
+            <SliderRow
+              label="Cooldown (hours)"
+              hint="Min hours of silence before reflection can trigger."
+              value={reflectionCooldown}
+              onChange={setReflectionCooldown}
+              min={1}
+              max={24}
+            />
+            <SliderRow
+              label="Interval (hours)"
+              hint="Min hours between two reflections."
+              value={reflectionInterval}
+              onChange={setReflectionInterval}
+              min={1}
+              max={48}
+            />
+          </div>
+          <button
+            onClick={handleTriggerReflection}
+            className="self-start border border-white/15 px-5 py-2 text-[0.65rem] tracking-[0.18em] uppercase text-white/40 transition-colors hover:border-white/40 hover:text-white/70"
+          >
+            {triggeringReflection ? "triggered" : "trigger now"}
+          </button>
+        </div>
+
         {/* Save */}
         <button
           onClick={handleSave}
@@ -276,11 +543,6 @@ export default function SettingsPage() {
           {saved ? "saved" : "save"}
         </button>
 
-        {!isElectron() && (
-          <p className="text-[0.65rem] tracking-wide text-white/35">
-            Running in browser — keys are not persisted. Open in Electron to save securely.
-          </p>
-        )}
       </div>
       </div>
 

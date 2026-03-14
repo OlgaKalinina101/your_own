@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
-const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
+import { getAuthToken, setAuthToken, apiFetch, getApiBase } from "@/lib/api";
 const BACKEND_POLL_INTERVAL = 600;   // ms between backend availability checks
 const BACKEND_TIMEOUT = 30_000;      // ms before giving up waiting for backend
 
@@ -48,8 +48,9 @@ export default function LoadingScreen() {
     const poll = async () => {
       while (!cancelled && Date.now() < deadline) {
         try {
-          const res = await fetch(`${BACKEND}/api/startup/status`, {
+          const res = await fetch(`${getApiBase()}/api/startup/status`, {
             signal: AbortSignal.timeout(3000),
+            headers: { "ngrok-skip-browser-warning": "true" },
           });
           if (res.ok) {
             if (!cancelled) setPhase("loading");
@@ -76,8 +77,9 @@ export default function LoadingScreen() {
 
     const run = async () => {
       try {
-        const res = await fetch(`${BACKEND}/api/startup/status`, {
+        const res = await fetch(`${getApiBase()}/api/startup/status`, {
           signal: ctrl.signal,
+          headers: { "ngrok-skip-browser-warning": "true" },
         });
         if (!res.body) return;
 
@@ -127,20 +129,49 @@ export default function LoadingScreen() {
     return () => ctrl.abort();
   }, [phase]);
 
-  // ── Phase 4: redirect ──────────────────────────────────────────────────────
+  // ── Phase 4: auto-acquire auth token, then redirect ─────────────────────
   useEffect(() => {
     if (phase !== "done") return;
 
     const redirect = async () => {
-      let hasKey = false;
-      if (isElectron()) {
-        const key = await window.yourOwn.getApiKey();
-        hasKey = !!key && key.trim().length > 0;
+      // Auto-acquire token from local backend if we don't have one yet
+      if (!getAuthToken()) {
+        try {
+          const res = await fetch(`${getApiBase()}/api/settings/local-token`, {
+            headers: { "ngrok-skip-browser-warning": "true" },
+          });
+          if (res.ok) {
+            const data = await res.json();
+            if (data.token) {
+              setAuthToken(data.token);
+            }
+          }
+        } catch {
+          // backend unreachable — will go to settings
+        }
       }
-      router.push(hasKey ? "/chat" : "/dashboard");
+
+      let hasKey = false;
+      const token = getAuthToken();
+      if (token) {
+        try {
+          const res = await fetch(`${getApiBase()}/api/settings/raw`, {
+            headers: {
+              Authorization: `Bearer ${token}`,
+              "ngrok-skip-browser-warning": "true",
+            },
+          });
+          if (res.ok) {
+            const data = await res.json();
+            hasKey = !!data.openrouter_api_key;
+          }
+        } catch {
+          // server unreachable
+        }
+      }
+      router.push(hasKey ? "/chat" : "/dashboard/settings");
     };
 
-    // Small pause so the "ready" state is visible for a beat
     const t = setTimeout(redirect, 600);
     return () => clearTimeout(t);
   }, [phase, router]);

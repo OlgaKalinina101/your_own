@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
+import { getApiBase } from "@/lib/api";
 
 type MarkdownMessageProps = {
   content: string;
@@ -48,7 +49,7 @@ type InlinePart =
 // Groups: 1=skill_name, 2=skill_arg | 3=fact_cat, 4=fact_stars, 5=fact_text | 6=img_path, 7=img_model, 8=img_prompt
 // GENERATE_IMAGE is matched but not rendered — just hidden from display (legacy DB entries)
 const ALL_COMMANDS_RE =
-  /\[(SAVE_MEMORY|SEARCH_MEMORIES|WEB_SEARCH|GENERATE_IMAGE):\s*(.*?)\]|\[SAVED_FACT:\s*(.*?)\s*\|\s*(\d)\s*\|\s*(.*?)\]|\[GENERATED_IMAGE:\s*(.*?)\s*\|\s*(.*?)\s*\|\s*(.*?)\]/gs;
+  /\[(SAVE_MEMORY|SEARCH_MEMORIES|WEB_SEARCH|GENERATE_IMAGE|SCHEDULE_MESSAGE):\s*(.*?)\]|\[SAVED_FACT:\s*(.*?)\s*\|\s*(\d)\s*\|\s*(.*?)\]|\[GENERATED_IMAGE:\s*(.*?)\s*\|\s*(.*?)\s*\|\s*(.*?)\]/gs;
 
 const KIND_MAP: Record<string, SkillBadgeKind> = {
   SAVE_MEMORY: "save",
@@ -74,6 +75,7 @@ const PARTIAL_PREFIXES = [
   "[WEB_SEARCH:",
   "[SAVED_FACT:",
   "[GENERATED_IMAGE:",
+  "[SCHEDULE_MESSAGE:",
 ];
 
 function trimPartialCommand(text: string): string {
@@ -100,7 +102,7 @@ function parseInlineParts(rawContent: string, isStreaming: boolean): InlinePart[
     if (before) parts.push({ type: "text", text: before });
 
     if (match[1]) {
-      if (match[1] === "SAVE_MEMORY") {
+      if (match[1] === "SAVE_MEMORY" || match[1] === "SCHEDULE_MESSAGE") {
         lastIndex = match.index! + match[0].length;
         continue;
       }
@@ -274,11 +276,7 @@ function GeneratingImageShimmer({ prompt }: { prompt: string }) {
 function GeneratedImageCard({ image }: { image: GeneratedImage }) {
   const [lightboxOpen, setLightboxOpen] = useState(false);
 
-  const backendBase =
-    typeof window !== "undefined" && window.location.port === "3000"
-      ? "http://localhost:8000"
-      : "";
-  const src = image.path.startsWith("http") ? image.path : `${backendBase}${image.path}`;
+  const src = image.path.startsWith("http") ? image.path : `${getApiBase()}${image.path}`;
   const filename = image.path.split("/").pop() ?? "image.png";
   const modelName = image.model.split("/").pop() ?? image.model;
   const promptPreview = image.prompt.length > 80 ? image.prompt.slice(0, 77) + "..." : image.prompt;
@@ -443,7 +441,7 @@ function MarkdownBlock({ text, role }: { text: string; role: "user" | "assistant
   );
 }
 
-export default function MarkdownMessage({ content, role, showCursor = false, isStreaming = false }: MarkdownMessageProps) {
+function MarkdownMessageInner({ content, role, showCursor = false, isStreaming = false }: MarkdownMessageProps) {
   const textTone = role === "user" ? "text-white" : "text-white/85";
   const parts = useMemo(
     () => (role === "assistant" ? parseInlineParts(content, isStreaming) : [{ type: "text" as const, text: content }]),
@@ -469,3 +467,6 @@ export default function MarkdownMessage({ content, role, showCursor = false, isS
     </div>
   );
 }
+
+const MarkdownMessage = memo(MarkdownMessageInner);
+export default MarkdownMessage;
