@@ -5,7 +5,8 @@ We walk the tree in order and group messages into user+assistant *pairs*.
 A pair is the unit of memory: one user message + the assistant reply that follows it.
 
 If a user message has no assistant reply (e.g. last message), it is stored as
-a half-pair (assistant text = "").
+a half-pair (assistant text = ""). Lone assistant messages are also preserved
+as half-pairs with an empty user text so push notifications can be imported.
 
 Export format (each item in the top-level list):
 {
@@ -27,7 +28,7 @@ Export format (each item in the top-level list):
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Iterator
 
@@ -108,6 +109,8 @@ def _iter_pairs(
       - Match each user message with the assistant message that immediately follows it.
       - If a user turn is followed by another user turn (no assistant reply), pair
         it with an empty assistant text.
+      - If an assistant turn has no preceding user turn, preserve it as a half-pair
+        with an empty user text. This is used for migrated push notifications.
     """
     nodes = _walk_conversation(mapping)
 
@@ -150,7 +153,15 @@ def _iter_pairs(
             )
 
         else:
-            # Lone assistant message (no preceding user) — skip
+            # Lone assistant message (e.g. push notification) — keep it.
+            yield ParsedPair(
+                conversation_id=conv_id,
+                conversation_title=conv_title,
+                user_text="",
+                user_created_at=ts,
+                assistant_text=text,
+                assistant_created_at=ts,
+            )
             i += 1
 
 

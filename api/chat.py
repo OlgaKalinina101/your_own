@@ -48,13 +48,18 @@ from settings import settings
 logger = setup_logger("chat")
 MAX_CHAT_IMAGES = 8
 
-_DBG_PATH = r"c:\Users\Alien\PycharmProjects\your_own\logs\chat_debug.log"
-_GENERATED_IMAGES_DIR = Path(r"c:\Users\Alien\PycharmProjects\your_own\generated_images")
-_GENERATED_IMAGES_DIR.mkdir(exist_ok=True)
+_PROJECT_ROOT = Path(__file__).resolve().parents[1]
+_LOGS_DIR = _PROJECT_ROOT / "logs"
+_GENERATED_IMAGES_DIR = _PROJECT_ROOT / "generated_images"
+
+_LOGS_DIR.mkdir(parents=True, exist_ok=True)
+_GENERATED_IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+
+_DBG_PATH = _LOGS_DIR / "chat_debug.log"
 
 def _dbg(msg: str) -> None:
     try:
-        with open(_DBG_PATH, "a", encoding="utf-8") as f:
+        with _DBG_PATH.open("a", encoding="utf-8") as f:
             f.write(f"{datetime.now().strftime('%H:%M:%S')} {msg}\n")
     except Exception:
         pass
@@ -417,6 +422,20 @@ async def chat(
     if chroma_memory_block:
         llm_messages.append({"role": "assistant", "content": chroma_memory_block})
     llm_messages.append({"role": "user", "content": current_user_text})
+    _dbg(
+        "LLM_MESSAGES "
+        + json.dumps(
+            [
+                {
+                    "role": msg["role"],
+                    "preview": _preview(msg.get("content", ""), 160),
+                }
+                for msg in llm_messages
+            ],
+            ensure_ascii=False,
+        )
+    )
+    logger.info("[chat] llm_messages count=%d", len(llm_messages))
 
     def _yield_chunk(chunk: str):
         """Yields SSE lines for a text chunk."""

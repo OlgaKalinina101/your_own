@@ -4,13 +4,13 @@
   "private": true,
   "main": "electron/main.js",
   "scripts": {
-    "dev": "next dev",
+    "dev": "cross-env NODE_OPTIONS=--max-old-space-size=4096 next dev",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
     "setup": "node ../scripts/setup.js",
     "backend:dev": "node ../scripts/start-backend.js",
-    "electron:dev": "node ../scripts/setup.js && concurrently -n NEXT,BACKEND,ELECTRON -c cyan,yellow,magenta \"next dev\" \"node ../scripts/start-backend.js\" \"wait-on tcp:3000 && cross-env NODE_ENV=development electron .\"",
+    "electron:dev": "node ../scripts/setup.js && concurrently -n NEXT,BACKEND,ELECTRON -c cyan,yellow,magenta \"cross-env NODE_OPTIONS=--max-old-space-size=4096 next dev\" \"node ../scripts/start-backend.js\" \"wait-on tcp:3000 && cross-env NODE_ENV=development electron .\"",
     "electron:build": "next build && electron-builder build --config electron-builder.config.js"
   },
   "dependencies": {

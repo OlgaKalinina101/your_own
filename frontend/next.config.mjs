@@ -11,6 +11,14 @@ const nextConfig = {
     "*.ngrok.io",
     ...extraOrigins,
   ],
+  webpack: (config, { dev }) => {
+    if (dev) {
+      // Disable webpack's persistent cache in development to avoid packfile OOMs
+      // on low-memory Windows setups.
+      config.cache = false;
+    }
+    return config;
+  },
 };
 
 export default nextConfig;

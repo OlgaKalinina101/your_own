@@ -122,12 +122,18 @@ async def import_chatgpt(
 
         repo = MessageRepository(db)
         done = 0
+        index_dropped = False
 
-        for i in range(0, total, BATCH_SIZE):
-            batch = pairs[i : i + BATCH_SIZE]
-            yield f"data: {json.dumps({'total': total, 'done': done, 'stage': 'embedding'})}\n\n"
+        try:
+            yield f"data: {json.dumps({'total': total, 'done': 0, 'stage': 'preparing'})}\n\n"
+            await repo.drop_embedding_hnsw_index()
+            index_dropped = True
+            await repo.delete_import_rows(account_id)
 
-            try:
+            for i in range(0, total, BATCH_SIZE):
+                batch = pairs[i : i + BATCH_SIZE]
+                yield f"data: {json.dumps({'total': total, 'done': done, 'stage': 'embedding'})}\n\n"
+
                 rows: list[Message] = []
                 for pair in batch:
                     rows.extend(_pair_to_rows(pair, account_id))
@@ -138,10 +144,19 @@ async def import_chatgpt(
                 done = min(i + BATCH_SIZE, total)
                 yield f"data: {json.dumps({'total': total, 'done': done, 'stage': 'saving'})}\n\n"
 
-            except Exception as exc:
-                logger.exception("[memory/import] batch %d error: %s", i, exc)
-                yield f"data: {json.dumps({'error': str(exc), 'batch': i})}\n\n"
-                return
+            yield f"data: {json.dumps({'total': total, 'done': done, 'stage': 'reindexing'})}\n\n"
+            await repo.create_embedding_hnsw_index()
+            index_dropped = False
+        except Exception as exc:
+            logger.exception("[memory/import] import error after %d pairs: %s", done, exc)
+            yield f"data: {json.dumps({'error': str(exc), 'done': done})}\n\n"
+            return
+        finally:
+            if index_dropped:
+                try:
+                    await repo.create_embedding_hnsw_index()
+                except Exception:
+                    logger.exception("[memory/import] failed to recreate HNSW index after import error")
 
         yield f"data: {json.dumps({'total': total, 'done': total, 'finished': True})}\n\n"
 

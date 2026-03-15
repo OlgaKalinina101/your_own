@@ -16,6 +16,10 @@ const NEXT_PORT = 3000;
 const BACKEND_PORT = 8000;
 const isDev = process.env.NODE_ENV === "development";
 
+// Some Windows setups crash the Electron GPU process on startup.
+// Falling back to software rendering is safer than failing the app boot.
+app.disableHardwareAcceleration();
+
 const KEYTAR_SERVICE           = "your-own-app";
 const KEYTAR_ACCOUNT_APIKEY    = "openrouter-api-key";
 const KEYTAR_ACCOUNT_MODEL     = "selected-model";

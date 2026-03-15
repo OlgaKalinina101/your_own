@@ -6,7 +6,7 @@ from collections import defaultdict
 from datetime import datetime
 from typing import Iterable, Optional, Sequence
 
-from sqlalchemy import func, select, text
+from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from infrastructure.database.models.message import Message
@@ -78,6 +78,37 @@ class MessageRepository:
 
         await self._session.commit()
 
+    async def delete_import_rows(self, account_id: str) -> int:
+        result = await self._session.execute(
+            text(
+                """
+                DELETE FROM messages
+                WHERE account_id = :account_id
+                  AND source = 'import'
+                """
+            ),
+            {"account_id": account_id},
+        )
+        await self._session.commit()
+        return result.rowcount or 0
+
+    async def drop_embedding_hnsw_index(self) -> None:
+        await self._session.execute(text("DROP INDEX IF EXISTS ix_messages_embedding_hnsw"))
+        await self._session.commit()
+
+    async def create_embedding_hnsw_index(self) -> None:
+        await self._session.execute(
+            text(
+                """
+                CREATE INDEX IF NOT EXISTS ix_messages_embedding_hnsw
+                ON messages USING hnsw (embedding vector_cosine_ops)
+                WITH (m = 16, ef_construction = 64)
+                WHERE embedding IS NOT NULL AND message_kind = 'chunk'
+                """
+            )
+        )
+        await self._session.commit()
+
     # ── read ───────────────────────────────────────────────────────────────────
 
     async def get_by_id(self, message_id: uuid.UUID) -> Optional[Message]:
@@ -118,11 +149,17 @@ class MessageRepository:
         limit_pairs: int,
         exclude_pair_ids: Optional[Iterable[uuid.UUID]] = None,
     ) -> list[dict]:
+        history_filter = or_(
+            Message.source == "import",
+            and_(
+                Message.source.in_(("chat", "push")),
+                Message.message_kind == "canonical",
+            ),
+        )
         pair_stmt = (
             select(Message.pair_id)
             .where(Message.account_id == account_id)
-            .where(Message.source.in_(("chat", "push")))
-            .where(Message.message_kind == "canonical")
+            .where(history_filter)
         )
         if exclude_pair_ids:
             pair_stmt = pair_stmt.where(Message.pair_id.notin_(list(exclude_pair_ids)))
@@ -144,14 +181,20 @@ class MessageRepository:
         limit_pairs: int,
         before: Optional[datetime] = None,
     ) -> tuple[list[dict], Optional[datetime], bool]:
+        history_filter = or_(
+            Message.source == "import",
+            and_(
+                Message.source.in_(("chat", "push")),
+                Message.message_kind == "canonical",
+            ),
+        )
         pair_stmt = (
             select(
                 Message.pair_id,
                 func.max(Message.created_at).label("pair_created_at"),
             )
             .where(Message.account_id == account_id)
-            .where(Message.source.in_(("chat", "push")))
-            .where(Message.message_kind == "canonical")
+            .where(history_filter)
             .group_by(Message.pair_id)
         )
         if before is not None:

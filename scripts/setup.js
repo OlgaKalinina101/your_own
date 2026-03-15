@@ -33,6 +33,9 @@ let DB_URL = "";
 
 const ROOT = path.resolve(__dirname, "..");   // workspace root
 const FRONTEND = path.join(ROOT, "frontend");
+const VENV_PYTHON = os.platform() === "win32"
+  ? path.join(ROOT, ".venv", "Scripts", "python.exe")
+  : path.join(ROOT, ".venv", "bin", "python");
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -360,9 +363,12 @@ function ensureFrontendDependencies() {
 
   log("Installing frontend dependencies…");
   const npm = os.platform() === "win32" ? "npm.cmd" : "npm";
-  const install = runIn(FRONTEND, `${npm} install`, { timeout: 300_000 });
+  const install = runIn(FRONTEND, `${npm} install`, { timeout: 900_000 });
   if (install.status !== 0) {
-    err(`frontend npm install failed:\n${install.stdout}\n${install.stderr}`);
+    const reason = install.error
+      ? `\nerror: ${install.error.message}`
+      : "";
+    err(`frontend npm install failed:\n${install.stdout}\n${install.stderr}${reason}`);
     process.exit(1);
   }
   ok("Frontend dependencies installed");
@@ -371,6 +377,9 @@ function ensureFrontendDependencies() {
 // ── Step 5: Python dependencies ───────────────────────────────────────────────
 
 function findRealPython() {
+  if (fs.existsSync(VENV_PYTHON)) {
+    return VENV_PYTHON;
+  }
   // On Windows, python3.exe from WindowsApps is a Store stub — it prints nothing and exits 9.
   // We iterate candidates and verify each one actually runs.
   const candidates = os.platform() === "win32"

@@ -7,10 +7,15 @@
 
 const { spawn } = require("child_process");
 const path = require("path");
-const os = require("os");
+const fs = require("fs");
 
 const ROOT = path.resolve(__dirname, "..");
-const python = os.platform() === "win32" ? "python" : "python3";
+const VENV_PYTHON = process.platform === "win32"
+  ? path.join(ROOT, ".venv", "Scripts", "python.exe")
+  : path.join(ROOT, ".venv", "bin", "python");
+const python = fs.existsSync(VENV_PYTHON)
+  ? VENV_PYTHON
+  : (process.platform === "win32" ? "python" : "python3");
 
 const proc = spawn(
   python,
