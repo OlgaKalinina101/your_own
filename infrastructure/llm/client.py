@@ -278,7 +278,7 @@ class LLMClient:
     async def complete(
         self,
         messages: list[dict],
-        max_tokens: int = 600,
+        max_tokens: int = 650,
         temperature: float | None = None,
     ) -> str:
         """Non-streaming single completion. Returns assistant text or '' on failure."""

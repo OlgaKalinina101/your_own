@@ -35,7 +35,7 @@ async def _complete(
     system: str,
     user: str,
     temperature: float = 0.4,
-    max_tokens: int = 600,
+    max_tokens: int = 650,
 ) -> str:
     client = make_llm_client(api_key)
     return await client.complete(

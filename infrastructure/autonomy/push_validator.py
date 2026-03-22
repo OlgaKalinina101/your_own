@@ -115,8 +115,8 @@ async def validate_scheduled_push(
     client = make_llm_client(api_key)
     response = await client.complete(
         messages=[{"role": "user", "content": user_prompt}],
-        max_tokens=400,
-        temperature=0.3,
+        max_tokens=650,
+        temperature=0.7,
     )
 
     return _parse_response(response or "", message, lang, account_id)

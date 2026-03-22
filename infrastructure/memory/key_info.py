@@ -32,7 +32,7 @@ async def _complete(api_key: str, system: str, user: str) -> str:
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ],
-        max_tokens=1500,
+        max_tokens=650,
         temperature=0.7,
     )
 

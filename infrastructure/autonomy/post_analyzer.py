@@ -233,7 +233,7 @@ async def run_post_analysis(
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ],
-        max_tokens=1500,
+        max_tokens=650,
         temperature=0.7,
     )
     if not response:
