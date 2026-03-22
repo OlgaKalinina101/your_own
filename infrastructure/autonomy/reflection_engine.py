@@ -505,7 +505,10 @@ async def run(account_id: str, api_key: str) -> None:
             interval_h=interval_h,
         )
 
-        messages: list[dict] = []
+        # Seed with a minimal user turn so providers that require at least one
+        # user message (e.g. DeepSeek) don't reject the first request.
+        _seed = "." if lang == "en" else "."
+        messages: list[dict] = [{"role": "user", "content": _seed}]
 
         step = 0
         max_steps = BASE_STEPS
