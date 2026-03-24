@@ -18,6 +18,7 @@ System prompt review is intentionally omitted.
 from __future__ import annotations
 
 import logging
+import re
 
 from infrastructure.autonomy import identity_memory as identity
 from infrastructure.autonomy import workbench as wb

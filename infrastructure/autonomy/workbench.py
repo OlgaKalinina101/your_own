@@ -102,7 +102,7 @@ def read(account_id: str) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def get_recent_entries(account_id: str, max_entries: int = 5, empty_label: str = "") -> str:
+def get_recent_entries(account_id: str, max_entries: int = 3, empty_label: str = "") -> str:
     """Return the last *max_entries* workbench entries formatted as ``[ts] body``.
 
     Returns *empty_label* (default ``""``) when there are no entries.
