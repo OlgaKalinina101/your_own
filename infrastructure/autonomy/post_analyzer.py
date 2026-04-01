@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime
 
 from infrastructure.autonomy import identity_memory as identity
 from infrastructure.autonomy import workbench as wb
@@ -76,9 +76,7 @@ async def _build_pending_pushes_block(account_id: str) -> str:
         from infrastructure.database.models.message import Message
         from sqlalchemy import select, desc
 
-        today_start = datetime.now(timezone.utc).replace(
-            hour=0, minute=0, second=0, microsecond=0,
-        )
+        today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
 
         async with get_db_session() as db:
             result = await db.execute(

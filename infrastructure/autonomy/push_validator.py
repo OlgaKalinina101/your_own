@@ -89,8 +89,9 @@ async def validate_scheduled_push(
     current_time = now_local_str()
 
     if last_user_at:
-        from infrastructure.settings_store import get_user_tz, TIME_FMT
-        last_message_time = last_user_at.astimezone(get_user_tz()).strftime(TIME_FMT)
+        from infrastructure.settings_store import TIME_FMT
+        # created_at is now stored in local time; format directly
+        last_message_time = last_user_at.strftime(TIME_FMT)
     else:
         last_message_time = "неизвестно" if lang == "ru" else "unknown"
 
@@ -128,9 +129,9 @@ async def _same_text_warning(account_id: str, message: str, lang: str) -> str:
         from infrastructure.database.engine import get_db_session
         from infrastructure.database.models.message import Message
         from sqlalchemy import select
-        from datetime import datetime, timezone, timedelta
+        from datetime import datetime, timedelta
 
-        cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+        cutoff = datetime.now() - timedelta(hours=24)
         async with get_db_session() as db:
             result = await db.execute(
                 select(Message.text).where(

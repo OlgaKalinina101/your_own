@@ -74,10 +74,10 @@ def humanize_timestamp(created_at_value: datetime | str | None, language: Langua
         else:
             created_at = created_at_value
 
-        if created_at.tzinfo is None:
-            created_at = created_at.replace(tzinfo=timezone.utc)
+        if created_at.tzinfo is not None:
+            created_at = created_at.replace(tzinfo=None)
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now()
         delta = now - created_at
         days = max(0, delta.days)
 

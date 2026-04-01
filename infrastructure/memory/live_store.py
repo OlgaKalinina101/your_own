@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 
 from infrastructure.database.models.message import Message
 from infrastructure.memory.embedder import embed_texts
 from infrastructure.memory.focus_point import extract_focus_fast, split_to_sentences
 
 
-def now_utc() -> datetime:
-    return datetime.now(timezone.utc)
+def now_local() -> datetime:
+    """Return current server time (naive, no timezone)."""
+    return datetime.now()
+
+
+now_utc = now_local
 
 
 def build_canonical_row(
@@ -26,7 +30,7 @@ def build_canonical_row(
         message_id=uuid.uuid4(),
         pair_id=pair_id,
         account_id=account_id,
-        created_at=created_at or now_utc(),
+        created_at=created_at or now_local(),
         role=role,
         text=text,
         message_kind="canonical",
@@ -47,7 +51,7 @@ def build_chunk_rows(
     created_at: datetime | None = None,
 ) -> list[Message]:
     rows: list[Message] = []
-    timestamp = created_at or now_utc()
+    timestamp = created_at or now_local()
     for idx, sentence in enumerate(split_to_sentences(text, min_len=15)):
         rows.append(
             Message(

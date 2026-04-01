@@ -35,7 +35,7 @@ from infrastructure.memory.live_store import (
     build_canonical_row,
     build_chunk_rows,
     fill_chunk_embeddings,
-    now_utc,
+    now_local,
 )
 from infrastructure.memory.focus_point import detect_language
 from infrastructure.memory.retrieval import humanize_timestamp
@@ -344,7 +344,7 @@ async def chat(
     )
 
     pair_id = uuid.uuid4()
-    user_created_at = now_utc()
+    user_created_at = now_local()
     saved_user = False
     if current_user_text.strip():
         user_rows = [
@@ -720,7 +720,7 @@ async def chat(
             _dbg(f"SAVE_CONTENT>>>{assistant_text_full}<<<END")
 
             if assistant_text_full and not assistant_text_full.startswith("[OpenRouter error"):
-                assistant_created_at = now_utc()
+                assistant_created_at = now_local()
                 assistant_rows = [
                     build_canonical_row(
                         pair_id=pair_id,

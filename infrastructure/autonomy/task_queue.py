@@ -36,7 +36,7 @@ async def create_task(
         payload=payload,
         scheduled_at=scheduled_at,
         status=TaskStatus.PENDING,
-        created_at=datetime.now(timezone.utc),
+        created_at=datetime.now(),
     )
     db.add(task)
     await db.commit()
@@ -185,7 +185,7 @@ async def mark_done(db: AsyncSession, task_id: str) -> None:
     await db.execute(
         update(AutonomyTask)
         .where(AutonomyTask.id == task_id)
-        .values(status=TaskStatus.DONE, completed_at=datetime.now(timezone.utc))
+        .values(status=TaskStatus.DONE, completed_at=datetime.now())
     )
     await db.commit()
 
