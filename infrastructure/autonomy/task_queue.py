@@ -8,10 +8,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime, timezone
-from enum import Enum
-
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -62,7 +59,7 @@ async def get_recent_tasks(
     hours: int = 12,
 ) -> list[AutonomyTask]:
     """Return PENDING, DONE and CANCELLED TIME tasks scheduled within the last N hours."""
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+    cutoff = datetime.now() - timedelta(hours=hours)
     result = await db.execute(
         select(AutonomyTask).where(
             AutonomyTask.account_id == account_id,
@@ -77,15 +74,15 @@ async def get_recent_tasks(
 async def cancel_task_by_time(
     db: AsyncSession,
     account_id: str,
-    scheduled_at_utc: datetime,
+    scheduled_at: datetime,
 ) -> bool:
-    """Cancel a PENDING task at the given UTC time. Returns True if found."""
+    """Cancel a PENDING task at the given local time. Returns True if found."""
     result = await db.execute(
         select(AutonomyTask).where(
             AutonomyTask.account_id == account_id,
             AutonomyTask.trigger_type == TriggerType.TIME,
             AutonomyTask.status == TaskStatus.PENDING,
-            AutonomyTask.scheduled_at == scheduled_at_utc,
+            AutonomyTask.scheduled_at == scheduled_at,
         )
     )
     tasks = list(result.scalars().all())
@@ -99,8 +96,8 @@ async def cancel_task_by_time(
 async def reschedule_task(
     db: AsyncSession,
     account_id: str,
-    old_scheduled_at_utc: datetime,
-    new_scheduled_at_utc: datetime,
+    old_scheduled_at: datetime,
+    new_scheduled_at: datetime,
 ) -> bool:
     """Move a PENDING task to a new time. Returns True if found."""
     result = await db.execute(
@@ -108,12 +105,12 @@ async def reschedule_task(
             AutonomyTask.account_id == account_id,
             AutonomyTask.trigger_type == TriggerType.TIME,
             AutonomyTask.status == TaskStatus.PENDING,
-            AutonomyTask.scheduled_at == old_scheduled_at_utc,
+            AutonomyTask.scheduled_at == old_scheduled_at,
         )
     )
     tasks = list(result.scalars().all())
     for t in tasks:
-        t.scheduled_at = new_scheduled_at_utc
+        t.scheduled_at = new_scheduled_at
     if tasks:
         await db.commit()
     return bool(tasks)
@@ -122,7 +119,7 @@ async def reschedule_task(
 async def rewrite_task(
     db: AsyncSession,
     account_id: str,
-    scheduled_at_utc: datetime,
+    scheduled_at: datetime,
     new_text: str,
 ) -> bool:
     """Replace the message payload of a PENDING task. Returns True if found."""
@@ -131,7 +128,7 @@ async def rewrite_task(
             AutonomyTask.account_id == account_id,
             AutonomyTask.trigger_type == TriggerType.TIME,
             AutonomyTask.status == TaskStatus.PENDING,
-            AutonomyTask.scheduled_at == scheduled_at_utc,
+            AutonomyTask.scheduled_at == scheduled_at,
         )
     )
     tasks = list(result.scalars().all())
@@ -149,8 +146,8 @@ async def rewrite_task(
 
 
 async def get_due_tasks(db: AsyncSession, account_id: str) -> list[AutonomyTask]:
-    """Return PENDING TIME-triggered tasks whose scheduled_at <= now."""
-    now = datetime.now(timezone.utc)
+    """Return PENDING TIME-triggered tasks whose scheduled_at <= now (local server time)."""
+    now = datetime.now()
     result = await db.execute(
         select(AutonomyTask).where(
             AutonomyTask.account_id == account_id,

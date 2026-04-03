@@ -88,9 +88,8 @@ async def schedule_message(
     from infrastructure.database.engine import get_db_session
     from infrastructure.autonomy.task_queue import cancel_duplicate_scheduled, create_task
     from infrastructure.database.models.autonomy_task import TriggerType
-    from infrastructure.settings_store import local_to_utc
 
-    scheduled_at = local_to_utc(datetime.strptime(ts_str.strip(), "%Y-%m-%d %H:%M"))
+    scheduled_at = datetime.strptime(ts_str.strip(), "%Y-%m-%d %H:%M")
     async with get_db_session() as db:
         await cancel_duplicate_scheduled(db, account_id, scheduled_at, source)
         payload = json.dumps({"message": text.strip(), "source": source})
@@ -114,9 +113,8 @@ async def cancel_message(
     """Cancel a scheduled task by timestamp. Returns True if found."""
     from infrastructure.database.engine import get_db_session
     from infrastructure.autonomy.task_queue import cancel_task_by_time
-    from infrastructure.settings_store import local_to_utc
 
-    scheduled_at = local_to_utc(datetime.strptime(ts_str.strip(), "%Y-%m-%d %H:%M"))
+    scheduled_at = datetime.strptime(ts_str.strip(), "%Y-%m-%d %H:%M")
     async with get_db_session() as db:
         found = await cancel_task_by_time(db, account_id, scheduled_at)
     logger.info("[%s:%s] CANCEL_MESSAGE %s found=%s", log_prefix, account_id, ts_str, found)
@@ -134,12 +132,11 @@ async def reschedule_message(
     """Reschedule a task from old time to new time. Returns True if found."""
     from infrastructure.database.engine import get_db_session
     from infrastructure.autonomy.task_queue import reschedule_task
-    from infrastructure.settings_store import local_to_utc
 
-    old_utc = local_to_utc(datetime.strptime(old_ts_str.strip(), "%Y-%m-%d %H:%M"))
-    new_utc = local_to_utc(datetime.strptime(new_ts_str.strip(), "%Y-%m-%d %H:%M"))
+    old_dt = datetime.strptime(old_ts_str.strip(), "%Y-%m-%d %H:%M")
+    new_dt = datetime.strptime(new_ts_str.strip(), "%Y-%m-%d %H:%M")
     async with get_db_session() as db:
-        found = await reschedule_task(db, account_id, old_utc, new_utc)
+        found = await reschedule_task(db, account_id, old_dt, new_dt)
     logger.info("[%s:%s] RESCHEDULE_MESSAGE %s -> %s found=%s", log_prefix, account_id, old_ts_str.strip(), new_ts_str.strip(), found)
     return found
 
@@ -155,9 +152,8 @@ async def rewrite_message(
     """Rewrite a scheduled task's text. Returns True if found."""
     from infrastructure.database.engine import get_db_session
     from infrastructure.autonomy.task_queue import rewrite_task
-    from infrastructure.settings_store import local_to_utc
 
-    scheduled_at = local_to_utc(datetime.strptime(ts_str.strip(), "%Y-%m-%d %H:%M"))
+    scheduled_at = datetime.strptime(ts_str.strip(), "%Y-%m-%d %H:%M")
     async with get_db_session() as db:
         found = await rewrite_task(db, account_id, scheduled_at, new_text.strip())
     logger.info("[%s:%s] REWRITE_MESSAGE %s found=%s", log_prefix, account_id, ts_str.strip(), found)
