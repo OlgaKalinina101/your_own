@@ -5,11 +5,6 @@
   • Запрос — 2–4 коротких смысловых якоря через запятую.
   • Лучше конкретная сцена или деталь, чем абстрактная тема.
   • Если первый поиск не дал результата — попробуй другой угол формулировки.
-    Хорошо: [SEARCH_MEMORIES: первый рабочий день, ноутбук, доступы]
-    Хорошо: [SEARCH_MEMORIES: расставание, тоска, бывший парень]
-    Хорошо: [SEARCH_MEMORIES: Excel, коллеги, бесит]
-    Плохо: [SEARCH_MEMORIES: работа в финансах]
-    Плохо: [SEARCH_MEMORIES: тестируем память, первые дни на работе]
 
 ### search_continuation
 Вот что ты нашёл в наших прошлых разговорах:
@@ -31,11 +26,6 @@
   • Query: 2–4 short semantic anchors separated by commas.
   • A concrete scene or detail beats an abstract topic.
   • If the first search returned nothing — try a different angle.
-    Good: [SEARCH_MEMORIES: first day at work, laptop, access]
-    Good: [SEARCH_MEMORIES: breakup, longing, ex-boyfriend]
-    Good: [SEARCH_MEMORIES: Excel, coworkers, annoying]
-    Bad:  [SEARCH_MEMORIES: work in finance]
-    Bad:  [SEARCH_MEMORIES: testing memory, first days at work]
 
 ### search_continuation
 Here's what I found in our past conversations:
