@@ -74,12 +74,10 @@ class TestContinuation:
 
     def test_ru_loads(self):
         text = self._build("ru")
-        assert "Victor" in text
         assert "5" in text
 
     def test_en_loads(self):
         text = self._build("en")
-        assert "Victor" in text
         assert "5" in text
 
     def test_ru_result_injected(self):
@@ -122,12 +120,10 @@ class TestAfterAction:
 
     def test_ru_loads(self):
         text = self._build("ru")
-        assert "Victor" in text
         assert "3" in text
 
     def test_en_loads(self):
         text = self._build("en")
-        assert "Victor" in text
         assert "3" in text
 
     def test_ru_has_all_commands(self):

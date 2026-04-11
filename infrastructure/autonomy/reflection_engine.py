@@ -567,10 +567,11 @@ async def run(account_id: str, api_key: str) -> None:
                     logger.warning("[reflection] command %s error: %s", cmd_name, exc)
                     search_results.append(f"[{resolved}] error: {exc}")
 
-            # Always save free-text reasoning to workbench for context
+            # Save free-text reasoning to workbench (commands are stripped;
+            # wb.append runs _sanitize_note for leaked/truncated commands).
             stripped = _CMD_RE.sub("", response).strip()
-            # Strip [SLEEP] from the saved text so it doesn't pollute the note
             stripped = _SLEEP_RE.sub("", stripped).strip()
+            stripped = _EXTEND_RE.sub("", stripped).strip()
             if stripped and len(stripped) > 30:
                 wb.append(account_id, stripped)
                 had_writes = True

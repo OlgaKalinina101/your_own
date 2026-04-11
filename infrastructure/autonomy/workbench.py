@@ -24,6 +24,36 @@ _TITLE = "# Рабочий стол\n"
 _OLD_HDR = re.compile(r"^###\s+(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})\s*$")
 _NEW_HDR = re.compile(r"^\[(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})\s*(?:UTC)?\]\s*$")
 
+_CMD_NAMES = (
+    "SEARCH_MEMORIES", "SEARCH_NOTES", "SEARCH_DIALOGUE", "WEB_SEARCH",
+    "WRITE_NOTE", "WRITE_IDENTITY", "SEND_MESSAGE", "SCHEDULE_MESSAGE",
+    "CANCEL_MESSAGE", "RESCHEDULE_MESSAGE", "REWRITE_MESSAGE",
+    "EXTEND", "SLEEP", "RECALL", "WRITE", "HISTORY",
+    "SAVED_FACT", "GENERATED_IMAGE",
+)
+_LEAKED_CMD_RE = re.compile(
+    r"^\[(?:" + "|".join(_CMD_NAMES) + r")[\s:|\]]",
+    re.IGNORECASE,
+)
+_UNCLOSED_CMD_RE = re.compile(
+    r"\[(?:" + "|".join(_CMD_NAMES) + r"):[^\]]{0,500}$",
+    re.IGNORECASE,
+)
+
+
+def _sanitize_note(text: str) -> str:
+    """Remove leaked/truncated LLM commands that should not pollute the workbench."""
+    lines = text.splitlines()
+    clean: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if _LEAKED_CMD_RE.match(stripped):
+            continue
+        clean.append(line)
+    result = "\n".join(clean)
+    result = _UNCLOSED_CMD_RE.sub("", result)
+    return result.strip()
+
 
 def _path(account_id: str) -> Path:
     p = _DATA_DIR / account_id
@@ -84,14 +114,18 @@ def parse_entries(content: str) -> list[tuple[str, str]]:
 def append(account_id: str, text: str) -> None:
     """Append a timestamped note to the workbench."""
     from infrastructure.settings_store import now_local_str
+    clean = _sanitize_note(text)
+    if not clean:
+        logger.debug("[workbench:%s] sanitized note is empty, skipping", account_id)
+        return
     ts = now_local_str()
     path = _path(account_id)
     with _lock:
         if not path.exists() or path.stat().st_size == 0:
             path.write_text(_TITLE, encoding="utf-8")
         with open(path, "a", encoding="utf-8") as f:
-            f.write(f"\n\n### {ts}\n{text.strip()}\n")
-    logger.debug("[workbench:%s] appended %d chars", account_id, len(text))
+            f.write(f"\n\n### {ts}\n{clean}\n")
+    logger.debug("[workbench:%s] appended %d chars", account_id, len(clean))
 
 
 def read(account_id: str) -> str:
@@ -103,7 +137,7 @@ def read(account_id: str) -> str:
 
 
 def get_recent_entries(account_id: str, max_entries: int = 3, empty_label: str = "") -> str:
-    """Return the last *max_entries* workbench entries formatted as ``[ts] body``.
+    """Return the last *max_entries* workbench entries wrapped in XML tags.
 
     Returns *empty_label* (default ``""``) when there are no entries.
     """
@@ -113,8 +147,8 @@ def get_recent_entries(account_id: str, max_entries: int = 3, empty_label: str =
     entries = parse_entries(content)
     if not entries:
         return empty_label
-    parts = [f"[{ts}] {body}" for ts, body in entries[-max_entries:]]
-    return "\n---\n".join(parts)
+    parts = [f'<entry ts="{ts}">\n{body}\n</entry>' for ts, body in entries[-max_entries:]]
+    return "\n".join(parts)
 
 
 def search(account_id: str, query: str) -> str:
