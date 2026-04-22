@@ -21,7 +21,7 @@ _lock = Lock()
 
 _TITLE = "# Рабочий стол\n"
 
-_OLD_HDR = re.compile(r"^###\s+(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})\s*$")
+_OLD_HDR = re.compile(r"^###\s+(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})\s*(?:\(.*\))?\s*$")
 _NEW_HDR = re.compile(r"^\[(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})\s*(?:UTC)?\]\s*$")
 
 _CMD_NAMES = (

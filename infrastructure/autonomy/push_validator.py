@@ -41,14 +41,25 @@ class ValidationResult:
 
 
 def _format_dialogue(pairs: list[dict]) -> str:
+    from infrastructure.settings_store import get_user_tz
+    user_tz = get_user_tz()
+
     lines: list[str] = []
     for p in pairs:
         u = (p.get("user_text") or "").strip()
         a = (p.get("assistant_text") or "").strip()
+        ts = ""
+        created_at = p.get("created_at")
+        if created_at:
+            try:
+                local_dt = created_at.astimezone(user_tz) if created_at.tzinfo else created_at
+                ts = f"[{local_dt.strftime('%H:%M')}] "
+            except Exception:
+                pass
         if u:
-            lines.append(f"User: {u}")
+            lines.append(f"{ts}User: {u}")
         if a:
-            lines.append(f"Assistant: {a}")
+            lines.append(f"{ts}Assistant: {a}")
         lines.append("")
     return "\n".join(lines).strip()
 
@@ -129,9 +140,9 @@ async def _same_text_warning(account_id: str, message: str, lang: str) -> str:
         from infrastructure.database.engine import get_db_session
         from infrastructure.database.models.message import Message
         from sqlalchemy import select
-        from datetime import datetime, timedelta
+        from datetime import datetime, timedelta, timezone as _tz
 
-        cutoff = datetime.now() - timedelta(hours=24)
+        cutoff = datetime.now(_tz.utc) - timedelta(hours=24)
         async with get_db_session() as db:
             result = await db.execute(
                 select(Message.text).where(

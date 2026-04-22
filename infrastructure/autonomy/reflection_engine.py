@@ -45,6 +45,7 @@ from infrastructure.memory.chroma_pipeline import get_chroma_pipeline
 from infrastructure.llm.prompt_loader import get_prompt
 
 from infrastructure.autonomy.helpers import (
+    cancel_all_messages,
     cancel_message,
     detect_lang,
     get_ai_name,
@@ -74,6 +75,7 @@ _CMD_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 _SLEEP_RE = re.compile(r"\[SLEEP\]", re.IGNORECASE)
+_CANCEL_ALL_RE = re.compile(r"\[CANCEL[_ ]ALL[_ ]SCHEDULED\]", re.IGNORECASE)
 _EXTEND_RE = re.compile(r"\[EXTEND:\s*(\d+)\]", re.IGNORECASE)
 
 _SEARCH_CMDS = {"SEARCH_MEMORIES", "SEARCH_NOTES", "SEARCH_DIALOGUE", "WEB_SEARCH"}
@@ -106,7 +108,7 @@ def _set_last_reflection_ts() -> None:
     _REFLECTION_TS_FILE.write_text(datetime.now(timezone.utc).isoformat())
 
 
-async def _complete(api_key: str, messages: list[dict], max_tokens: int = 650) -> str:
+async def _complete(api_key: str, messages: list[dict], max_tokens: int = 1300) -> str:
     client = make_llm_client(api_key)
     return await client.complete(messages, max_tokens=max_tokens, temperature=0.7)
 
@@ -414,26 +416,29 @@ def _build_pending_tasks_block(lang: str, tasks: list) -> str:
             ts_local = "—"
         if t.status == TaskStatus.DONE:
             status_label = "✓ отправлено" if lang == "ru" else "✓ sent"
-        elif t.status == TaskStatus.CANCELLED:
-            status_label = "✗ отменено" if lang == "ru" else "✗ cancelled"
         elif t.scheduled_at and t.scheduled_at <= now_utc:
             status_label = "⏳ отправляется" if lang == "ru" else "⏳ sending"
         else:
             status_label = "⏰ ожидает" if lang == "ru" else "⏰ pending"
         lines.append(f"- [{ts_local}] [{status_label}] {msg}")
+    if not lines:
+        return ""
     tasks_list = "\n".join(lines)
     if lang == "ru":
         header = "### Твои запланированные сообщения:"
         footer = (
-            "Ты можешь отменить или перенести любое ожидающее сообщение прямо сейчас:\n"
-            "[CANCEL_MESSAGE: YYYY-MM-DD HH:MM] — отменить сообщение на это время\n"
-            "[RESCHEDULE_MESSAGE: YYYY-MM-DD HH:MM -> YYYY-MM-DD HH:MM] — перенести на другое время"
+            "Ты можешь отменить, перенести или переписать любое ожидающее сообщение:\n"
+            "[CANCEL_MESSAGE: YYYY-MM-DD HH:MM] — отменить конкретное\n"
+            "[CANCEL_ALL_SCHEDULED] — отменить все ожидающие разом\n"
+            "[RESCHEDULE_MESSAGE: YYYY-MM-DD HH:MM -> YYYY-MM-DD HH:MM] — перенести\n"
+            "[REWRITE_MESSAGE: YYYY-MM-DD HH:MM | новый текст] — переписать"
         )
     else:
         header = "### Your scheduled messages:"
         footer = (
-            "You can cancel, reschedule or rewrite any pending message right now:\n"
+            "You can cancel, reschedule or rewrite any pending message:\n"
             "[CANCEL_MESSAGE: YYYY-MM-DD HH:MM]\n"
+            "[CANCEL_ALL_SCHEDULED] — cancel all pending at once\n"
             "[RESCHEDULE_MESSAGE: YYYY-MM-DD HH:MM -> YYYY-MM-DD HH:MM]\n"
             "[REWRITE_MESSAGE: YYYY-MM-DD HH:MM | new text]"
         )
@@ -462,10 +467,23 @@ async def run(account_id: str, api_key: str) -> None:
 
         # Last 3 dialogue pairs
         try:
+            from infrastructure.settings_store import get_user_tz
+            _user_tz = get_user_tz()
             recent_pairs = await repo.get_recent_canonical_pairs(account_id, limit_pairs=3)
+
+            def _fmt_pair(p: dict) -> str:
+                ts = ""
+                created_at = p.get("created_at")
+                if created_at:
+                    try:
+                        local_dt = created_at.astimezone(_user_tz) if created_at.tzinfo else created_at
+                        ts = f"[{local_dt.strftime('%H:%M')}] "
+                    except Exception:
+                        pass
+                return f"{ts}User: {p.get('user_text','')}\n{ts}Assistant: {p.get('assistant_text','')}"
+
             recent_dialogue = "\n\n".join(
-                f"User: {p.get('user_text','')}\nAssistant: {p.get('assistant_text','')}"
-                for p in recent_pairs
+                _fmt_pair(p) for p in recent_pairs
             ) if recent_pairs else ""
         except Exception as exc:
             logger.warning("[reflection] recent pairs error: %s", exc)
@@ -551,6 +569,14 @@ async def run(account_id: str, api_key: str) -> None:
             search_results: list[str] = []
             had_writes = False
 
+            if _CANCEL_ALL_RE.search(response):
+                try:
+                    count = await cancel_all_messages(account_id=account_id, log_prefix="reflection")
+                    had_writes = True
+                    logger.info("[reflection:%s] CANCEL_ALL_SCHEDULED: %d cancelled", account_id, count)
+                except Exception as exc:
+                    logger.warning("[reflection] CANCEL_ALL_SCHEDULED error: %s", exc)
+
             for m in _CMD_RE.finditer(response):
                 cmd_name = m.group("cmd")
                 arg = m.group("arg")
@@ -572,6 +598,7 @@ async def run(account_id: str, api_key: str) -> None:
             stripped = _CMD_RE.sub("", response).strip()
             stripped = _SLEEP_RE.sub("", stripped).strip()
             stripped = _EXTEND_RE.sub("", stripped).strip()
+            stripped = _CANCEL_ALL_RE.sub("", stripped).strip()
             if stripped and len(stripped) > 30:
                 wb.append(account_id, stripped)
                 had_writes = True

@@ -59,8 +59,10 @@ def now_local() -> datetime:
 
 
 def now_local_str() -> str:
-    """Return current local time formatted as ``YYYY-MM-DD HH:MM``."""
-    return now_local().strftime(TIME_FMT)
+    """Return current local time formatted as ``YYYY-MM-DD HH:MM (TZ)``."""
+    dt = now_local()
+    tz_name = str(get_user_tz())
+    return f"{dt.strftime(TIME_FMT)} ({tz_name})"
 
 
 def local_to_utc(naive_dt: datetime) -> datetime:

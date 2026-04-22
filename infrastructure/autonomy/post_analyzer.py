@@ -17,6 +17,7 @@ from datetime import datetime
 from infrastructure.autonomy import identity_memory as identity
 from infrastructure.autonomy import workbench as wb
 from infrastructure.autonomy.cmd_parser import (
+    CancelAllScheduled,
     CancelMessage,
     ParsedCommand,
     RescheduleMessage,
@@ -42,14 +43,25 @@ def _format_history(
     current_user_text: str,
     current_assistant_text: str,
 ) -> str:
+    from infrastructure.settings_store import get_user_tz
+    user_tz = get_user_tz()
+
     lines: list[str] = []
     for p in recent_pairs:
         u = (p.get("user_text") or "").strip()
         a = (p.get("assistant_text") or "").strip()
+        ts = ""
+        created_at = p.get("created_at")
+        if created_at:
+            try:
+                local_dt = created_at.astimezone(user_tz) if created_at.tzinfo else created_at
+                ts = f"[{local_dt.strftime('%H:%M')}] "
+            except Exception:
+                pass
         if u:
-            lines.append(f"User: {u}")
+            lines.append(f"{ts}User: {u}")
         if a:
-            lines.append(f"Assistant: {a}")
+            lines.append(f"{ts}Assistant: {a}")
         lines.append("")
     if current_user_text.strip():
         lines.append(f"User: {current_user_text}")
@@ -68,15 +80,19 @@ def _identity_excerpt(account_id: str) -> str:
 
 
 async def _build_pending_pushes_block(account_id: str) -> str:
-    """Build a block showing today's sent + scheduled messages."""
+    """Build a block showing today's sent pushes + pending scheduled messages."""
+    from infrastructure.settings_store import get_user_tz
+    user_tz = get_user_tz()
     lines: list[str] = []
 
     try:
         from infrastructure.database.engine import get_db_session
         from infrastructure.database.models.message import Message
         from sqlalchemy import select, desc
+        from datetime import timezone as _tz
 
-        today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        today_local = datetime.now(user_tz).replace(hour=0, minute=0, second=0, microsecond=0)
+        today_start_utc = today_local.astimezone(_tz.utc)
 
         async with get_db_session() as db:
             result = await db.execute(
@@ -86,7 +102,7 @@ async def _build_pending_pushes_block(account_id: str) -> str:
                     Message.role == "assistant",
                     Message.source == "push",
                     Message.message_kind == "canonical",
-                    Message.created_at >= today_start,
+                    Message.created_at >= today_start_utc,
                 )
                 .order_by(desc(Message.created_at))
                 .limit(10)
@@ -96,7 +112,12 @@ async def _build_pending_pushes_block(account_id: str) -> str:
         if sent_today:
             lines.append("Сообщения, которые ты уже отправил ей сегодня:")
             for m in sent_today:
-                ts = m.created_at.strftime("%H:%M") if m.created_at else "?"
+                ts = "?"
+                if m.created_at:
+                    try:
+                        ts = m.created_at.astimezone(user_tz).strftime("%H:%M")
+                    except Exception:
+                        ts = m.created_at.strftime("%H:%M")
                 lines.append(f"  - [{ts}] «{m.text}»")
     except Exception as exc:
         logger.warning("[post_analyzer] failed to load sent pushes: %s", exc)
@@ -115,7 +136,12 @@ async def _build_pending_pushes_block(account_id: str) -> str:
                     msg = pd.get("message", str(t.payload))
                 except (json.JSONDecodeError, TypeError):
                     msg = str(t.payload)
-                ts = t.scheduled_at.strftime("%Y-%m-%d %H:%M") if t.scheduled_at else "?"
+                ts = "?"
+                if t.scheduled_at:
+                    try:
+                        ts = t.scheduled_at.astimezone(user_tz).strftime("%Y-%m-%d %H:%M")
+                    except Exception:
+                        ts = t.scheduled_at.strftime("%Y-%m-%d %H:%M")
                 lines.append(f"  - [{ts}] «{msg}»")
     except Exception as exc:
         logger.warning("[post_analyzer] failed to load pending tasks: %s", exc)
@@ -125,6 +151,7 @@ async def _build_pending_pushes_block(account_id: str) -> str:
 
     lines.append(
         "Не дублируй. Если хочешь — запланируй что-то новое, но не повторяй то, что уже сказал.\n"
+        "Если хочешь отменить все запланированные разом — [CANCEL_ALL_SCHEDULED]\n"
         "Ты сможешь переписать эти сообщения или отменить их в момент отправки — тогда ты увидишь весь свой журнал и само сообщение. Не переживай о них сейчас."
     )
     return "\n".join(lines)
@@ -133,6 +160,7 @@ async def _build_pending_pushes_block(account_id: str) -> str:
 async def _execute_command(cmd: ParsedCommand, *, account_id: str, lang: str) -> None:
     """Execute one parsed autonomy command."""
     from infrastructure.autonomy.helpers import (
+        cancel_all_messages,
         send_push_and_save,
         schedule_message,
         cancel_message,
@@ -142,7 +170,13 @@ async def _execute_command(cmd: ParsedCommand, *, account_id: str, lang: str) ->
 
     _log = "post_analyzer"
 
-    if isinstance(cmd, SendMessage):
+    if isinstance(cmd, CancelAllScheduled):
+        try:
+            await cancel_all_messages(account_id=account_id, log_prefix=_log)
+        except Exception as exc:
+            logger.warning("[post_analyzer] CANCEL_ALL_SCHEDULED failed: %s", exc)
+
+    elif isinstance(cmd, SendMessage):
         try:
             await send_push_and_save(account_id=account_id, text=cmd.text, lang=lang, log_prefix=_log)
         except Exception as exc:
@@ -231,7 +265,7 @@ async def run_post_analysis(
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ],
-        max_tokens=650,
+        max_tokens=1300,
         temperature=0.7,
     )
     if not response:

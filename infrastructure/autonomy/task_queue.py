@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -33,7 +33,7 @@ async def create_task(
         payload=payload,
         scheduled_at=scheduled_at,
         status=TaskStatus.PENDING,
-        created_at=datetime.now(),
+        created_at=datetime.now(timezone.utc),
     )
     db.add(task)
     await db.commit()
@@ -58,17 +58,38 @@ async def get_recent_tasks(
     account_id: str,
     hours: int = 12,
 ) -> list[AutonomyTask]:
-    """Return PENDING, DONE and CANCELLED TIME tasks scheduled within the last N hours."""
-    cutoff = datetime.now() - timedelta(hours=hours)
+    """Return PENDING and DONE TIME tasks scheduled within the last N hours."""
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
     result = await db.execute(
         select(AutonomyTask).where(
             AutonomyTask.account_id == account_id,
             AutonomyTask.trigger_type == TriggerType.TIME,
             AutonomyTask.scheduled_at >= cutoff,
-            AutonomyTask.status.in_([TaskStatus.PENDING, TaskStatus.DONE, TaskStatus.CANCELLED]),
+            AutonomyTask.status.in_([TaskStatus.PENDING, TaskStatus.DONE]),
         ).order_by(AutonomyTask.scheduled_at.asc())
     )
     return list(result.scalars().all())
+
+
+async def cancel_all_pending(
+    db: AsyncSession,
+    account_id: str,
+) -> int:
+    """Cancel ALL PENDING TIME tasks for the account. Returns count cancelled."""
+    result = await db.execute(
+        select(AutonomyTask).where(
+            AutonomyTask.account_id == account_id,
+            AutonomyTask.trigger_type == TriggerType.TIME,
+            AutonomyTask.status == TaskStatus.PENDING,
+        )
+    )
+    tasks = list(result.scalars().all())
+    for t in tasks:
+        t.status = TaskStatus.CANCELLED
+    if tasks:
+        await db.commit()
+        logger.debug("[task_queue] cancel_all_pending: cancelled %d task(s)", len(tasks))
+    return len(tasks)
 
 
 async def cancel_task_by_time(
@@ -146,8 +167,8 @@ async def rewrite_task(
 
 
 async def get_due_tasks(db: AsyncSession, account_id: str) -> list[AutonomyTask]:
-    """Return PENDING TIME-triggered tasks whose scheduled_at <= now (local server time)."""
-    now = datetime.now()
+    """Return PENDING TIME-triggered tasks whose scheduled_at <= now (UTC)."""
+    now = datetime.now(timezone.utc)
     result = await db.execute(
         select(AutonomyTask).where(
             AutonomyTask.account_id == account_id,
@@ -182,7 +203,7 @@ async def mark_done(db: AsyncSession, task_id: str) -> None:
     await db.execute(
         update(AutonomyTask)
         .where(AutonomyTask.id == task_id)
-        .values(status=TaskStatus.DONE, completed_at=datetime.now())
+        .values(status=TaskStatus.DONE, completed_at=datetime.now(timezone.utc))
     )
     await db.commit()
 

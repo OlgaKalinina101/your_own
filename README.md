@@ -56,13 +56,14 @@ Import your history, keep what matters, and shape an AI that remembers, acts, an
 
 ### Requirements
 
+
 - **Python 3.11+**
 - **Node.js 18+** (includes npm)
 - **PostgreSQL 15+** with `pgvector` extension
 
 ### Desktop (one-click)
 
-```bash
+```bash3
 cd frontend
 npm run electron:dev
 ```

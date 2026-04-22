@@ -412,6 +412,17 @@ function ensurePython() {
     return;
   }
 
+  // Skip pip install if requirements.txt hasn't changed since last successful install.
+  // Marker file stores the hash of requirements.txt at the time deps were installed.
+  const markerPath = path.join(ROOT, ".pip_installed");
+  const reqContent = fs.readFileSync(reqPath, "utf8");
+  const reqHash = require("crypto").createHash("md5").update(reqContent).digest("hex");
+
+  if (fs.existsSync(markerPath) && fs.readFileSync(markerPath, "utf8").trim() === reqHash) {
+    ok("Python dependencies already installed (requirements.txt unchanged)");
+    return;
+  }
+
   log("pip install -r requirements.txt …");
   const pip = run(`"${python}" -m pip install -r requirements.txt`, { timeout: 300_000 });
   if (pip.status !== 0) {
@@ -422,6 +433,7 @@ function ensurePython() {
   log("Ensuring ruwordnet>=0.0.6…");
   run(`"${python}" -m pip install "ruwordnet>=0.0.6" --upgrade`, { timeout: 60_000 });
 
+  fs.writeFileSync(markerPath, reqHash, "utf8");
   ok("Python dependencies installed");
 }
 

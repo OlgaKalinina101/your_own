@@ -12,9 +12,15 @@ import re
 import uuid
 from datetime import datetime
 
-from infrastructure.settings_store import DEFAULT_MODEL
+from infrastructure.settings_store import DEFAULT_MODEL, local_to_utc
 
 logger = logging.getLogger("autonomy.helpers")
+
+
+def _parse_local_ts(ts_str: str) -> datetime:
+    """Parse a 'YYYY-MM-DD HH:MM' string as user-local time, return UTC-aware datetime."""
+    naive = datetime.strptime(ts_str.strip(), "%Y-%m-%d %H:%M")
+    return local_to_utc(naive)
 
 
 def get_ai_name() -> str:
@@ -84,12 +90,12 @@ async def schedule_message(
     source: str,
     log_prefix: str = "autonomy",
 ) -> None:
-    """Parse timestamp, cancel duplicates, create a scheduled task."""
+    """Parse timestamp (user-local), cancel duplicates, create a scheduled task in UTC."""
     from infrastructure.database.engine import get_db_session
     from infrastructure.autonomy.task_queue import cancel_duplicate_scheduled, create_task
     from infrastructure.database.models.autonomy_task import TriggerType
 
-    scheduled_at = datetime.strptime(ts_str.strip(), "%Y-%m-%d %H:%M")
+    scheduled_at = _parse_local_ts(ts_str)
     async with get_db_session() as db:
         await cancel_duplicate_scheduled(db, account_id, scheduled_at, source)
         payload = json.dumps({"message": text.strip(), "source": source})
@@ -103,6 +109,21 @@ async def schedule_message(
     logger.info("[%s:%s] scheduled message at %s", log_prefix, account_id, ts_str.strip())
 
 
+async def cancel_all_messages(
+    *,
+    account_id: str,
+    log_prefix: str = "autonomy",
+) -> int:
+    """Cancel all pending scheduled tasks. Returns count cancelled."""
+    from infrastructure.database.engine import get_db_session
+    from infrastructure.autonomy.task_queue import cancel_all_pending
+
+    async with get_db_session() as db:
+        count = await cancel_all_pending(db, account_id)
+    logger.info("[%s:%s] CANCEL_ALL_SCHEDULED cancelled=%d", log_prefix, account_id, count)
+    return count
+
+
 async def cancel_message(
     *,
     account_id: str,
@@ -110,11 +131,11 @@ async def cancel_message(
     lang: str,
     log_prefix: str = "autonomy",
 ) -> bool:
-    """Cancel a scheduled task by timestamp. Returns True if found."""
+    """Cancel a scheduled task by timestamp (user-local). Returns True if found."""
     from infrastructure.database.engine import get_db_session
     from infrastructure.autonomy.task_queue import cancel_task_by_time
 
-    scheduled_at = datetime.strptime(ts_str.strip(), "%Y-%m-%d %H:%M")
+    scheduled_at = _parse_local_ts(ts_str)
     async with get_db_session() as db:
         found = await cancel_task_by_time(db, account_id, scheduled_at)
     logger.info("[%s:%s] CANCEL_MESSAGE %s found=%s", log_prefix, account_id, ts_str, found)
@@ -129,12 +150,12 @@ async def reschedule_message(
     lang: str,
     log_prefix: str = "autonomy",
 ) -> bool:
-    """Reschedule a task from old time to new time. Returns True if found."""
+    """Reschedule a task from old time to new time (both user-local). Returns True if found."""
     from infrastructure.database.engine import get_db_session
     from infrastructure.autonomy.task_queue import reschedule_task
 
-    old_dt = datetime.strptime(old_ts_str.strip(), "%Y-%m-%d %H:%M")
-    new_dt = datetime.strptime(new_ts_str.strip(), "%Y-%m-%d %H:%M")
+    old_dt = _parse_local_ts(old_ts_str)
+    new_dt = _parse_local_ts(new_ts_str)
     async with get_db_session() as db:
         found = await reschedule_task(db, account_id, old_dt, new_dt)
     logger.info("[%s:%s] RESCHEDULE_MESSAGE %s -> %s found=%s", log_prefix, account_id, old_ts_str.strip(), new_ts_str.strip(), found)
@@ -149,11 +170,11 @@ async def rewrite_message(
     lang: str,
     log_prefix: str = "autonomy",
 ) -> bool:
-    """Rewrite a scheduled task's text. Returns True if found."""
+    """Rewrite a scheduled task's text (timestamp in user-local). Returns True if found."""
     from infrastructure.database.engine import get_db_session
     from infrastructure.autonomy.task_queue import rewrite_task
 
-    scheduled_at = datetime.strptime(ts_str.strip(), "%Y-%m-%d %H:%M")
+    scheduled_at = _parse_local_ts(ts_str)
     async with get_db_session() as db:
         found = await rewrite_task(db, account_id, scheduled_at, new_text.strip())
     logger.info("[%s:%s] REWRITE_MESSAGE %s found=%s", log_prefix, account_id, ts_str.strip(), found)

@@ -4,6 +4,7 @@ Parses the bracketed commands that the LLM can emit in autonomy contexts:
   [SEND_MESSAGE: text]
   [SCHEDULE_MESSAGE: YYYY-MM-DD HH:MM | text]
   [CANCEL_MESSAGE: YYYY-MM-DD HH:MM]
+  [CANCEL_ALL_SCHEDULED]
   [RESCHEDULE_MESSAGE: YYYY-MM-DD HH:MM -> YYYY-MM-DD HH:MM]
   [REWRITE_MESSAGE: YYYY-MM-DD HH:MM | new text]
 
@@ -22,6 +23,7 @@ class CmdType(str, Enum):
     SEND_MESSAGE = "SEND_MESSAGE"
     SCHEDULE_MESSAGE = "SCHEDULE_MESSAGE"
     CANCEL_MESSAGE = "CANCEL_MESSAGE"
+    CANCEL_ALL_SCHEDULED = "CANCEL_ALL_SCHEDULED"
     RESCHEDULE_MESSAGE = "RESCHEDULE_MESSAGE"
     REWRITE_MESSAGE = "REWRITE_MESSAGE"
 
@@ -46,6 +48,11 @@ class CancelMessage:
 
 
 @dataclass
+class CancelAllScheduled:
+    type: Literal[CmdType.CANCEL_ALL_SCHEDULED] = CmdType.CANCEL_ALL_SCHEDULED
+
+
+@dataclass
 class RescheduleMessage:
     type: Literal[CmdType.RESCHEDULE_MESSAGE] = CmdType.RESCHEDULE_MESSAGE
     old_ts_str: str = ""
@@ -59,7 +66,7 @@ class RewriteMessage:
     new_text: str = ""
 
 
-ParsedCommand = SendMessage | ScheduleMessage | CancelMessage | RescheduleMessage | RewriteMessage
+ParsedCommand = SendMessage | ScheduleMessage | CancelMessage | CancelAllScheduled | RescheduleMessage | RewriteMessage
 
 # ── Regexes ───────────────────────────────────────────────────────────────────
 
@@ -77,6 +84,10 @@ _CANCEL_RE = re.compile(
     rf"\[CANCEL[_ ]MESSAGE:\s*(?P<ts>{_TS})\]",
     re.IGNORECASE,
 )
+_CANCEL_ALL_RE = re.compile(
+    r"\[CANCEL[_ ]ALL[_ ]SCHEDULED\]",
+    re.IGNORECASE,
+)
 _RESCHEDULE_RE = re.compile(
     rf"\[RESCHEDULE[_ ]MESSAGE:\s*(?P<old>{_TS})\s*->\s*(?P<new>{_TS})\]",
     re.IGNORECASE,
@@ -88,7 +99,7 @@ _REWRITE_RE = re.compile(
 
 # All command regexes in one pass — used for stripping commands from free text.
 _ALL_CMDS_RE = re.compile(
-    r"\[(?:SEND|SCHEDULE|CANCEL|RESCHEDULE|REWRITE)[_ ]MESSAGE:[^\]]*\]",
+    r"\[(?:(?:SEND|SCHEDULE|CANCEL|RESCHEDULE|REWRITE)[_ ]MESSAGE:[^\]]*|CANCEL[_ ]ALL[_ ]SCHEDULED)\]",
     re.IGNORECASE | re.DOTALL,
 )
 
@@ -113,6 +124,9 @@ def parse_commands(response: str) -> list[ParsedCommand]:
     for m in _CANCEL_RE.finditer(response):
         ts = " ".join(m.group("ts").split())
         hits.append((m.start(), CancelMessage(ts_str=ts)))
+
+    for m in _CANCEL_ALL_RE.finditer(response):
+        hits.append((m.start(), CancelAllScheduled()))
 
     for m in _RESCHEDULE_RE.finditer(response):
         old = " ".join(m.group("old").split())
