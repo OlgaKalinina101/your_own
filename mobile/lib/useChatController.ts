@@ -149,6 +149,12 @@ export function useChatController() {
     }
   }, []);
 
+  const refreshWorkbench = useCallback(() => {
+    loadWorkbenchLatest()
+      .then((result) => setWorkbenchText(result.text ?? null))
+      .catch(() => {});
+  }, []);
+
   useEffect(() => {
     getBackendUrl()
       .then((url) => setBackendUrl(url.replace(/\/$/, "")))
@@ -160,11 +166,7 @@ export function useChatController() {
         if (settings.model) setCanAttach(VISION_MODELS.has(settings.model));
       })
       .catch(() => {});
-    loadWorkbenchLatest()
-      .then((result) => {
-        if (result.text) setWorkbenchText(result.text);
-      })
-      .catch(() => {});
+    refreshWorkbench();
 
     // Load sound engine with persisted volume
     loadSoundVolume()
@@ -446,6 +448,7 @@ export function useChatController() {
     reversedMessages,
     streaming,
     workbenchText,
+    refreshWorkbench,
     setInput,
     pickImages,
     removeAttachment,

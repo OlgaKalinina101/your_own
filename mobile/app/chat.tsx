@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { ActivityIndicator, Animated, FlatList, StyleSheet, Text, View, type ScrollViewProps } from "react-native";
-import { Stack } from "expo-router";
+import { ActivityIndicator, Animated, BackHandler, FlatList, Platform, StyleSheet, Text, TouchableOpacity, View, type ScrollViewProps } from "react-native";
+import { Stack, useRouter } from "expo-router";
 import {
   KeyboardChatScrollView,
   KeyboardStickyView,
@@ -35,6 +35,7 @@ const ChatScrollView = React.forwardRef<
 });
 
 export default function ChatScreen() {
+  const router = useRouter();
   const [workbenchOpen, setWorkbenchOpen] = useState(false);
   const {
     aiName,
@@ -49,6 +50,7 @@ export default function ChatScreen() {
     reversedMessages,
     streaming,
     workbenchText,
+    refreshWorkbench,
     setInput,
     pickImages,
     removeAttachment,
@@ -56,6 +58,29 @@ export default function ChatScreen() {
     stopStreaming,
     loadMore,
   } = useChatController();
+
+  const goBack = useCallback(() => {
+    if (router.canGoBack()) {
+      router.back();
+    } else {
+      router.replace("/dashboard");
+    }
+  }, [router]);
+
+  // Android hardware back — single press always exits to dashboard
+  useEffect(() => {
+    if (Platform.OS !== "android") return;
+    const sub = BackHandler.addEventListener("hardwareBackPress", () => {
+      goBack();
+      return true;
+    });
+    return () => sub.remove();
+  }, [goBack]);
+
+  // Refresh workbench text each time the bar is opened
+  useEffect(() => {
+    if (workbenchOpen) refreshWorkbench();
+  }, [workbenchOpen, refreshWorkbench]);
 
   // Ambient error fade
   const errorOpacity = useRef(new Animated.Value(0)).current;
@@ -96,6 +121,11 @@ export default function ChatScreen() {
       <Stack.Screen
         options={{
           title: aiName,
+          headerLeft: () => (
+            <TouchableOpacity onPress={goBack} style={styles.backBtn} activeOpacity={0.6}>
+              <Text style={styles.backArrow}>‹</Text>
+            </TouchableOpacity>
+          ),
           headerRight: () => (
             <WorkbenchDotsBtn open={workbenchOpen} onPress={() => setWorkbenchOpen((value) => !value)} />
           ),
@@ -147,6 +177,8 @@ export default function ChatScreen() {
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: "#000" },
+  backBtn: { paddingHorizontal: 8, paddingVertical: 4 },
+  backArrow: { color: "#fff", fontSize: 28, fontWeight: "300", lineHeight: 30 },
   list: { paddingHorizontal: 16, paddingTop: 8, paddingBottom: 16 },
   emptyWrap: { flex: 1, justifyContent: "center", alignItems: "center", transform: [{ scaleY: -1 }] },
   emptyText: {

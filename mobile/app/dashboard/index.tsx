@@ -86,7 +86,7 @@ export default function DashboardScreen() {
           <Tile
             label={aiName}
             style={sty.tileLarge}
-            onPress={() => router.push("/chat")}
+            onPress={() => router.navigate("/chat")}
             delay={60}
           />
           <View style={sty.colStack}>
@@ -110,14 +110,13 @@ export default function DashboardScreen() {
           />
         </View>
 
-        {/* ── Row 3: VOICE + SETTINGS ──────────────────────────────────── */}
+        {/* ── Row 3: SELF + SETTINGS ───────────────────────────────────── */}
         <View style={sty.row}>
           <Tile
-            label="VOICE"
-            sub="COMING SOON"
+            label="SELF"
             style={sty.tileMid}
+            onPress={() => router.push("/dashboard/self")}
             delay={240}
-            disabled
           />
           <Tile
             label="SETTINGS"

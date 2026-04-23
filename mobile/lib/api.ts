@@ -155,3 +155,21 @@ export async function loadWorkbenchLatest(
 ): Promise<{ ts: string | null; text: string | null }> {
   return apiGet(`/api/settings/workbench/latest?account_id=${accountId}`);
 }
+
+/** Paginated workbench entries (file + Chroma archive), newest first. */
+export async function loadWorkbenchEntries(
+  offset = 0,
+  limit = 25,
+  accountId = "default",
+): Promise<{ entries: { ts: string; text: string }[]; has_more: boolean }> {
+  return apiGet(
+    `/api/settings/workbench/entries?account_id=${accountId}&offset=${offset}&limit=${limit}`,
+  );
+}
+
+/** Return raw identity.md content. */
+export async function loadIdentity(
+  accountId = "default",
+): Promise<{ text: string }> {
+  return apiGet(`/api/settings/identity?account_id=${accountId}`);
+}

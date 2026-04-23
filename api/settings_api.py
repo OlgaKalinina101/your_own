@@ -145,6 +145,83 @@ async def workbench_latest(
     return {"ts": ts, "text": clean}
 
 
+# ── Workbench paginated entries ───────────────────────────────────────────────
+
+@router.get("/workbench/entries")
+async def workbench_entries(
+    account_id: str = "default",
+    offset: int = 0,
+    limit: int = 25,
+    _token: str = Depends(require_auth),
+):
+    """Paginated workbench entries (file + Chroma archive), newest first."""
+    import logging
+    from infrastructure.autonomy.workbench import read as wb_read, parse_entries
+    from infrastructure.memory.chroma_pipeline import _get_archive_collection
+
+    content = wb_read(account_id)
+    file_entries = list(reversed(parse_entries(content))) if content else []
+    file_count = len(file_entries)
+
+    entries_out: list[dict] = []
+    remaining = limit
+
+    if offset < file_count:
+        chunk = file_entries[offset : offset + limit]
+        entries_out.extend({"ts": ts, "text": text} for ts, text in chunk)
+        remaining -= len(chunk)
+
+    if remaining > 0:
+        archive_offset = max(0, offset - file_count)
+        col = _get_archive_collection()
+        if col is not None:
+            try:
+                result = col.get(
+                    where={"account_id": account_id},
+                    include=["documents", "metadatas"],
+                )
+                ids = result.get("ids") or []
+                docs = result.get("documents") or []
+                metas = result.get("metadatas") or []
+
+                archive_rows = sorted(
+                    zip(ids, docs, metas),
+                    key=lambda r: r[2].get("created_at", ""),
+                    reverse=True,
+                )
+                for _, doc, meta in archive_rows[archive_offset : archive_offset + remaining]:
+                    entries_out.append({
+                        "ts": meta.get("created_at", ""),
+                        "text": doc,
+                    })
+            except Exception as exc:
+                logging.getLogger(__name__).warning("[workbench/entries] archive query failed: %s", exc)
+
+    total_archive = 0
+    col = _get_archive_collection()
+    if col is not None:
+        try:
+            total_archive = col.count()
+        except Exception:
+            pass
+
+    has_more = (offset + limit) < (file_count + total_archive)
+    return {"entries": entries_out, "has_more": has_more}
+
+
+# ── Identity ─────────────────────────────────────────────────────────────────
+
+@router.get("/identity")
+async def get_identity(
+    account_id: str = "default",
+    _token: str = Depends(require_auth),
+):
+    """Return raw identity.md content."""
+    from infrastructure.autonomy import identity_memory
+    text = identity_memory.read(account_id)
+    return {"text": text or ""}
+
+
 # ── Public endpoints (no auth) ────────────────────────────────────────────────
 
 @router.get("/ping", dependencies=[])
