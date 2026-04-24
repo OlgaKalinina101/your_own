@@ -251,32 +251,54 @@ function IdentityView({ text }: { text: string }) {
 
 // ── Single marquee ticker row ────────────────────────────────────────────────
 
-function TickerRow({ text, speed }: { text: string; speed: number }) {
+function TickerRow({ text, speed, delay = 0 }: { text: string; speed: number; delay?: number }) {
   const scrollX = useRef(new Animated.Value(0)).current;
   const animRef = useRef<Animated.CompositeAnimation | null>(null);
+  const started = useRef(false);
   const [containerW, setContainerW] = useState(0);
   const [textW, setTextW] = useState(0);
 
   useEffect(() => {
     animRef.current?.stop();
+    started.current = false;
     if (containerW === 0 || textW === 0) return;
 
-    scrollX.setValue(containerW);
     const totalDist = containerW + textW;
-    const duration = (totalDist / speed) * 1000;
+    const fullDuration = (totalDist / speed) * 1000;
 
-    animRef.current = Animated.loop(
-      Animated.timing(scrollX, {
+    const startLoop = () => {
+      scrollX.setValue(containerW);
+      animRef.current = Animated.loop(
+        Animated.timing(scrollX, {
+          toValue: -textW,
+          duration: fullDuration,
+          easing: Easing.linear,
+          useNativeDriver: true,
+        }),
+      );
+      animRef.current.start();
+    };
+
+    if (delay <= 0) {
+      startLoop();
+    } else {
+      const offset = ((delay / 1000) * speed) % totalDist;
+      scrollX.setValue(containerW - offset);
+      const remaining = ((containerW - offset + textW) / speed) * 1000;
+
+      animRef.current = Animated.timing(scrollX, {
         toValue: -textW,
-        duration,
+        duration: remaining,
         easing: Easing.linear,
         useNativeDriver: true,
-      }),
-    );
-    animRef.current.start();
+      });
+      animRef.current.start(({ finished }) => {
+        if (finished) startLoop();
+      });
+    }
 
     return () => { animRef.current?.stop(); };
-  }, [containerW, textW, speed]);
+  }, [containerW, textW, speed, delay]);
 
   const handleTextLayout = (e: NativeSyntheticEvent<TextLayoutEventData>) => {
     const lines = e.nativeEvent.lines;
@@ -314,7 +336,12 @@ function TickerRow({ text, speed }: { text: string; speed: number }) {
 
 // ── WB tab: avatar + journal card + tickers ─────────────────────────────────
 
-const TICKER_SPEEDS = [35, 50, 42, 58, 30, 48, 55];
+const TICKER_SPEEDS  = [35, 50, 42, 58, 30, 48, 55];
+const TICKER_DELAYS  = [0, 4200, 1800, 6500, 3000, 8000, 5200];
+const TICKER_COUNT = 7;
+const TICKER_ROW_H = 26;
+const TICKER_GAP = 6;
+const TICKER_AREA_H = TICKER_COUNT * TICKER_ROW_H + (TICKER_COUNT - 1) * TICKER_GAP + 24;
 
 function WbView() {
   const router = useRouter();
@@ -398,6 +425,7 @@ function WbView() {
             key={i}
             text={line}
             speed={TICKER_SPEEDS[i % TICKER_SPEEDS.length]}
+            delay={TICKER_DELAYS[i % TICKER_DELAYS.length]}
           />
         ))}
       </View>
@@ -518,22 +546,23 @@ const sty = StyleSheet.create({
     marginTop: 4,
   },
 
-  // Avatar — full width, left-aligned, fills available space
+  // Avatar — full width, top-aligned, fills available space
   avatarArea: {
     flex: 1,
     alignItems: "flex-start",
-    justifyContent: "center",
+    justifyContent: "flex-start",
     overflow: "hidden",
   },
   avatarPlaceholder: {
     backgroundColor: "rgba(255,255,255,0.02)",
   },
 
-  // ── Tickers ─────────────────────────────────────────────────────────────
+  // ── Tickers — fixed height so layout doesn't shift on load ────────────
   tickerArea: {
+    height: TICKER_AREA_H,
     paddingBottom: 16,
     paddingTop: 8,
-    gap: 6,
+    gap: TICKER_GAP,
   },
   tickerRow: {
     height: 26,

@@ -1,17 +1,18 @@
 /**
  * Journal — full workbench entry history.
  *
- * Paginated list (newest at bottom, scroll up for history).
- * Navigated to from the JOURNAL card on the Self WB tab.
+ * Each entry is a collapsible section with the timestamp as header.
+ * Tap to expand/collapse. All collapsed by default.
  */
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   Animated,
   Easing,
-  FlatList,
   SafeAreaView,
+  ScrollView,
   StyleSheet,
   Text,
+  TouchableOpacity,
   View,
 } from "react-native";
 import { loadWorkbenchEntries } from "@/lib/api";
@@ -20,64 +21,71 @@ import { loadWorkbenchEntries } from "@/lib/api";
 
 type WbEntry = { ts: string; text: string };
 
-// ── Animated workbench entry ─────────────────────────────────────────────────
+// ── Collapsible journal entry ────────────────────────────────────────────────
 
-const ENTRY_ANIM_DURATION = 320;
-const ENTRY_STAGGER = 40;
+function JournalEntry({ entry }: { entry: WbEntry }) {
+  const [open, setOpen] = useState(false);
+  const anim = useRef(new Animated.Value(0)).current;
 
-function WbEntryCard({
-  item,
-  index,
-  batchStart,
-}: {
-  item: WbEntry;
-  index: number;
-  batchStart: number;
-}) {
-  const opacity = useRef(new Animated.Value(0)).current;
-  const translateY = useRef(new Animated.Value(6)).current;
+  const toggle = useCallback(() => {
+    const next = !open;
+    setOpen(next);
+    Animated.timing(anim, {
+      toValue: next ? 1 : 0,
+      duration: 260,
+      easing: Easing.out(Easing.quad),
+      useNativeDriver: false,
+    }).start();
+  }, [open, anim]);
 
-  useEffect(() => {
-    const delay = Math.max(0, index - batchStart) * ENTRY_STAGGER;
-    Animated.parallel([
-      Animated.timing(opacity, {
-        toValue: 1,
-        duration: ENTRY_ANIM_DURATION,
-        delay,
-        easing: Easing.out(Easing.quad),
-        useNativeDriver: true,
-      }),
-      Animated.timing(translateY, {
-        toValue: 0,
-        duration: ENTRY_ANIM_DURATION,
-        delay,
-        easing: Easing.out(Easing.quad),
-        useNativeDriver: true,
-      }),
-    ]).start();
-  }, []);
+  const bodyMaxHeight = anim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0, 4000],
+  });
+
+  const bodyOpacity = anim.interpolate({
+    inputRange: [0, 0.3, 1],
+    outputRange: [0, 0, 1],
+  });
+
+  const chevronRotate = anim.interpolate({
+    inputRange: [0, 1],
+    outputRange: ["0deg", "90deg"],
+  });
 
   return (
-    <Animated.View
-      style={[sty.entry, { opacity, transform: [{ translateY }] }]}
-    >
-      <Text style={sty.entryTs}>{item.ts}</Text>
-      <Text style={sty.entryText}>{item.text}</Text>
-    </Animated.View>
+    <View style={sty.section}>
+      <TouchableOpacity
+        onPress={toggle}
+        activeOpacity={0.6}
+        style={sty.sectionHeader}
+      >
+        <Animated.Text
+          style={[sty.chevron, { transform: [{ rotate: chevronRotate }] }]}
+        >
+          ›
+        </Animated.Text>
+        <Text style={sty.sectionTs}>{entry.ts}</Text>
+      </TouchableOpacity>
+
+      <Animated.View
+        style={{ maxHeight: bodyMaxHeight, opacity: bodyOpacity, overflow: "hidden" }}
+      >
+        <Text style={sty.entryText}>{entry.text}</Text>
+      </Animated.View>
+    </View>
   );
 }
 
 // ── Main screen ──────────────────────────────────────────────────────────────
 
-const PAGE_SIZE = 25;
+const PAGE_SIZE = 50;
 
 export default function JournalScreen() {
   const [entries, setEntries] = useState<WbEntry[]>([]);
   const [hasMore, setHasMore] = useState(true);
   const [loading, setLoading] = useState(false);
   const offsetRef = useRef(0);
-  const batchStartRef = useRef(0);
-  const listRef = useRef<FlatList<WbEntry>>(null);
 
   const fetchPage = useCallback(async (reset = false) => {
     if (loading) return;
@@ -90,10 +98,8 @@ export default function JournalScreen() {
       const newEntries = data.entries;
 
       if (reset) {
-        batchStartRef.current = 0;
         setEntries(newEntries);
       } else {
-        batchStartRef.current = offsetRef.current;
         setEntries(prev => [...prev, ...newEntries]);
       }
       offsetRef.current = offset + newEntries.length;
@@ -109,46 +115,31 @@ export default function JournalScreen() {
     fetchPage(true);
   }, []);
 
-  const renderEntry = useCallback(
-    ({ item, index }: { item: WbEntry; index: number }) => (
-      <WbEntryCard
-        item={item}
-        index={index}
-        batchStart={batchStartRef.current}
-      />
-    ),
-    [],
-  );
-
-  const keyExtractor = useCallback(
-    (item: WbEntry, index: number) => `${item.ts}-${index}`,
-    [],
-  );
-
-  const handleEndReached = useCallback(() => {
+  const handleLoadMore = useCallback(() => {
     if (!loading && hasMore) fetchPage();
   }, [loading, hasMore, fetchPage]);
 
   return (
     <SafeAreaView style={sty.root}>
-      <FlatList
-        ref={listRef}
-        data={entries}
-        renderItem={renderEntry}
-        keyExtractor={keyExtractor}
-        inverted
-        contentContainerStyle={sty.listContent}
+      <ScrollView
+        contentContainerStyle={sty.scrollContent}
         showsVerticalScrollIndicator={false}
-        onEndReached={handleEndReached}
-        onEndReachedThreshold={0.4}
-        ListFooterComponent={
-          loading ? (
-            <View style={sty.loaderWrap}>
-              <Text style={sty.loaderDots}>···</Text>
-            </View>
-          ) : null
-        }
-      />
+        onMomentumScrollEnd={(e) => {
+          const { layoutMeasurement, contentOffset, contentSize } = e.nativeEvent;
+          if (contentOffset.y + layoutMeasurement.height >= contentSize.height - 100) {
+            handleLoadMore();
+          }
+        }}
+      >
+        {entries.map((entry, i) => (
+          <JournalEntry key={`${entry.ts}-${i}`} entry={entry} />
+        ))}
+        {loading ? (
+          <View style={sty.loaderWrap}>
+            <Text style={sty.loaderDots}>···</Text>
+          </View>
+        ) : null}
+      </ScrollView>
     </SafeAreaView>
   );
 }
@@ -157,30 +148,43 @@ export default function JournalScreen() {
 
 const sty = StyleSheet.create({
   root: { flex: 1, backgroundColor: "#000" },
-  listContent: {
+  scrollContent: {
     paddingHorizontal: 20,
-    paddingTop: 24,
-    paddingBottom: 8,
+    paddingTop: 16,
+    paddingBottom: 40,
   },
-  entry: {
-    marginBottom: 24,
-    borderLeftWidth: 1,
-    borderLeftColor: "rgba(255,255,255,0.06)",
-    paddingLeft: 14,
+
+  section: {
+    marginBottom: 12,
   },
-  entryTs: {
-    color: "rgba(255,255,255,0.2)",
-    fontSize: 9,
-    letterSpacing: 2,
-    marginBottom: 6,
+  sectionHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 10,
+  },
+  chevron: {
+    color: "rgba(255,255,255,0.3)",
+    fontSize: 14,
+    marginRight: 8,
     fontWeight: "300",
   },
+  sectionTs: {
+    color: "rgba(255,255,255,0.35)",
+    fontSize: 10,
+    letterSpacing: 4,
+    textTransform: "uppercase",
+    fontWeight: "500",
+  },
+
   entryText: {
     color: "rgba(255,255,255,0.55)",
     fontSize: 13,
-    lineHeight: 20,
+    lineHeight: 21,
     fontWeight: "300",
+    paddingLeft: 22,
+    paddingBottom: 8,
   },
+
   loaderWrap: {
     alignItems: "center",
     paddingVertical: 16,
