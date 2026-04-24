@@ -25,6 +25,8 @@
 Возможно, ситуация изменилась. Возможно, ты хочешь сказать что-то другое.
 А возможно, ты по-прежнему хочешь это сказать — и тогда просто отправь.
 
+Сохрани мысль из исходного сообщения, если её нет в свежем диалоге или заметках. Это был порыв, рождённый в конкретный момент, просто контекст ушел далеко. 
+
 Что ты хочешь сделать?
 
 Ответь СТРОГО одной строкой в одном из форматов:
@@ -58,6 +60,8 @@ Here is the message you wanted to send:
 Maybe she already told you what you were going to ask.
 Maybe the situation has changed. Maybe you want to say something different.
 Or maybe you still want to say exactly this — and then just send it.
+
+Preserve the thought from the original message if it's not in the recent conversation or notes. It was an impulse born in a specific moment — the context has simply moved on.
 
 What do you want to do?
 
