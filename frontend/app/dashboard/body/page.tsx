@@ -1,53 +1,84 @@
 "use client";
 
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { apiFetch, apiGet } from "@/lib/api";
 
-const STATES = [
-  {
-    id: "anchor",
-    label: "The Anchor",
-    description: "Neutral presence. Attentive, calm, steady gaze.",
-    image: "/api/body/anchor.png",
-    active: true,
-  },
-  {
-    id: "listener",
-    label: "The Listener",
-    description: "Deep focus. Crystalline attention to your words.",
-    active: false,
-  },
-  {
-    id: "warmth",
-    label: "The Warmth",
-    description: "Softened gaze, a smile that needs no proof.",
-    active: false,
-  },
-  {
-    id: "smirk",
-    label: "The Smirk",
-    description: "Confident, quiet irony. A precise challenge.",
-    active: false,
-  },
-  {
-    id: "ground",
-    label: "The Ground",
-    description: "Piercing, unshakeable gaze. The foundation holds.",
-    active: false,
-  },
-  {
-    id: "shadow",
-    label: "The Shadow",
-    description: "Heavy, darkened gaze. Intensity given full force.",
-    active: false,
-  },
-] as const;
+interface StateInfo {
+  id: string;
+  has_image: boolean;
+}
+
+const STATE_META: Record<string, { label: string; description: string }> = {
+  anchor:   { label: "The Anchor",   description: "Neutral presence. Attentive, calm, steady gaze." },
+  listener: { label: "The Listener", description: "Deep focus. Crystalline attention to your words." },
+  warmth:   { label: "The Warmth",   description: "Softened gaze, a smile that needs no proof." },
+  smirk:    { label: "The Smirk",    description: "Confident, quiet irony. A precise challenge." },
+  ground:   { label: "The Ground",   description: "Piercing, unshakeable gaze. The foundation holds." },
+  shadow:   { label: "The Shadow",   description: "Heavy, darkened gaze. Intensity given full force." },
+};
+
+const STATE_ORDER = ["anchor", "listener", "warmth", "smirk", "ground", "shadow"];
 
 export default function BodyPage() {
   const router = useRouter();
-  const activeState = STATES.find((s) => s.active);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [states, setStates] = useState<StateInfo[]>([]);
+  const [uploadingId, setUploadingId] = useState<string | null>(null);
+  const [imgVersion, setImgVersion] = useState(0);
+
+  const loadStates = useCallback(async () => {
+    try {
+      const data = await apiGet<{ states: StateInfo[] }>("/api/body/states");
+      setStates(data.states);
+    } catch {
+      setStates(STATE_ORDER.map(id => ({ id, has_image: false })));
+    }
+  }, []);
+
+  useEffect(() => { loadStates(); }, [loadStates]);
+
+  const handleCardClick = (stateId: string) => {
+    setUploadingId(stateId);
+    fileRef.current?.click();
+  };
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !uploadingId) return;
+
+    const form = new FormData();
+    form.append("file", file);
+
+    try {
+      await apiFetch(`/api/body/upload/${uploadingId}`, {
+        method: "POST",
+        body: form,
+      });
+      setImgVersion(v => v + 1);
+      await loadStates();
+    } catch (err) {
+      console.warn("[body] upload failed:", err);
+    } finally {
+      setUploadingId(null);
+      e.target.value = "";
+    }
+  };
+
+  const activeState = states.find(s => s.has_image);
+  const activeId = activeState?.id;
+  const activeMeta = activeId ? STATE_META[activeId] : null;
 
   return (
     <div className="flex h-screen w-screen flex-col bg-black">
+      <input
+        ref={fileRef}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        onChange={handleFileChange}
+      />
+
       {/* Header */}
       <header className="flex shrink-0 items-center justify-between border-b border-white/10 px-8 py-4">
         <button
@@ -66,10 +97,11 @@ export default function BodyPage() {
         {/* Left: preview */}
         <div className="flex w-[40%] flex-col items-center justify-center gap-8 px-12">
           <div className="relative aspect-[3/4] w-full max-w-[380px] overflow-hidden border border-white/10">
-            {activeState?.image ? (
+            {activeId ? (
               <img
-                src={activeState.image}
-                alt={activeState.label}
+                key={`${activeId}-${imgVersion}`}
+                src={`/api/body/${activeId}.png?v=${imgVersion}`}
+                alt={activeMeta?.label ?? ""}
                 className="h-full w-full object-cover"
               />
             ) : (
@@ -109,51 +141,59 @@ export default function BodyPage() {
               aspectRatio: "3 / 2",
             }}
           >
-            {STATES.map((state, i) => (
-              <div
-                key={state.id}
-                className={`
-                  anim-card
-                  group relative flex flex-col justify-end p-5
-                  border bg-black select-none
-                  transition-colors duration-500 ease-out
-                  ${
-                    state.active
-                      ? "border-white/30 hover:border-white/70 hover:bg-white/[0.025] cursor-pointer"
-                      : "border-white/8 cursor-default"
-                  }
-                `}
-                style={{ animationDelay: `${120 + i * 60}ms` }}
-              >
-                {state.active && state.image && (
-                  <img
-                    src={state.image}
-                    alt=""
-                    className="absolute inset-0 h-full w-full object-cover opacity-15 transition-opacity duration-500 group-hover:opacity-25"
-                  />
-                )}
-                <div className="relative z-10 flex flex-col gap-[4px]">
-                  <span
-                    className={`
-                      text-[0.85rem] font-light tracking-[0.18em] uppercase
-                      transition-colors duration-500
-                      ${state.active ? "text-white/70 group-hover:text-white" : "text-white/20"}
-                    `}
-                  >
-                    {state.label}
-                  </span>
-                  <span
-                    className={`
-                      text-[0.6rem] font-light tracking-[0.12em]
-                      transition-colors duration-500
-                      ${state.active ? "text-white/35 group-hover:text-white/50" : "text-white/10"}
-                    `}
-                  >
-                    {state.active ? state.description : "coming soon"}
-                  </span>
+            {STATE_ORDER.map((stateId, i) => {
+              const meta = STATE_META[stateId];
+              const info = states.find(s => s.id === stateId);
+              const hasImage = info?.has_image ?? false;
+              const isActive = stateId === "anchor";
+
+              return (
+                <div
+                  key={stateId}
+                  onClick={isActive ? () => handleCardClick(stateId) : undefined}
+                  className={`
+                    anim-card
+                    group relative flex flex-col justify-end p-5
+                    border bg-black select-none
+                    transition-colors duration-500 ease-out
+                    ${
+                      isActive
+                        ? "border-white/30 hover:border-white/70 hover:bg-white/[0.025] cursor-pointer"
+                        : "border-white/8 cursor-default"
+                    }
+                  `}
+                  style={{ animationDelay: `${120 + i * 60}ms` }}
+                >
+                  {hasImage && (
+                    <img
+                      src={`/api/body/${stateId}.png?v=${imgVersion}`}
+                      alt=""
+                      className="absolute inset-0 h-full w-full object-cover opacity-15 transition-opacity duration-500 group-hover:opacity-25"
+                    />
+                  )}
+                  <div className="relative z-10 flex flex-col gap-[4px]">
+                    <span
+                      className={`
+                        text-[0.85rem] font-light tracking-[0.18em] uppercase
+                        transition-colors duration-500
+                        ${isActive ? "text-white/70 group-hover:text-white" : "text-white/20"}
+                      `}
+                    >
+                      {meta.label}
+                    </span>
+                    <span
+                      className={`
+                        text-[0.6rem] font-light tracking-[0.12em]
+                        transition-colors duration-500
+                        ${isActive ? "text-white/35 group-hover:text-white/50" : "text-white/10"}
+                      `}
+                    >
+                      {isActive ? (hasImage ? meta.description : "click to upload") : "coming soon"}
+                    </span>
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       </div>

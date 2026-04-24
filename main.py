@@ -4,11 +4,11 @@ import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from infrastructure.auth import AUTH_TOKEN
+from infrastructure.auth import AUTH_TOKEN, require_auth
 from infrastructure.logging.logger import setup_logger
 from infrastructure.startup import preload_models, startup_progress
 
@@ -122,6 +122,28 @@ app.mount("/api/user_uploads", StaticFiles(directory=str(_USER_UPLOADS_DIR)), na
 
 _BODY_ASSETS_DIR = Path("data/body")
 _BODY_ASSETS_DIR.mkdir(parents=True, exist_ok=True)
+
+
+@app.post("/api/body/upload/{state_id}")
+async def upload_body_image(state_id: str, file: UploadFile = File(...), _=Depends(require_auth)):
+    allowed = {"anchor", "listener", "warmth", "smirk", "ground", "shadow"}
+    if state_id not in allowed:
+        raise HTTPException(status_code=400, detail=f"Unknown state: {state_id}")
+    dest = _BODY_ASSETS_DIR / f"{state_id}.png"
+    contents = await file.read()
+    dest.write_bytes(contents)
+    return {"path": f"/api/body/{state_id}.png"}
+
+
+@app.get("/api/body/states")
+async def list_body_states(_=Depends(require_auth)):
+    states = []
+    for sid in ("anchor", "listener", "warmth", "smirk", "ground", "shadow"):
+        path = _BODY_ASSETS_DIR / f"{sid}.png"
+        states.append({"id": sid, "has_image": path.exists()})
+    return {"states": states}
+
+
 app.mount("/api/body", StaticFiles(directory=str(_BODY_ASSETS_DIR)), name="body_assets")
 
 
