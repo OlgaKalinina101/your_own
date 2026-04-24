@@ -29,6 +29,7 @@ export default function RootLayout() {
           <Stack.Screen name="dashboard/index" options={{ title: "" }} />
           <Stack.Screen name="dashboard/self" options={{ title: "SELF" }} />
           <Stack.Screen name="dashboard/settings" options={{ title: "SETTINGS" }} />
+          <Stack.Screen name="dashboard/journal" options={{ title: "JOURNAL" }} />
         </Stack>
         <InAppNotification />
       </View>

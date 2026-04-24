@@ -85,9 +85,9 @@ export default function Dashboard() {
         {/* Body */}
         <DashboardCard
           title="Body"
-          subtitle="coming soon"
           className="col-start-7 col-end-9 row-start-2 row-end-3"
           delay={280}
+          href="/dashboard/body"
         />
 
         {/* ── Row 3 ──────────────────────────────────────────────────────── */}

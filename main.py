@@ -120,6 +120,10 @@ app.include_router(settings_router)
 app.mount("/api/generated_images", StaticFiles(directory=str(_GENERATED_IMAGES_DIR)), name="generated_images")
 app.mount("/api/user_uploads", StaticFiles(directory=str(_USER_UPLOADS_DIR)), name="user_uploads")
 
+_BODY_ASSETS_DIR = Path("data/body")
+_BODY_ASSETS_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/api/body", StaticFiles(directory=str(_BODY_ASSETS_DIR)), name="body_assets")
+
 
 @app.get("/")
 def root():

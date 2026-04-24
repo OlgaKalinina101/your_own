@@ -1,27 +1,31 @@
 /**
- * Self — workbench stream + identity viewer.
+ * Self — avatar + journal shortcut + inspiration tickers  |  identity viewer.
  *
  * Two ambient toggles in the top-right corner switch between:
- *   WB  — paginated workbench entries (newest at bottom, scroll up for history)
- *   ID  — raw identity document
+ *   WB  — avatar silhouette, JOURNAL card, scrolling inspiration lines
+ *   ID  — collapsible identity document
  */
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   Animated,
+  Dimensions,
   Easing,
-  FlatList,
+  Image,
   SafeAreaView,
-  ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from "react-native";
-import { loadWorkbenchEntries, loadIdentity } from "@/lib/api";
+import type { NativeSyntheticEvent, TextLayoutEventData } from "react-native";
+import { useRouter } from "expo-router";
+import { getBackendUrl, loadWorkbenchEntries, loadIdentity, loadInspirationFacts } from "@/lib/api";
+
+const NGROK_HEADER = { "ngrok-skip-browser-warning": "true" };
+const SCREEN_W = Dimensions.get("window").width;
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
-type WbEntry = { ts: string; text: string };
 type Tab = "wb" | "id";
 
 // ── Ambient toggle pill ──────────────────────────────────────────────────────
@@ -82,50 +86,125 @@ function TogglePill({
   );
 }
 
-// ── Animated workbench entry ─────────────────────────────────────────────────
+// ── Markdown helpers ─────────────────────────────────────────────────────────
 
-const ENTRY_ANIM_DURATION = 320;
-const ENTRY_STAGGER = 40;
+type Span = { text: string; bold: boolean };
 
-function WbEntryCard({
-  item,
-  index,
-  batchStart,
-}: {
-  item: WbEntry;
-  index: number;
-  batchStart: number;
-}) {
-  const opacity = useRef(new Animated.Value(0)).current;
-  const translateY = useRef(new Animated.Value(6)).current;
+function parseInlineMarkdown(raw: string): Span[] {
+  const spans: Span[] = [];
+  const re = /\*\*(.+?)\*\*/g;
+  let last = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(raw)) !== null) {
+    if (m.index > last) spans.push({ text: raw.slice(last, m.index), bold: false });
+    spans.push({ text: m[1], bold: true });
+    last = m.index + m[0].length;
+  }
+  if (last < raw.length) spans.push({ text: raw.slice(last), bold: false });
+  return spans;
+}
 
-  useEffect(() => {
-    const delay = Math.max(0, index - batchStart) * ENTRY_STAGGER;
-    Animated.parallel([
-      Animated.timing(opacity, {
-        toValue: 1,
-        duration: ENTRY_ANIM_DURATION,
-        delay,
-        easing: Easing.out(Easing.quad),
-        useNativeDriver: true,
-      }),
-      Animated.timing(translateY, {
-        toValue: 0,
-        duration: ENTRY_ANIM_DURATION,
-        delay,
-        easing: Easing.out(Easing.quad),
-        useNativeDriver: true,
-      }),
-    ]).start();
-  }, []);
+function FormattedBody({ body }: { body: string }) {
+  const items = body
+    .split(/^- /m)
+    .map(s => s.trim())
+    .filter(Boolean);
+
+  if (items.length === 0) return null;
 
   return (
-    <Animated.View
-      style={[sty.entry, { opacity, transform: [{ translateY }] }]}
-    >
-      <Text style={sty.entryTs}>{item.ts}</Text>
-      <Text style={sty.entryText}>{item.text}</Text>
-    </Animated.View>
+    <View>
+      {items.map((item, i) => {
+        const spans = parseInlineMarkdown(item);
+        return (
+          <View key={i} style={sty.idListItem}>
+            {spans.length === 1 && !spans[0].bold ? (
+              <Text style={sty.idBody}>{spans[0].text}</Text>
+            ) : (
+              <Text style={sty.idBody}>
+                {spans.map((sp, j) =>
+                  sp.bold ? (
+                    <Text key={j} style={sty.idBold}>
+                      {sp.text.toUpperCase()}
+                    </Text>
+                  ) : (
+                    <Text key={j}>{sp.text}</Text>
+                  ),
+                )}
+              </Text>
+            )}
+          </View>
+        );
+      })}
+    </View>
+  );
+}
+
+// ── Collapsible identity section ────────────────────────────────────────────
+
+function IdentitySection({
+  heading,
+  body,
+  initialOpen,
+}: {
+  heading: string;
+  body: string;
+  initialOpen: boolean;
+}) {
+  const [open, setOpen] = useState(initialOpen);
+  const anim = useRef(new Animated.Value(initialOpen ? 1 : 0)).current;
+
+  const toggle = useCallback(() => {
+    const next = !open;
+    setOpen(next);
+    Animated.timing(anim, {
+      toValue: next ? 1 : 0,
+      duration: 260,
+      easing: Easing.out(Easing.quad),
+      useNativeDriver: false,
+    }).start();
+  }, [open, anim]);
+
+  const bodyMaxHeight = anim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0, 4000],
+  });
+
+  const bodyOpacity = anim.interpolate({
+    inputRange: [0, 0.3, 1],
+    outputRange: [0, 0, 1],
+  });
+
+  const chevronRotate = anim.interpolate({
+    inputRange: [0, 1],
+    outputRange: ["0deg", "90deg"],
+  });
+
+  return (
+    <View style={sty.idSection}>
+      <TouchableOpacity
+        onPress={toggle}
+        activeOpacity={0.6}
+        style={sty.idHeadingRow}
+      >
+        <Animated.Text
+          style={[
+            sty.idChevron,
+            { transform: [{ rotate: chevronRotate }] },
+          ]}
+        >
+          ›
+        </Animated.Text>
+        <Text style={sty.idHeading}>{heading}</Text>
+      </TouchableOpacity>
+      {body ? (
+        <Animated.View
+          style={{ maxHeight: bodyMaxHeight, opacity: bodyOpacity, overflow: "hidden" }}
+        >
+          <FormattedBody body={body} />
+        </Animated.View>
+      ) : null}
+    </View>
   );
 }
 
@@ -158,69 +237,181 @@ function IdentityView({ text }: { text: string }) {
         const body = nlIdx > -1 ? sec.slice(nlIdx + 1).trim() : "";
 
         return (
-          <View key={i} style={sty.idSection}>
-            <Text style={sty.idHeading}>{heading}</Text>
-            {body ? <Text style={sty.idBody}>{body}</Text> : null}
-          </View>
+          <IdentitySection
+            key={i}
+            heading={heading}
+            body={body}
+            initialOpen={false}
+          />
         );
       })}
     </Animated.ScrollView>
   );
 }
 
-// ── Main screen ──────────────────────────────────────────────────────────────
+// ── Single marquee ticker row ────────────────────────────────────────────────
 
-const PAGE_SIZE = 25;
+function TickerRow({ text, speed }: { text: string; speed: number }) {
+  const scrollX = useRef(new Animated.Value(0)).current;
+  const animRef = useRef<Animated.CompositeAnimation | null>(null);
+  const [containerW, setContainerW] = useState(0);
+  const [textW, setTextW] = useState(0);
+
+  useEffect(() => {
+    animRef.current?.stop();
+    if (containerW === 0 || textW === 0) return;
+
+    scrollX.setValue(containerW);
+    const totalDist = containerW + textW;
+    const duration = (totalDist / speed) * 1000;
+
+    animRef.current = Animated.loop(
+      Animated.timing(scrollX, {
+        toValue: -textW,
+        duration,
+        easing: Easing.linear,
+        useNativeDriver: true,
+      }),
+    );
+    animRef.current.start();
+
+    return () => { animRef.current?.stop(); };
+  }, [containerW, textW, speed]);
+
+  const handleTextLayout = (e: NativeSyntheticEvent<TextLayoutEventData>) => {
+    const lines = e.nativeEvent.lines;
+    if (lines && lines.length > 0) {
+      setTextW(Math.ceil(lines[0].width));
+    }
+  };
+
+  return (
+    <View
+      style={sty.tickerRow}
+      onLayout={e => setContainerW(e.nativeEvent.layout.width)}
+    >
+      <Text
+        style={[sty.tickerText, sty.tickerMeasurer]}
+        onTextLayout={handleTextLayout}
+      >
+        {text}
+      </Text>
+      <Animated.Text
+        style={[
+          sty.tickerText,
+          {
+            width: textW > 0 ? textW + 40 : 9999,
+            transform: [{ translateX: scrollX }],
+          },
+        ]}
+        numberOfLines={1}
+      >
+        {text}
+      </Animated.Text>
+    </View>
+  );
+}
+
+// ── WB tab: avatar + journal card + tickers ─────────────────────────────────
+
+const TICKER_SPEEDS = [35, 50, 42, 58, 30, 48, 55];
+
+function WbView() {
+  const router = useRouter();
+  const [latestTs, setLatestTs] = useState<string | null>(null);
+  const [inspirations, setInspirations] = useState<string[]>([]);
+  const [avatarUri, setAvatarUri] = useState<string | null>(null);
+  const fadeIn = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    Animated.timing(fadeIn, {
+      toValue: 1,
+      duration: 500,
+      easing: Easing.out(Easing.quad),
+      useNativeDriver: true,
+    }).start();
+  }, []);
+
+  useEffect(() => {
+    getBackendUrl().then(base => {
+      setAvatarUri(`${base.replace(/\/$/, "")}/api/body/anchor.png`);
+    });
+
+    loadWorkbenchEntries(0, 1)
+      .then(d => {
+        if (d.entries.length > 0) {
+          const raw = d.entries[0].ts;
+          const timePart = raw.includes(" ") ? raw.split(" ").pop()! : raw;
+          const hhmm = timePart.slice(0, 5);
+          setLatestTs(hhmm);
+        }
+      })
+      .catch(() => {});
+
+    loadInspirationFacts()
+      .then(facts => {
+        if (facts.length > 0) {
+          setInspirations(facts.map(f => f.text));
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  const tickerLines = inspirations.length > 0
+    ? inspirations.slice(0, 7)
+    : [];
+
+  const avatarW = SCREEN_W;
+  const avatarH = avatarW * (4 / 3);
+
+  return (
+    <Animated.View style={[sty.wbRoot, { opacity: fadeIn }]}>
+      {/* JOURNAL card — fixed top-left */}
+      <TouchableOpacity
+        style={sty.journalCard}
+        activeOpacity={0.7}
+        onPress={() => router.push("/dashboard/journal")}
+      >
+        <Text style={sty.journalTitle}>JOURNAL</Text>
+        <Text style={sty.journalSub}>
+          {latestTs ? `LATEST:  ${latestTs}` : "· · ·"}
+        </Text>
+      </TouchableOpacity>
+
+      {/* Avatar — full width, left-aligned, fills middle zone */}
+      <View style={sty.avatarArea}>
+        {avatarUri ? (
+          <Image
+            source={{ uri: avatarUri, headers: NGROK_HEADER }}
+            style={{ width: avatarW, height: avatarH }}
+            resizeMode="cover"
+          />
+        ) : (
+          <View style={[sty.avatarPlaceholder, { width: avatarW, height: avatarH }]} />
+        )}
+      </View>
+
+      {/* Ticker area — fixed bottom */}
+      <View style={sty.tickerArea}>
+        {tickerLines.map((line, i) => (
+          <TickerRow
+            key={i}
+            text={line}
+            speed={TICKER_SPEEDS[i % TICKER_SPEEDS.length]}
+          />
+        ))}
+      </View>
+    </Animated.View>
+  );
+}
+
+// ── Main screen ──────────────────────────────────────────────────────────────
 
 export default function SelfScreen() {
   const [tab, setTab] = useState<Tab>("wb");
 
-  // Workbench state
-  const [entries, setEntries] = useState<WbEntry[]>([]);
-  const [hasMore, setHasMore] = useState(true);
-  const [loading, setLoading] = useState(false);
-  const offsetRef = useRef(0);
-  const batchStartRef = useRef(0);
-
   // Identity state
   const [identity, setIdentity] = useState<string>("");
-
-  const listRef = useRef<FlatList<WbEntry>>(null);
-
-  // ── Workbench loader ────────────────────────────────────────────────────
-
-  const fetchPage = useCallback(async (reset = false) => {
-    if (loading) return;
-    if (!reset && !hasMore) return;
-
-    const offset = reset ? 0 : offsetRef.current;
-    setLoading(true);
-    try {
-      const data = await loadWorkbenchEntries(offset, PAGE_SIZE);
-      const newEntries = data.entries;
-
-      if (reset) {
-        batchStartRef.current = 0;
-        setEntries(newEntries);
-      } else {
-        batchStartRef.current = offsetRef.current;
-        setEntries(prev => [...prev, ...newEntries]);
-      }
-      offsetRef.current = offset + newEntries.length;
-      setHasMore(data.has_more);
-    } catch (err) {
-      console.warn("[self] workbench fetch failed:", err);
-    } finally {
-      setLoading(false);
-    }
-  }, [loading, hasMore]);
-
-  // Initial load
-  useEffect(() => {
-    fetchPage(true);
-  }, []);
-
-  // ── Identity loader ────────────────────────────────────────────────────
 
   useEffect(() => {
     if (tab === "id" && !identity) {
@@ -229,30 +420,6 @@ export default function SelfScreen() {
         .catch(err => console.warn("[self] identity fetch failed:", err));
     }
   }, [tab, identity]);
-
-  // ── Render helpers ─────────────────────────────────────────────────────
-
-  const renderEntry = useCallback(
-    ({ item, index }: { item: WbEntry; index: number }) => (
-      <WbEntryCard
-        item={item}
-        index={index}
-        batchStart={batchStartRef.current}
-      />
-    ),
-    [],
-  );
-
-  const keyExtractor = useCallback(
-    (item: WbEntry, index: number) => `${item.ts}-${index}`,
-    [],
-  );
-
-  const handleEndReached = useCallback(() => {
-    if (!loading && hasMore) fetchPage();
-  }, [loading, hasMore, fetchPage]);
-
-  // ── UI ──────────────────────────────────────────────────────────────────
 
   return (
     <SafeAreaView style={sty.root}>
@@ -267,28 +434,7 @@ export default function SelfScreen() {
         />
       </View>
 
-      {tab === "wb" ? (
-        <FlatList
-          ref={listRef}
-          data={entries}
-          renderItem={renderEntry}
-          keyExtractor={keyExtractor}
-          inverted
-          contentContainerStyle={sty.listContent}
-          showsVerticalScrollIndicator={false}
-          onEndReached={handleEndReached}
-          onEndReachedThreshold={0.4}
-          ListFooterComponent={
-            loading ? (
-              <View style={sty.loaderWrap}>
-                <Text style={sty.loaderDots}>···</Text>
-              </View>
-            ) : null
-          }
-        />
-      ) : (
-        <IdentityView text={identity} />
-      )}
+      {tab === "wb" ? <WbView /> : <IdentityView text={identity} />}
     </SafeAreaView>
   );
 }
@@ -342,43 +488,75 @@ const sty = StyleSheet.create({
     color: "rgba(255,255,255,0.7)",
   },
 
-  // Workbench list
-  listContent: {
-    paddingHorizontal: 20,
-    paddingTop: 24,
-    paddingBottom: 8,
+  // ── WB tab ──────────────────────────────────────────────────────────────
+  wbRoot: {
+    flex: 1,
   },
-  entry: {
-    marginBottom: 24,
-    borderLeftWidth: 1,
-    borderLeftColor: "rgba(255,255,255,0.06)",
-    paddingLeft: 14,
+
+  // Journal card — fixed at top-left
+  journalCard: {
+    marginLeft: 16,
+    marginTop: 4,
+    marginBottom: 4,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.15)",
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    alignSelf: "flex-start",
   },
-  entryTs: {
-    color: "rgba(255,255,255,0.2)",
-    fontSize: 9,
+  journalTitle: {
+    color: "rgba(255,255,255,0.75)",
+    fontSize: 10,
+    letterSpacing: 4,
+    fontWeight: "500",
+  },
+  journalSub: {
+    color: "rgba(255,255,255,0.25)",
+    fontSize: 8,
     letterSpacing: 2,
-    marginBottom: 6,
     fontWeight: "300",
-  },
-  entryText: {
-    color: "rgba(255,255,255,0.55)",
-    fontSize: 13,
-    lineHeight: 20,
-    fontWeight: "300",
+    marginTop: 4,
   },
 
-  loaderWrap: {
-    alignItems: "center",
-    paddingVertical: 16,
+  // Avatar — full width, left-aligned, fills available space
+  avatarArea: {
+    flex: 1,
+    alignItems: "flex-start",
+    justifyContent: "center",
+    overflow: "hidden",
   },
-  loaderDots: {
-    color: "rgba(255,255,255,0.2)",
-    fontSize: 18,
-    letterSpacing: 6,
+  avatarPlaceholder: {
+    backgroundColor: "rgba(255,255,255,0.02)",
   },
 
-  // Identity
+  // ── Tickers ─────────────────────────────────────────────────────────────
+  tickerArea: {
+    paddingBottom: 16,
+    paddingTop: 8,
+    gap: 6,
+  },
+  tickerRow: {
+    height: 26,
+    overflow: "hidden",
+    justifyContent: "center",
+    paddingHorizontal: 16,
+  },
+  tickerText: {
+    color: "rgba(255,255,255,0.3)",
+    fontSize: 11,
+    fontWeight: "300",
+    letterSpacing: 1,
+    textTransform: "uppercase",
+  },
+  tickerMeasurer: {
+    position: "absolute",
+    opacity: 0,
+    top: -9999,
+    left: 0,
+    width: 99999,
+  },
+
+  // ── Identity ────────────────────────────────────────────────────────────
   idScroll: { flex: 1 },
   idContent: {
     paddingHorizontal: 20,
@@ -386,20 +564,41 @@ const sty = StyleSheet.create({
     paddingBottom: 40,
   },
   idSection: {
-    marginBottom: 28,
+    marginBottom: 12,
+  },
+  idHeadingRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 10,
+  },
+  idChevron: {
+    color: "rgba(255,255,255,0.3)",
+    fontSize: 14,
+    marginRight: 8,
+    fontWeight: "300",
   },
   idHeading: {
     color: "rgba(255,255,255,0.35)",
     fontSize: 10,
     letterSpacing: 4,
     textTransform: "uppercase",
-    marginBottom: 10,
     fontWeight: "500",
+  },
+  idListItem: {
+    marginBottom: 16,
+    paddingLeft: 22,
   },
   idBody: {
     color: "rgba(255,255,255,0.55)",
     fontSize: 13,
     lineHeight: 21,
     fontWeight: "300",
+  },
+  idBold: {
+    color: "rgba(255,255,255,0.7)",
+    fontSize: 10,
+    letterSpacing: 3,
+    textTransform: "uppercase",
+    fontWeight: "500",
   },
 });

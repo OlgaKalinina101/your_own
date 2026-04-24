@@ -167,6 +167,21 @@ export async function loadWorkbenchEntries(
   );
 }
 
+/** Inspiration facts from Chroma (category = Inspiration or Вдохновение). */
+export async function loadInspirationFacts(
+  accountId = "default",
+): Promise<{ id: string; text: string }[]> {
+  let facts = await apiGet<{ id: string; text: string }[]>(
+    `/api/chroma/facts?account_id=${accountId}&category=Inspiration&sort=created_at`,
+  );
+  if (facts.length === 0) {
+    facts = await apiGet<{ id: string; text: string }[]>(
+      `/api/chroma/facts?account_id=${encodeURIComponent(accountId)}&category=${encodeURIComponent("Вдохновение")}&sort=created_at`,
+    );
+  }
+  return facts;
+}
+
 /** Return raw identity.md content. */
 export async function loadIdentity(
   accountId = "default",

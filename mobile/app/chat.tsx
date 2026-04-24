@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { ActivityIndicator, Animated, BackHandler, FlatList, Platform, StyleSheet, Text, TouchableOpacity, View, type ScrollViewProps } from "react-native";
+import { ActivityIndicator, Animated, BackHandler, FlatList, Platform, StyleSheet, Text, View, type ScrollViewProps } from "react-native";
 import { Stack, useRouter } from "expo-router";
+import { HeaderBackButton } from "@react-navigation/elements";
 import {
   KeyboardChatScrollView,
   KeyboardStickyView,
@@ -122,9 +123,7 @@ export default function ChatScreen() {
         options={{
           title: aiName,
           headerLeft: () => (
-            <TouchableOpacity onPress={goBack} style={styles.backBtn} activeOpacity={0.6}>
-              <Text style={styles.backArrow}>‹</Text>
-            </TouchableOpacity>
+            <HeaderBackButton onPress={goBack} tintColor="#fff" />
           ),
           headerRight: () => (
             <WorkbenchDotsBtn open={workbenchOpen} onPress={() => setWorkbenchOpen((value) => !value)} />
@@ -177,8 +176,6 @@ export default function ChatScreen() {
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: "#000" },
-  backBtn: { paddingHorizontal: 8, paddingVertical: 4 },
-  backArrow: { color: "#fff", fontSize: 28, fontWeight: "300", lineHeight: 30 },
   list: { paddingHorizontal: 16, paddingTop: 8, paddingBottom: 16 },
   emptyWrap: { flex: 1, justifyContent: "center", alignItems: "center", transform: [{ scaleY: -1 }] },
   emptyText: {
