@@ -39,6 +39,8 @@ _DEFAULTS: dict[str, object] = {
     "user_timezone": "Asia/Yerevan",
     # Skills that are active in the chat pipeline (None = all enabled)
     "enabled_skills": None,
+    # Model used for body image generation (image-to-image with anchor reference)
+    "body_image_model": "sourceful/riverflow-v2-fast",
 }
 
 _lock = Lock()

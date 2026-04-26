@@ -4,6 +4,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { apiFetch, apiGet } from "@/lib/api";
 
+const NON_ANCHOR_STATES = ["listener", "warmth", "smirk", "ground", "shadow"];
+
 interface StateInfo {
   id: string;
   has_image: boolean;
@@ -26,6 +28,9 @@ export default function BodyPage() {
   const [states, setStates] = useState<StateInfo[]>([]);
   const [uploadingId, setUploadingId] = useState<string | null>(null);
   const [imgVersion, setImgVersion] = useState(0);
+  const [generatingStates, setGeneratingStates] = useState<string[]>([]);
+  const [failedStates, setFailedStates] = useState<string[]>([]);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const loadStates = useCallback(async () => {
     try {
@@ -38,7 +43,62 @@ export default function BodyPage() {
 
   useEffect(() => { loadStates(); }, [loadStates]);
 
+  const stopPolling = useCallback(() => {
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+  }, []);
+
+  const startPolling = useCallback(() => {
+    if (pollRef.current) return;
+    pollRef.current = setInterval(async () => {
+      try {
+        const status = await apiGet<{ generating: string[]; failed: string[] }>("/api/body/generate-status");
+        setGeneratingStates(status.generating);
+        setFailedStates(status.failed);
+        if (status.generating.length === 0) {
+          stopPolling();
+          setImgVersion((v) => v + 1);
+          await loadStates();
+        }
+      } catch {
+        // silently ignore poll errors
+      }
+    }, 2000);
+  }, [loadStates, stopPolling]);
+
+  useEffect(() => () => stopPolling(), [stopPolling]);
+
+  const triggerGeneration = useCallback(async () => {
+    try {
+      await apiFetch("/api/body/generate", { method: "POST" });
+      setGeneratingStates(NON_ANCHOR_STATES);
+      setFailedStates([]);
+      startPolling();
+    } catch (err) {
+      console.warn("[body] generate trigger failed:", err);
+    }
+  }, [startPolling]);
+
+  const regenerateOne = useCallback(async (stateId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (generatingStates.includes(stateId)) return;
+    try {
+      await apiFetch(`/api/body/generate/${stateId}`, { method: "POST" });
+      setGeneratingStates((prev) => prev.includes(stateId) ? prev : [...prev, stateId]);
+      setFailedStates((prev) => prev.filter((s) => s !== stateId));
+      startPolling();
+    } catch (err) {
+      console.warn("[body] regenerate failed:", err);
+    }
+  }, [generatingStates, startPolling]);
+
   const handleCardClick = (stateId: string) => {
+    if (stateId !== "anchor" && failedStates.includes(stateId)) {
+      triggerGeneration();
+      return;
+    }
     setUploadingId(stateId);
     fileRef.current?.click();
   };
@@ -50,6 +110,7 @@ export default function BodyPage() {
     const form = new FormData();
     form.append("file", file);
 
+    const wasAnchor = uploadingId === "anchor";
     try {
       await apiFetch(`/api/body/upload/${uploadingId}`, {
         method: "POST",
@@ -57,6 +118,9 @@ export default function BodyPage() {
       });
       setImgVersion(v => v + 1);
       await loadStates();
+      if (wasAnchor) {
+        await triggerGeneration();
+      }
     } catch (err) {
       console.warn("[body] upload failed:", err);
     } finally {
@@ -145,20 +209,40 @@ export default function BodyPage() {
               const meta = STATE_META[stateId];
               const info = states.find(s => s.id === stateId);
               const hasImage = info?.has_image ?? false;
-              const isActive = stateId === "anchor";
+              const isAnchor = stateId === "anchor";
+              const isGenerating = generatingStates.includes(stateId);
+              const isFailed = failedStates.includes(stateId);
+              const isClickable = isAnchor || isFailed;
+
+              let subLabel: string;
+              if (isAnchor) {
+                subLabel = hasImage ? meta.description : "click to upload";
+              } else if (isGenerating) {
+                subLabel = "generating…";
+              } else if (isFailed) {
+                subLabel = "failed — click to retry";
+              } else if (hasImage) {
+                subLabel = meta.description;
+              } else {
+                subLabel = "awaiting anchor";
+              }
 
               return (
                 <div
                   key={stateId}
-                  onClick={isActive ? () => handleCardClick(stateId) : undefined}
+                  onClick={isClickable ? () => handleCardClick(stateId) : undefined}
                   className={`
                     anim-card
                     group relative flex flex-col justify-end p-5
-                    border bg-black select-none
+                    border bg-black select-none overflow-hidden
                     transition-colors duration-500 ease-out
                     ${
-                      isActive
+                      isAnchor
                         ? "border-white/30 hover:border-white/70 hover:bg-white/[0.025] cursor-pointer"
+                        : isFailed
+                        ? "border-white/20 hover:border-white/50 cursor-pointer"
+                        : isGenerating
+                        ? "border-white/15 cursor-default"
                         : "border-white/8 cursor-default"
                     }
                   `}
@@ -171,12 +255,49 @@ export default function BodyPage() {
                       className="absolute inset-0 h-full w-full object-cover opacity-15 transition-opacity duration-500 group-hover:opacity-25"
                     />
                   )}
+
+                  {/* Progress bar sweep for generating states */}
+                  {isGenerating && (
+                    <div className="progress-bar absolute bottom-0 left-0 h-[1px] w-full" />
+                  )}
+
+                  {/* Regenerate button — top-right, non-anchor only */}
+                  {!isAnchor && (
+                    <button
+                      onClick={(e) => regenerateOne(stateId, e)}
+                      disabled={isGenerating}
+                      title="Regenerate"
+                      className={`
+                        absolute right-3 top-3 z-20
+                        flex items-center justify-center
+                        h-6 w-6 border
+                        text-[0.55rem] tracking-widest uppercase
+                        transition-all duration-300
+                        ${
+                          isGenerating
+                            ? "border-white/10 text-white/15 cursor-default"
+                            : "border-white/15 text-white/25 opacity-0 group-hover:opacity-100 hover:border-white/50 hover:text-white/70 cursor-pointer"
+                        }
+                      `}
+                    >
+                      {isGenerating ? "…" : "↺"}
+                    </button>
+                  )}
+
                   <div className="relative z-10 flex flex-col gap-[4px]">
                     <span
                       className={`
                         text-[0.85rem] font-light tracking-[0.18em] uppercase
                         transition-colors duration-500
-                        ${isActive ? "text-white/70 group-hover:text-white" : "text-white/20"}
+                        ${
+                          isAnchor
+                            ? "text-white/70 group-hover:text-white"
+                            : isGenerating || hasImage
+                            ? "text-white/40"
+                            : isFailed
+                            ? "text-white/35"
+                            : "text-white/20"
+                        }
                       `}
                     >
                       {meta.label}
@@ -185,10 +306,18 @@ export default function BodyPage() {
                       className={`
                         text-[0.6rem] font-light tracking-[0.12em]
                         transition-colors duration-500
-                        ${isActive ? "text-white/35 group-hover:text-white/50" : "text-white/10"}
+                        ${
+                          isAnchor
+                            ? "text-white/35 group-hover:text-white/50"
+                            : isGenerating
+                            ? "text-white/30"
+                            : isFailed
+                            ? "text-white/30"
+                            : "text-white/10"
+                        }
                       `}
                     >
-                      {isActive ? (hasImage ? meta.description : "click to upload") : "coming soon"}
+                      {subLabel}
                     </span>
                   </div>
                 </div>
@@ -197,6 +326,18 @@ export default function BodyPage() {
           </div>
         </div>
       </div>
+
+      <style jsx>{`
+        @keyframes sweep {
+          0%   { transform: translateX(-100%); opacity: 0.6; }
+          50%  { opacity: 1; }
+          100% { transform: translateX(100%); opacity: 0.6; }
+        }
+        .progress-bar {
+          background: rgba(255, 255, 255, 0.55);
+          animation: sweep 1.8s ease-in-out infinite;
+        }
+      `}</style>
     </div>
   );
 }

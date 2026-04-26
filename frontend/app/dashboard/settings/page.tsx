@@ -28,6 +28,36 @@ const MODELS = [
 
 type ModelId = (typeof MODELS)[number]["id"];
 
+const IMAGE_GEN_MODELS = [
+  {
+    id: "sourceful/riverflow-v2-fast",
+    label: "Riverflow V2 Fast",
+    hint: "fastest · face lock via super_resolution_references",
+  },
+  {
+    id: "sourceful/riverflow-v2-pro",
+    label: "Riverflow V2 Pro",
+    hint: "best quality · face lock via super_resolution_references",
+  },
+  {
+    id: "google/gemini-3.1-flash-image-preview",
+    label: "Gemini 3.1 Flash Image",
+    hint: "balanced · face lock via prompt",
+  },
+  {
+    id: "google/gemini-2.5-flash-image",
+    label: "Gemini 2.5 Flash Image",
+    hint: "balanced · face lock via prompt",
+  },
+  {
+    id: "openai/gpt-5-image",
+    label: "GPT-5 Image",
+    hint: "strong prompt following · face lock via prompt",
+  },
+] as const;
+
+type ImageGenModelId = (typeof IMAGE_GEN_MODELS)[number]["id"];
+
 function SliderRow({
   label,
   hint,
@@ -92,10 +122,15 @@ export default function SettingsPage() {
   const [reflectionInterval, setReflectionInterval]   = useState(12);
   const [triggeringReflection, setTriggeringReflection] = useState(false);
 
-  const [saved, setSaved]     = useState(false);
-  const [masked, setMasked]   = useState(true);
-  const [open, setOpen]       = useState(false);
-  const dropdownRef           = useRef<HTMLDivElement>(null);
+  // ── Body image generation ──────────────────────────────────
+  const [bodyImageModel, setBodyImageModel] = useState<ImageGenModelId>(IMAGE_GEN_MODELS[0].id);
+
+  const [saved, setSaved]         = useState(false);
+  const [masked, setMasked]       = useState(true);
+  const [open, setOpen]           = useState(false);
+  const [imgOpen, setImgOpen]     = useState(false);
+  const dropdownRef               = useRef<HTMLDivElement>(null);
+  const imgDropdownRef            = useRef<HTMLDivElement>(null);
 
   // ── Load connection settings from localStorage ─────────────
   useEffect(() => {
@@ -152,17 +187,22 @@ export default function SettingsPage() {
       if (data.pushy_device_token) setPushyDeviceToken(data.pushy_device_token as string);
       if (data.reflection_cooldown_hours != null) setReflectionCooldown(data.reflection_cooldown_hours as number);
       if (data.reflection_interval_hours != null) setReflectionInterval(data.reflection_interval_hours as number);
+      const bim = data.body_image_model as string;
+      if (bim && IMAGE_GEN_MODELS.find((x) => x.id === bim)) setBodyImageModel(bim as ImageGenModelId);
       setConnected(true);
     } catch {
       setConnected(false);
     }
   }
 
-  // ── Close dropdown on outside click ────────────────────────
+  // ── Close dropdowns on outside click ──────────────────────
   useEffect(() => {
     const handler = (e: MouseEvent) => {
       if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
         setOpen(false);
+      }
+      if (imgDropdownRef.current && !imgDropdownRef.current.contains(e.target as Node)) {
+        setImgOpen(false);
       }
     };
     document.addEventListener("mousedown", handler);
@@ -191,6 +231,7 @@ export default function SettingsPage() {
         ...(pushyDeviceToken ? { pushy_device_token: pushyDeviceToken } : {}),
         reflection_cooldown_hours: reflectionCooldown,
         reflection_interval_hours: reflectionInterval,
+        body_image_model: bodyImageModel,
       });
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
@@ -211,7 +252,8 @@ export default function SettingsPage() {
     }
   };
 
-  const selectedLabel = MODELS.find((m) => m.id === model)?.label ?? "";
+  const selectedLabel    = MODELS.find((m) => m.id === model)?.label ?? "";
+  const selectedImgLabel = IMAGE_GEN_MODELS.find((m) => m.id === bodyImageModel)?.label ?? "";
 
   return (
     <div className="flex h-screen w-screen flex-col bg-black text-white">
@@ -380,6 +422,55 @@ export default function SettingsPage() {
                           vision
                         </span>
                       )}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
+
+        {/* Body Image Model */}
+        <div className="flex flex-col gap-3" ref={imgDropdownRef}>
+          <label className="text-[0.68rem] tracking-[0.22em] uppercase text-white/55">
+            Body Image Model
+          </label>
+          <p className="text-[0.62rem] tracking-wide text-white/35 -mt-1">
+            Used to generate the 5 expression variants from your anchor image.
+          </p>
+          <div className="relative">
+            <button
+              onClick={() => setImgOpen((v) => !v)}
+              className="
+                flex w-full items-center justify-between
+                border-b border-white/30 py-3 text-left
+                text-[1rem] font-light tracking-wide text-white
+                transition-colors duration-300
+                hover:border-white/60
+              "
+            >
+              <span>{selectedImgLabel}</span>
+              <span className="text-[0.65rem] tracking-widest text-white/45">
+                {imgOpen ? "▲" : "▼"}
+              </span>
+            </button>
+            {imgOpen && (
+              <ul className="absolute left-0 right-0 top-full z-10 mt-1 border border-white/25 bg-black">
+                {IMAGE_GEN_MODELS.map((m) => (
+                  <li key={m.id}>
+                    <button
+                      onClick={() => { setBodyImageModel(m.id); setImgOpen(false); }}
+                      className={`
+                        w-full flex items-center justify-between px-4 py-3 text-left gap-4
+                        text-[0.92rem] font-light tracking-wide
+                        transition-colors duration-200 hover:bg-white/[0.06]
+                        ${bodyImageModel === m.id ? "text-white" : "text-white/60"}
+                      `}
+                    >
+                      <span>{m.label}</span>
+                      <span className="shrink-0 text-[0.58rem] tracking-wide text-white/35">
+                        {m.hint}
+                      </span>
                     </button>
                   </li>
                 ))}

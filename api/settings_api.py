@@ -33,6 +33,7 @@ class SettingsPatch(BaseModel):
     reflection_cooldown_hours: int | None = None
     reflection_interval_hours: int | None = None
     enabled_skills: list[str] | None = None
+    body_image_model: str | None = None
 
 
 class SoulBody(BaseModel):
