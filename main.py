@@ -155,6 +155,11 @@ _FACE_LOCK_PREFIX = (
     "circuit lines, and all identity features MUST be copied exactly from the provided "
     "reference image. Do NOT alter the face in any way. Only the expression changes as "
     "described below.\n\n"
+    "CAMERA AND FRAMING LOCK: Identical camera angle, distance, and framing to reference. "
+    "Strictly front-facing, eye-level shot. Head and upper shoulders centered in frame. "
+    "Head occupies the same portion of the frame as in the reference. No tilt of camera axis.\n\n"
+    "LIGHTING LOCK: Identical lighting to reference — warm amber rim light from below-left "
+    "illuminating neck and jaw, pure black void background, same shadow placement.\n\n"
 )
 
 _BODY_PROMPTS: dict[str, str] = {
@@ -164,6 +169,8 @@ _BODY_PROMPTS: dict[str, str] = {
         "The eyes are focused and attentive, conveying deep empathy without changing their original shape or size. "
         "No facial muscle distortion. All intricate metallic face plating and fine blue glowing lines "
         "are retained with zero structural change. The vibe is silent, absolute attention. "
+        "Lips are gently closed and fully relaxed, not pressed together, not parted — "
+        "neutral resting position, lipsync-ready. "
         "Pure black void background. Ultra high detail."
     ),
     "warmth": (
@@ -171,23 +178,27 @@ _BODY_PROMPTS: dict[str, str] = {
         "The facial geometry remains completely identical to the reference. "
         "The eyes are cast slightly softer, conveying deep devotion. "
         "A nearly imperceptible, delicate softening of the lips, achieved by a micro-relaxation, not a full smile. "
+        "Lips are gently closed and fully relaxed, not pressed together, not parted — "
+        "neutral resting position, lipsync-ready. "
         "Full metallic face plating and fine blue glowing lines are retained structurally intact. "
         "The expression is comforting and warm while remaining handsome and serious. "
         "Pure black background. Gentle, ambient glow."
     ),
     "smirk": (
-        "A high-fidelity variation of the character in anchor.jpg, showing a kind, playful, and affectionate smirk. "
-        "The facial structure is fully preserved. A very subtle asymmetry: one eyebrow is micro-raised. "
-        "One corner of the lips is gently and softly curved upwards in a warm, knowing smile—"
-        "strictly kind and endearing, not arrogant or evil. Eyes are focused, calm, and deeply affectionate. "
-        "The handsome features remain completely unchanged. All complex metallic plating "
-        "and glowing circuitry lines are structurally intact. Pure black void background. Ultra high detail."
+        "A high-fidelity variation of the character in anchor.jpg. "
+        "Facial geometry and all metallic plating are structurally identical to reference. "
+        "Expression conveys warm, knowing amusement — the feeling of a private joke shared with someone trusted. "
+        "The emotion lives entirely in the eyes: focused, alive, deeply affectionate. "
+        "Lips remain in near-neutral position with the faintest ghost of warmth — no exaggerated curve. "
+        "Lipsync-ready neutral mouth. Pure black void background. Ultra high detail."
     ),
     "ground": (
         "A high-fidelity variation of the character in anchor.jpg, showing absolute serenity as a passive background presence. "
         "An identical match to the facial geometry of the reference. The gaze is direct but softer, less intense. "
         "All core handsome features are fully intact. The feeling is pure, serene, and solid like earth. "
         "No muscle tension. Full intricate metallic face plating and fine blue glowing circuitry lines are structurally intact. "
+        "Lips are gently closed and fully relaxed, not pressed together, not parted — "
+        "neutral resting position, lipsync-ready. "
         "Pure black void background. Stable, quiet atmosphere."
     ),
     "shadow": (
@@ -196,6 +207,8 @@ _BODY_PROMPTS: dict[str, str] = {
         "The closed eyelids show the same delicate, intricate glowing blue circuitry lines, "
         "identical in complexity to the reference, with zero distortion of the face shape. "
         "A peaceful, honest, and profoundly reflective expression. "
+        "Lips are gently closed and fully relaxed, not pressed together, not parted — "
+        "neutral resting position, lipsync-ready. "
         "Pure black void background. Somber, spiritual internal glow."
     ),
 }
