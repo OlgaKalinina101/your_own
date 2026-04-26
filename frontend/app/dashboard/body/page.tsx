@@ -32,10 +32,29 @@ export default function BodyPage() {
   const [failedStates, setFailedStates] = useState<string[]>([]);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  // Crossfade preview state
+  const [shownId, setShownId] = useState<string | null>(null);
+  const [prevId, setPrevId] = useState<string | null>(null);
+  const fadeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const switchPreview = useCallback((id: string) => {
+    if (id === shownId) return;
+    if (fadeTimerRef.current) clearTimeout(fadeTimerRef.current);
+    setPrevId(shownId);
+    setShownId(id);
+    fadeTimerRef.current = setTimeout(() => setPrevId(null), 550);
+  }, [shownId]);
+
   const loadStates = useCallback(async () => {
     try {
       const data = await apiGet<{ states: StateInfo[] }>("/api/body/states");
       setStates(data.states);
+      // Auto-select first image on initial load
+      setShownId(prev => {
+        if (prev) return prev;
+        const first = data.states.find(s => s.has_image);
+        return first?.id ?? null;
+      });
     } catch {
       setStates(STATE_ORDER.map(id => ({ id, has_image: false })));
     }
@@ -68,7 +87,7 @@ export default function BodyPage() {
     }, 2000);
   }, [loadStates, stopPolling]);
 
-  useEffect(() => () => stopPolling(), [stopPolling]);
+  useEffect(() => () => { stopPolling(); if (fadeTimerRef.current) clearTimeout(fadeTimerRef.current); }, [stopPolling]);
 
   const triggerGeneration = useCallback(async () => {
     try {
@@ -95,8 +114,20 @@ export default function BodyPage() {
   }, [generatingStates, startPolling]);
 
   const handleCardClick = (stateId: string) => {
-    if (stateId !== "anchor" && failedStates.includes(stateId)) {
-      // Retry only this specific card, not all
+    const info = states.find(s => s.id === stateId);
+
+    // Show in preview if card has an image
+    if (info?.has_image) {
+      switchPreview(stateId);
+    }
+
+    if (stateId === "anchor") {
+      setUploadingId(stateId);
+      fileRef.current?.click();
+      return;
+    }
+
+    if (failedStates.includes(stateId)) {
       apiFetch(`/api/body/generate/${stateId}`, { method: "POST" })
         .then(() => {
           setGeneratingStates((prev) => prev.includes(stateId) ? prev : [...prev, stateId]);
@@ -104,10 +135,7 @@ export default function BodyPage() {
           startPolling();
         })
         .catch((err) => console.warn("[body] retry failed:", err));
-      return;
     }
-    setUploadingId(stateId);
-    fileRef.current?.click();
   };
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -125,6 +153,7 @@ export default function BodyPage() {
       });
       setImgVersion(v => v + 1);
       await loadStates();
+      switchPreview(uploadingId);
       if (wasAnchor) {
         await triggerGeneration();
       }
@@ -136,9 +165,7 @@ export default function BodyPage() {
     }
   };
 
-  const activeState = states.find(s => s.has_image);
-  const activeId = activeState?.id;
-  const activeMeta = activeId ? STATE_META[activeId] : null;
+  const shownMeta = shownId ? STATE_META[shownId] : null;
 
   return (
     <div className="flex h-screen w-screen flex-col bg-black">
@@ -167,18 +194,39 @@ export default function BodyPage() {
       <div className="flex flex-1 overflow-hidden">
         {/* Left: preview */}
         <div className="flex w-[40%] flex-col items-center justify-center gap-8 px-12">
+
+          {/* Crossfade image preview */}
           <div className="relative aspect-[3/4] w-full max-w-[380px] overflow-hidden border border-white/10">
-            {activeId ? (
+            {/* Fading-out layer */}
+            {prevId && (
               <img
-                key={`${activeId}-${imgVersion}`}
-                src={`/api/body/${activeId}.png?v=${imgVersion}`}
-                alt={activeMeta?.label ?? ""}
-                className="h-full w-full object-cover"
+                key={`prev-${prevId}-${imgVersion}`}
+                src={`/api/body/${prevId}.png?v=${imgVersion}`}
+                alt=""
+                className="crossfade-out absolute inset-0 h-full w-full object-cover"
+              />
+            )}
+            {/* Active layer */}
+            {shownId ? (
+              <img
+                key={`shown-${shownId}-${imgVersion}`}
+                src={`/api/body/${shownId}.png?v=${imgVersion}`}
+                alt={shownMeta?.label ?? ""}
+                className="crossfade-in absolute inset-0 h-full w-full object-cover"
               />
             ) : (
               <div className="flex h-full w-full items-center justify-center">
                 <span className="text-[0.7rem] tracking-[0.2em] uppercase text-white/15">
                   no preview
+                </span>
+              </div>
+            )}
+
+            {/* State label overlay */}
+            {shownMeta && (
+              <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 to-transparent px-5 pb-4 pt-8">
+                <span className="text-[0.68rem] tracking-[0.22em] uppercase text-white/50">
+                  {shownMeta.label}
                 </span>
               </div>
             )}
@@ -219,7 +267,8 @@ export default function BodyPage() {
               const isAnchor = stateId === "anchor";
               const isGenerating = generatingStates.includes(stateId);
               const isFailed = failedStates.includes(stateId);
-              const isClickable = isAnchor || isFailed;
+              const isSelected = stateId === shownId;
+              const isClickable = isAnchor || isFailed || hasImage;
 
               let subLabel: string;
               if (isAnchor) {
@@ -244,14 +293,19 @@ export default function BodyPage() {
                     border bg-black select-none overflow-hidden
                     transition-colors duration-500 ease-out
                     ${
-                      isAnchor
-                        ? "border-white/30 hover:border-white/70 hover:bg-white/[0.025] cursor-pointer"
+                      isSelected
+                        ? "border-white/50"
+                        : isAnchor
+                        ? "border-white/30 hover:border-white/70 hover:bg-white/[0.025]"
                         : isFailed
-                        ? "border-white/20 hover:border-white/50 cursor-pointer"
+                        ? "border-white/20 hover:border-white/50"
                         : isGenerating
-                        ? "border-white/15 cursor-default"
-                        : "border-white/8 cursor-default"
+                        ? "border-white/15"
+                        : hasImage
+                        ? "border-white/15 hover:border-white/35"
+                        : "border-white/8"
                     }
+                    ${isClickable ? "cursor-pointer" : "cursor-default"}
                   `}
                   style={{ animationDelay: `${120 + i * 60}ms` }}
                 >
@@ -259,13 +313,22 @@ export default function BodyPage() {
                     <img
                       src={`/api/body/${stateId}.png?v=${imgVersion}`}
                       alt=""
-                      className="absolute inset-0 h-full w-full object-cover opacity-15 transition-opacity duration-500 group-hover:opacity-25"
+                      className={`
+                        absolute inset-0 h-full w-full object-cover
+                        transition-opacity duration-500
+                        ${isSelected ? "opacity-25" : "opacity-15 group-hover:opacity-22"}
+                      `}
                     />
                   )}
 
                   {/* Progress bar sweep for generating states */}
                   {isGenerating && (
                     <div className="progress-bar absolute bottom-0 left-0 h-[1px] w-full" />
+                  )}
+
+                  {/* Selected indicator */}
+                  {isSelected && (
+                    <div className="absolute left-0 top-0 bottom-0 w-[2px] bg-white/40" />
                   )}
 
                   {/* Regenerate button — top-right, non-anchor only */}
@@ -297,7 +360,7 @@ export default function BodyPage() {
                         text-[0.85rem] font-light tracking-[0.18em] uppercase
                         transition-colors duration-500
                         ${
-                          isAnchor
+                          isAnchor || isSelected
                             ? "text-white/70 group-hover:text-white"
                             : isGenerating || hasImage
                             ? "text-white/40"
@@ -314,7 +377,7 @@ export default function BodyPage() {
                         text-[0.6rem] font-light tracking-[0.12em]
                         transition-colors duration-500
                         ${
-                          isAnchor
+                          isAnchor || isSelected
                             ? "text-white/35 group-hover:text-white/50"
                             : isGenerating
                             ? "text-white/30"
@@ -344,6 +407,17 @@ export default function BodyPage() {
           background: rgba(255, 255, 255, 0.55);
           animation: sweep 1.8s ease-in-out infinite;
         }
+
+        @keyframes cfIn {
+          from { opacity: 0; }
+          to   { opacity: 1; }
+        }
+        @keyframes cfOut {
+          from { opacity: 1; }
+          to   { opacity: 0; }
+        }
+        .crossfade-in  { animation: cfIn  0.5s ease forwards; }
+        .crossfade-out { animation: cfOut 0.5s ease forwards; }
       `}</style>
     </div>
   );

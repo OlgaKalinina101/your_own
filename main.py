@@ -166,7 +166,7 @@ _FACE_LOCK_PREFIX = (
 
 _BODY_PROMPTS: dict[str, str] = {
     "listener": (
-        "Expression: the head is subtly but distinctly tilted to one side in a gentle, receptive listening posture. "
+        "Expression: the head is visibly tilted 10–15 degrees to the right in a gentle, receptive listening posture. "
         "The eyes are open, focused, and attentive — conveying deep, empathetic attention. "
         "No other facial change. No muscle distortion. "
         "Lips are gently closed and fully relaxed, not pressed together, not parted — "
