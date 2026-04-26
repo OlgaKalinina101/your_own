@@ -96,7 +96,14 @@ export default function BodyPage() {
 
   const handleCardClick = (stateId: string) => {
     if (stateId !== "anchor" && failedStates.includes(stateId)) {
-      triggerGeneration();
+      // Retry only this specific card, not all
+      apiFetch(`/api/body/generate/${stateId}`, { method: "POST" })
+        .then(() => {
+          setGeneratingStates((prev) => prev.includes(stateId) ? prev : [...prev, stateId]);
+          setFailedStates((prev) => prev.filter((s) => s !== stateId));
+          startPolling();
+        })
+        .catch((err) => console.warn("[body] retry failed:", err));
       return;
     }
     setUploadingId(stateId);

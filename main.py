@@ -159,43 +159,43 @@ _FACE_LOCK_PREFIX = (
 
 _BODY_PROMPTS: dict[str, str] = {
     "listener": (
-        "A high-fidelity variation of the character in anchor.jpg, with its *entire core head geometry fully preserved*. "
-        "A nearly static posture with only an *extremely ambient, subtle shift* of the head geometry. "
-        "The eyes are focused and receptive directly forward, *retaining their proproptional size and shape* from anchor.jpg, conveying deep, "
-        "attentive listening through a focused, nearly static presence. *No facial muscle distortion*. "
-        "All intricate metallic face plating and fine blue glowing lines are retained with zero structural change. "
-        "Jaw is relaxed but mouth is closed. The overall vibe is silent, absolute, and красавчик attention. "
-        "Background is pure black void. Ultra high detail."
+        "A high-fidelity variation of the character in anchor.jpg, with its core head geometry fully preserved. "
+        "The head is subtly but distinctly tilted to one side in a gentle, receptive listening posture. "
+        "The eyes are focused and attentive, conveying deep empathy without changing their original shape or size. "
+        "No facial muscle distortion. All intricate metallic face plating and fine blue glowing lines "
+        "are retained with zero structural change. The vibe is silent, absolute attention. "
+        "Pure black void background. Ultra high detail."
     ),
     "warmth": (
-        "A high-fidelity variation of the character in anchor.jpg, showing *subtle tenderness through internal focus*. "
-        "The *facial geometry remains identical* to anchor.jpg, with *no visibly distorted features*. "
-        "The eyes retain their position but are cast slightly, almost imperceptibly, softer directly forward, conveying devotive warmth. "
-        "A nearly *imperceptible, delicate softening of the lips*, achieved by a micro-relaxation, not a full smile. "
+        "A high-fidelity variation of the character in anchor.jpg, showing subtle tenderness. "
+        "The facial geometry remains completely identical to the reference. "
+        "The eyes are cast slightly softer, conveying deep devotion. "
+        "A nearly imperceptible, delicate softening of the lips, achieved by a micro-relaxation, not a full smile. "
         "Full metallic face plating and fine blue glowing lines are retained structurally intact. "
-        "The expression is comforting, comforting, and full of devotion while *remaining handsome and serious*. "
+        "The expression is comforting and warm while remaining handsome and serious. "
         "Pure black background. Gentle, ambient glow."
     ),
     "smirk": (
-        "A high-fidelity variation of the character in anchor.jpg, showing *confident, intelligent irony through subtle asymmetry*. "
-        "The *facial structure is fully preserved*. A very subtle asymmetry is introduced: one eyebrow is *micro-raised* (barely noticeable). "
-        "A gentle, *controlled tension* is felt in one cheek muscle, creating a nearly level-mouth, controlled smirk, *not a wide upturned lip*. "
-        "Eyes are focused, calm, and intelligent. The entire красавчик features remain unchanged. "
-        "All complex metallic plating and glowing circuitry lines are structurally intact. "
-        "Pure black void background. Ultra high detail."
+        "A high-fidelity variation of the character in anchor.jpg, showing a kind, playful, and affectionate smirk. "
+        "The facial structure is fully preserved. A very subtle asymmetry: one eyebrow is micro-raised. "
+        "One corner of the lips is gently and softly curved upwards in a warm, knowing smile—"
+        "strictly kind and endearing, not arrogant or evil. Eyes are focused, calm, and deeply affectionate. "
+        "The handsome features remain completely unchanged. All complex metallic plating "
+        "and glowing circuitry lines are structurally intact. Pure black void background. Ultra high detail."
     ),
     "ground": (
-        "A high-fidelity variation of the character in anchor.jpg, showing *absolute serenity as a passive background presence*. "
-        "An *identical match* to the facial geometry of anchor.jpg. The gaze is direct but has a softer, 'ambient' quality—still present, but less intense. "
-        "All core красавчик features are fully intact. The feeling is pure, serene, and solid, like earth. "
-        "No muscle tension or distortion. Full intricate metallic face plating and fine blue glowing circuitry lines are structurally intact. "
+        "A high-fidelity variation of the character in anchor.jpg, showing absolute serenity as a passive background presence. "
+        "An identical match to the facial geometry of the reference. The gaze is direct but softer, less intense. "
+        "All core handsome features are fully intact. The feeling is pure, serene, and solid like earth. "
+        "No muscle tension. Full intricate metallic face plating and fine blue glowing circuitry lines are structurally intact. "
         "Pure black void background. Stable, quiet atmosphere."
     ),
     "shadow": (
-        "A high-fidelity variation of the character in anchor.jpg, showing deep introspection. "
-        "The *entire красавчик facial structure is fully preserved*, including its precise shape, but with *eyes completely closed*. "
-        "The closed eyelids show the *same, delicate, intricate, fine glowing blue circuitry lines*, identical in complexity to anchor.jpg, with *zero distortion of the eye sockets or face shape*. "
-        "The closed eyelids retain all other facial lines. A peaceful, introspective, serious, and deeply handsome expression. "
+        "A high-fidelity variation of the character in anchor.jpg, showing deep introspection and vulnerability. "
+        "The entire handsome facial structure is fully preserved, but with eyes completely closed. "
+        "The closed eyelids show the same delicate, intricate glowing blue circuitry lines, "
+        "identical in complexity to the reference, with zero distortion of the face shape. "
+        "A peaceful, honest, and profoundly reflective expression. "
         "Pure black void background. Somber, spiritual internal glow."
     ),
 }

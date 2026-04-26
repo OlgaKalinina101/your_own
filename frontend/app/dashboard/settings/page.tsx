@@ -32,27 +32,12 @@ const IMAGE_GEN_MODELS = [
   {
     id: "sourceful/riverflow-v2-fast",
     label: "Riverflow V2 Fast",
-    hint: "fastest · face lock via super_resolution_references",
+    hint: "fastest · $0.02–$0.04/img",
   },
   {
     id: "sourceful/riverflow-v2-pro",
     label: "Riverflow V2 Pro",
-    hint: "best quality · face lock via super_resolution_references",
-  },
-  {
-    id: "google/gemini-3.1-flash-image-preview",
-    label: "Gemini 3.1 Flash Image",
-    hint: "balanced · face lock via prompt",
-  },
-  {
-    id: "google/gemini-2.5-flash-image",
-    label: "Gemini 2.5 Flash Image",
-    hint: "balanced · face lock via prompt",
-  },
-  {
-    id: "openai/gpt-5-image",
-    label: "GPT-5 Image",
-    hint: "strong prompt following · face lock via prompt",
+    hint: "best quality · $0.15–$0.33/img",
   },
 ] as const;
 
