@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import aiohttp
-from fastapi import BackgroundTasks, Depends, FastAPI, File, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
@@ -295,15 +295,17 @@ async def _generate_body_image(
             "stream": False,
         }
 
-        # Sourceful-specific face lock: super_resolution_references
-        if model.startswith("sourceful/"):
-            payload["image_config"] = {
-                "super_resolution_references": [f"data:image/png;base64,{anchor_b64}"]
-            }
-
         _body_logger.info("[body] generating %s with %s", state_id, model)
 
-        timeout = aiohttp.ClientTimeout(total=300)
+        # Generous timeout: no overall cap, but 10 min per individual read chunk.
+        # aiohttp's total= counts from session entry which can misfire on slow
+        # image generation responses; explicit sock_read is more reliable.
+        timeout = aiohttp.ClientTimeout(
+            total=None,
+            connect=30,
+            sock_connect=30,
+            sock_read=600,
+        )
         connector = aiohttp.TCPConnector(force_close=True)
         async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
             async with session.post(
@@ -384,24 +386,24 @@ def _load_anchor_and_settings() -> tuple[str, str, str]:
 
 
 @app.post("/api/body/generate")
-async def body_generate(background_tasks: BackgroundTasks, _=Depends(require_auth)):
+async def body_generate(_=Depends(require_auth)):
     api_key, model, anchor_b64 = _load_anchor_and_settings()
 
     queued = []
     for state_id in _BODY_PROMPTS:
         if state_id not in _generating_states:
-            background_tasks.add_task(_generate_body_image, state_id, model, api_key, anchor_b64)
+            # asyncio.create_task runs all 5 generations concurrently in the
+            # event loop, unlike BackgroundTasks which awaits them sequentially.
+            asyncio.create_task(
+                _generate_body_image(state_id, model, api_key, anchor_b64)
+            )
             queued.append(state_id)
 
     return {"ok": True, "queued": queued}
 
 
 @app.post("/api/body/generate/{state_id}")
-async def body_generate_one(
-    state_id: str,
-    background_tasks: BackgroundTasks,
-    _=Depends(require_auth),
-):
+async def body_generate_one(state_id: str, _=Depends(require_auth)):
     if state_id not in _BODY_PROMPTS:
         raise HTTPException(status_code=400, detail=f"Unknown state: {state_id}")
 
@@ -410,7 +412,9 @@ async def body_generate_one(
     if state_id in _generating_states:
         return {"ok": False, "detail": "Already generating."}
 
-    background_tasks.add_task(_generate_body_image, state_id, model, api_key, anchor_b64)
+    asyncio.create_task(
+        _generate_body_image(state_id, model, api_key, anchor_b64)
+    )
     return {"ok": True, "queued": [state_id]}
 
 
