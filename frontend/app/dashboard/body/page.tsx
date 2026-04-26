@@ -116,18 +116,13 @@ export default function BodyPage() {
   const handleCardClick = (stateId: string) => {
     const info = states.find(s => s.id === stateId);
 
-    // Show in preview if card has an image
+    // Show in preview on single click
     if (info?.has_image) {
       switchPreview(stateId);
     }
 
-    if (stateId === "anchor") {
-      setUploadingId(stateId);
-      fileRef.current?.click();
-      return;
-    }
-
-    if (failedStates.includes(stateId)) {
+    // Non-anchor failed: retry on single click
+    if (stateId !== "anchor" && failedStates.includes(stateId)) {
       apiFetch(`/api/body/generate/${stateId}`, { method: "POST" })
         .then(() => {
           setGeneratingStates((prev) => prev.includes(stateId) ? prev : [...prev, stateId]);
@@ -136,6 +131,11 @@ export default function BodyPage() {
         })
         .catch((err) => console.warn("[body] retry failed:", err));
     }
+  };
+
+  const handleAnchorDoubleClick = () => {
+    setUploadingId("anchor");
+    fileRef.current?.click();
   };
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -272,7 +272,7 @@ export default function BodyPage() {
 
               let subLabel: string;
               if (isAnchor) {
-                subLabel = hasImage ? meta.description : "click to upload";
+                subLabel = hasImage ? "double-click to replace" : "double-click to upload";
               } else if (isGenerating) {
                 subLabel = "generating…";
               } else if (isFailed) {
@@ -287,6 +287,7 @@ export default function BodyPage() {
                 <div
                   key={stateId}
                   onClick={isClickable ? () => handleCardClick(stateId) : undefined}
+                  onDoubleClick={isAnchor ? handleAnchorDoubleClick : undefined}
                   className={`
                     anim-card
                     group relative flex flex-col justify-end p-5
