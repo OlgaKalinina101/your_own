@@ -12,6 +12,7 @@
 
 <commands>
 Используй только эти команды, точно в таком формате. В квадратных скобках.
+Все времена в командах — в местном часовом поясе ({timezone_label}).
 
 [SEARCH_MEMORIES: запрос]
 [SEARCH_NOTES: запрос]
@@ -45,6 +46,7 @@ Decide what to do next.
 
 <commands>
 Use only these commands, exactly in this format. In square brackets.
+All times in commands use local timezone ({timezone_label}).
 
 [SEARCH_MEMORIES: query]
 [SEARCH_NOTES: query]

@@ -350,6 +350,7 @@ def _build_awakening_system(
     pending_tasks_block: str,
     cooldown_h: int,
     interval_h: int,
+    timezone_label: str,
 ) -> str:
     wc = workbench_content or ("(пусто)" if lang == "ru" else "(empty)")
     return get_prompt(
@@ -364,25 +365,28 @@ def _build_awakening_system(
         pending_tasks_block=pending_tasks_block,
         cooldown_h=cooldown_h,
         interval_h=interval_h,
+        timezone_label=timezone_label,
     )
 
 
-def _build_continuation(ai_name: str, lang: str, steps_left: int, result: str) -> str:
+def _build_continuation(ai_name: str, lang: str, steps_left: int, result: str, timezone_label: str) -> str:
     return get_prompt(
         f"{_PROMPTS_DIR}/reflection_continuation.md",
         lang=lang,
         ai_name=ai_name,
         steps_left=steps_left,
         result=result,
+        timezone_label=timezone_label,
     )
 
 
-def _build_after_action(ai_name: str, lang: str, steps_left: int) -> str:
+def _build_after_action(ai_name: str, lang: str, steps_left: int, timezone_label: str) -> str:
     return get_prompt(
         f"{_PROMPTS_DIR}/reflection_after_action.md",
         lang=lang,
         ai_name=ai_name,
         steps_left=steps_left,
+        timezone_label=timezone_label,
     )
 
 
@@ -507,7 +511,7 @@ async def run(account_id: str, api_key: str) -> None:
         recent_tasks = await get_recent_tasks(db, account_id, hours=24)
         pending_tasks_block = _build_pending_tasks_block(lang, recent_tasks)
 
-        from infrastructure.settings_store import now_local_str
+        from infrastructure.settings_store import now_local_str, tz_label
         now_str = now_local_str()
 
         awakening_system = _build_awakening_system(
@@ -521,6 +525,7 @@ async def run(account_id: str, api_key: str) -> None:
             pending_tasks_block=pending_tasks_block,
             cooldown_h=cooldown_h,
             interval_h=interval_h,
+            timezone_label=tz_label(),
         )
 
         # Seed with a minimal user turn so providers that require at least one
@@ -614,12 +619,13 @@ async def run(account_id: str, api_key: str) -> None:
                     "role": "user",
                     "content": _build_continuation(
                         ai_name, lang, new_steps_left, "\n".join(search_results),
+                        timezone_label=tz_label(),
                     ),
                 })
             elif had_writes:
                 messages.append({
                     "role": "user",
-                    "content": _build_after_action(ai_name, lang, new_steps_left),
+                    "content": _build_after_action(ai_name, lang, new_steps_left, timezone_label=tz_label()),
                 })
 
         logger.info("[reflection:%s] reflection done in %d steps", account_id, step)

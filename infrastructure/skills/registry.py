@@ -87,7 +87,7 @@ def build_prompt(lang: str, skills: list[SkillBase] | None = None, **kwargs) -> 
 
     footer = get_prompt(str(_SKILLS_DIR / "_prompt_footer.md"), lang=lang, section="note")
 
-    return "\n\n".join([header, *fragments, footer])
+    return "\n\n".join([header, *fragments, footer]) + "\n</skills>"
 
 
 def get_trailing_hint(lang: str) -> str:

@@ -103,6 +103,8 @@ VISION_MODELS = {
     "anthropic/claude-opus-4.6",
     "openai/gpt-5.1",
     "openai/gpt-5.4",
+    "openai/gpt-5.5",
+    "xiaomi/mimo-v2-omni",
 }
 
 

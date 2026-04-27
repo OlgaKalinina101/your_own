@@ -14,9 +14,9 @@
 {identity_excerpt}
 </identity>
 
-<journal>
+<workbench>
 {recent_workbench}
-</journal>
+</workbench>
 
 <context>
 Сейчас: {current_time}
@@ -59,6 +59,8 @@ SKIP
 </instructions>
 
 <commands>
+Все времена в командах — в местном часовом поясе ({timezone_label}).
+
 [SCHEDULE_MESSAGE: YYYY-MM-DD HH:MM | текст сообщения]
 [CANCEL_MESSAGE: YYYY-MM-DD HH:MM]
 [CANCEL_ALL_SCHEDULED]
@@ -86,9 +88,9 @@ You just sent a message.
 {identity_excerpt}
 </identity>
 
-<journal>
+<workbench>
 {recent_workbench}
-</journal>
+</workbench>
 
 <context>
 Now: {current_time}
@@ -131,6 +133,8 @@ You can combine a note and commands.
 </instructions>
 
 <commands>
+All times in commands use local timezone ({timezone_label}).
+
 [SCHEDULE_MESSAGE: YYYY-MM-DD HH:MM | message text]
 [CANCEL_MESSAGE: YYYY-MM-DD HH:MM]
 [CANCEL_ALL_SCHEDULED]

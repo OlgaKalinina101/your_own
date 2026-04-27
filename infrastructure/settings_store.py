@@ -60,6 +60,18 @@ def now_local() -> datetime:
     return datetime.now(get_user_tz())
 
 
+def tz_label() -> str:
+    """Return a human-readable timezone label, e.g. ``Asia/Yerevan, UTC+4``."""
+    tz = get_user_tz()
+    offset = datetime.now(tz).utcoffset()
+    total_seconds = int(offset.total_seconds()) if offset else 0
+    sign = "+" if total_seconds >= 0 else "-"
+    hours, remainder = divmod(abs(total_seconds), 3600)
+    minutes = remainder // 60
+    utc_part = f"UTC{sign}{hours}" if minutes == 0 else f"UTC{sign}{hours}:{minutes:02d}"
+    return f"{tz}, {utc_part}"
+
+
 def now_local_str() -> str:
     """Return current local time formatted as ``YYYY-MM-DD HH:MM (TZ)``."""
     dt = now_local()

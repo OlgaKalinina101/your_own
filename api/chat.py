@@ -132,12 +132,7 @@ def _build_chroma_block(facts: list[dict], language: str) -> str:
     Format Chroma facts into a memory block injected as an assistant message
     before the current user turn. Written as the AI's inner recollections.
     """
-    if language == "ru":
-        intro = "Твои воспоминания:"
-    else:
-        intro = "Your memories:"
-
-    lines: list[str] = [intro, ""]
+    lines: list[str] = []
     for fact in facts:
         meta = fact.get("metadata") or {}
         created_at_str = meta.get("created_at")
@@ -155,7 +150,8 @@ def _build_chroma_block(facts: list[dict], language: str) -> str:
         text = fact.get("text", "").strip()
         lines.append(f"— ({time_label}) {text}")
 
-    return "\n".join(lines).strip()
+    body = "\n".join(lines).strip()
+    return f"<memory>\n{body}\n</memory>"
 
 
 
@@ -412,16 +408,14 @@ async def chat(
             logger.warning("[chat] Chroma retrieval failed: %s", exc)
 
     # Current time for SCHEDULE_MESSAGE and general awareness
+    from infrastructure.settings_store import tz_label
     _now_str = now_local_str()
+    _tz_label = tz_label()
 
     # Recent workbench entries for context
     _recent_wb = wb.get_recent_entries(account_id or "default")
     _workbench_block = (
-        (
-            "Твои последние записи из внутреннего журнала:\n" + _recent_wb + "\n\n"
-            if prompt_language == "ru"
-            else "Your recent entries from the inner journal:\n" + _recent_wb + "\n\n"
-        )
+        f"<workbench>\n{_recent_wb}\n</workbench>\n\n"
         if _recent_wb else ""
     )
 
@@ -432,8 +426,10 @@ async def chat(
         skills=enabled_skills,
         now_str=_now_str,
         workbench_block=_workbench_block,
+        timezone_label=_tz_label,
     )
-    combined_system_prompt = (system_prompt or "") + skill_instructions
+    _identity_block = f"<identity>\n{system_prompt}\n</identity>" if system_prompt else ""
+    combined_system_prompt = _identity_block + skill_instructions
     logger.info(
         "[chat] prompt assembled system_chars=%d memory_block=%s",
         len(combined_system_prompt),

@@ -29,7 +29,7 @@ from infrastructure.autonomy.cmd_parser import (
 )
 from infrastructure.autonomy.helpers import detect_lang, get_ai_name, make_llm_client, save_push_message
 from infrastructure.llm.prompt_loader import get_prompt
-from infrastructure.settings_store import now_local_str
+from infrastructure.settings_store import now_local_str, tz_label
 
 from infrastructure.logging.logger import setup_logger
 
@@ -255,6 +255,7 @@ async def run_post_analysis(
         identity_excerpt=identity_text,
         recent_workbench=recent_wb,
         pending_pushes_block=pending_block,
+        timezone_label=tz_label(),
     )
 
     logger.info("[post_analyzer:%s] starting, lang=%s history_pairs=%d", account_id, lang, len(recent_pairs))

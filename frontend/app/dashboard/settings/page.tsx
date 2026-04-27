@@ -12,18 +12,24 @@ import {
 } from "@/lib/api";
 
 const MODELS = [
-  { id: "anthropic/claude-opus-4.6",  label: "Claude Opus 4.6",  vision: true  },
-  { id: "z-ai/glm-5",                 label: "GLM 5",             vision: false },
-  { id: "openai/gpt-5.1",             label: "GPT 5.1",           vision: true  },
-  { id: "openai/gpt-5.4",             label: "GPT 5.4",           vision: true  },
-  { id: "moonshotai/kimi-k2.5",       label: "Kimi K2.5",         vision: false },
-  { id: "meta-llama/llama-4-maverick", label: "Llama 4 Maverick",  vision: false },
-  { id: "meta-llama/llama-4-scout",    label: "Llama 4 Scout",     vision: false },
-  { id: "google/gemini-3-pro-preview", label: "Gemini 3 Pro Preview", vision: false },
-  { id: "qwen/qwen3-max",              label: "Qwen 3",            vision: false },
-  { id: "deepseek/deepseek-v3.2-exp", label: "Deepseek V3.2 Exp", vision: false },
-  { id: "xiaomi/mimo-v2-pro",         label: "MiMo V2 Pro",       vision: false },
-  { id: "mistralai/mistral-large",    label: "Mistral Large",     vision: false },
+  { id: "anthropic/claude-opus-4.6",      label: "Claude Opus 4.6",       vision: true  },
+  { id: "openai/gpt-5.5",                 label: "GPT 5.5",               vision: true  },
+  { id: "openai/gpt-5.4",                 label: "GPT 5.4",               vision: true  },
+  { id: "openai/gpt-5.1",                 label: "GPT 5.1",               vision: true  },
+  { id: "google/gemini-3.1-pro-preview",  label: "Gemini 3.1 Pro",        vision: false },
+  { id: "google/gemini-3-pro-preview",    label: "Gemini 3 Pro",          vision: false },
+  { id: "deepseek/deepseek-v4-pro",       label: "DeepSeek V4 Pro",       vision: false },
+  { id: "deepseek/deepseek-v4-flash",     label: "DeepSeek V4 Flash",     vision: false },
+  { id: "z-ai/glm-5.1",                   label: "GLM 5.1",               vision: false },
+  { id: "z-ai/glm-5",                     label: "GLM 5",                 vision: false },
+  { id: "qwen/qwen3.6-plus",              label: "Qwen 3.6 Plus",         vision: false },
+  { id: "qwen/qwen3-max",                 label: "Qwen 3 Max",            vision: false },
+  { id: "xiaomi/mimo-v2-omni",            label: "MiMo V2 Omni",          vision: true  },
+  { id: "xiaomi/mimo-v2-pro",             label: "MiMo V2 Pro",           vision: false },
+  { id: "moonshotai/kimi-k2.5",           label: "Kimi K2.5",             vision: false },
+  { id: "meta-llama/llama-4-maverick",    label: "Llama 4 Maverick",      vision: false },
+  { id: "meta-llama/llama-4-scout",       label: "Llama 4 Scout",         vision: false },
+  { id: "mistralai/mistral-large",        label: "Mistral Large",         vision: false },
 ] as const;
 
 type ModelId = (typeof MODELS)[number]["id"];
