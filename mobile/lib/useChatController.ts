@@ -11,6 +11,7 @@ const HISTORY_BATCH = 25;
 const MAX_IMAGES = 4;
 
 const VISION_MODELS = new Set([
+  "anthropic/claude-fable-5",
   "anthropic/claude-opus-4.6",
   "openai/gpt-5.1",
   "openai/gpt-5.4",
