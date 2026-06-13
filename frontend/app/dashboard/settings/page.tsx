@@ -14,6 +14,7 @@ import {
 const MODELS = [
   { id: "anthropic/claude-fable-5",       label: "Claude Fable 5",        vision: true  },
   { id: "anthropic/claude-opus-4.6",      label: "Claude Opus 4.6",       vision: true  },
+  { id: "anthropic/claude-sonnet-4.6",    label: "Claude Sonnet 4.6",     vision: true  },
   { id: "openai/gpt-5.5",                 label: "GPT 5.5",               vision: true  },
   { id: "openai/gpt-5.4",                 label: "GPT 5.4",               vision: true  },
   { id: "openai/gpt-5.1",                 label: "GPT 5.1",               vision: true  },

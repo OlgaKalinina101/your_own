@@ -102,6 +102,7 @@ def _append_debug_row(
 VISION_MODELS = {
     "anthropic/claude-fable-5",
     "anthropic/claude-opus-4.6",
+    "anthropic/claude-sonnet-4.6",
     "openai/gpt-5.1",
     "openai/gpt-5.4",
     "openai/gpt-5.5",
