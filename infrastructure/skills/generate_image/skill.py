@@ -15,7 +15,12 @@ _MODEL_MAP = {
     "gpt5": "openai/gpt-5-image",
     "gemini": "google/gemini-3-pro-image-preview",
     "flux": "black-forest-labs/flux.2-pro",
+    "grok": "x-ai/grok-imagine-image-quality",
 }
+
+# Any image-generation failure (moderation, provider error, empty result)
+# falls back to Grok, which is the most permissive on romance/intimacy.
+_FALLBACK_MODEL = "x-ai/grok-imagine-image-quality"
 
 
 class GenerateImageSkill(SkillBase):
@@ -23,8 +28,8 @@ class GenerateImageSkill(SkillBase):
     cmd_name = "GENERATE_IMAGE"
     display = {"en": "Image Generation", "ru": "Генерация изображений"}
     description = {
-        "en": "AI creates images using GPT-5 Image, Gemini 3 Pro, or FLUX.",
-        "ru": "AI создаёт изображения через GPT-5 Image, Gemini 3 Pro или FLUX.",
+        "en": "AI creates images using GPT-5 Image, Gemini 3 Pro, FLUX, or Grok.",
+        "ru": "AI создаёт изображения через GPT-5 Image, Gemini 3 Pro, FLUX или Grok.",
     }
     example = "[GENERATE_IMAGE: gpt5 | night sky over Yerevan rooftops]"
     action_type = "inline"
@@ -36,6 +41,15 @@ class GenerateImageSkill(SkillBase):
 
     def pre_sse_events(self, match: re.Match) -> list[tuple[str, dict]]:
         return [("image_start", {"prompt": match.group(1).strip()})]
+
+    async def _try_generate(self, ctx: SkillContext, prompt: str, model_id: str) -> str | None:
+        """Call the image model, swallowing exceptions so the caller can fall back."""
+        try:
+            return await ctx.client.generate_image(prompt=prompt, model=model_id)
+        except Exception as exc:
+            ctx.dbg(f"GENERATE_IMAGE EXCEPTION ({model_id}): {type(exc).__name__}: {exc}")
+            ctx.logger.error("[generate_image] exception on %s: %s", model_id, exc)
+            return None
 
     async def execute(self, match: re.Match, ctx: SkillContext) -> SkillResult:
         raw = match.group(1).strip()
@@ -51,17 +65,26 @@ class GenerateImageSkill(SkillBase):
         ctx.logger.info("[generate_image] model=%s prompt=%s", model_id, prompt[:120])
         ctx.dbg(f"GENERATE_IMAGE model={model_id} prompt={prompt[:80]}")
 
-        try:
-            data_url = await ctx.client.generate_image(prompt=prompt, model=model_id)
-        except Exception as exc:
-            ctx.dbg(f"GENERATE_IMAGE EXCEPTION: {type(exc).__name__}: {exc}")
-            ctx.logger.error("[generate_image] exception: %s", exc)
-            return SkillResult(sse_events=[("image_cancel", {})])
+        data_url = await self._try_generate(ctx, prompt, model_id)
+        used_model = model_id
+
+        # Fallback: on ANY failure (moderation, provider error, empty result),
+        # retry with Grok — unless Grok was already the primary model.
+        if not data_url and model_id != _FALLBACK_MODEL:
+            ctx.logger.warning(
+                "[generate_image] model=%s failed, falling back to %s", model_id, _FALLBACK_MODEL
+            )
+            ctx.dbg(f"GENERATE_IMAGE fallback {model_id} -> {_FALLBACK_MODEL}")
+            data_url = await self._try_generate(ctx, prompt, _FALLBACK_MODEL)
+            if data_url:
+                used_model = _FALLBACK_MODEL
 
         ctx.dbg(f"GENERATE_IMAGE result={'OK len=' + str(len(data_url)) if data_url else 'None'}")
         if not data_url:
-            ctx.logger.warning("[generate_image] returned no data")
+            ctx.logger.warning("[generate_image] returned no data (incl. fallback)")
             return SkillResult(sse_events=[("image_cancel", {})])
+
+        model_id = used_model
 
         try:
             if data_url.startswith("data:"):

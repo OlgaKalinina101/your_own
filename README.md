@@ -297,7 +297,7 @@ The AI doesn't just respond — it acts. During a conversation, the model invoke
 |-------|-------------|
 | **`[SAVE_MEMORY: fact]`** | Extracts a key fact, categorizes it, rates importance 1–4, deduplicates via AI, stores in ChromaDB |
 | **`[SEARCH_MEMORIES: query]`** | Searches raw conversation history in pgvector. Results are fed back as a continuation prompt — AI replies with awareness of what it found. Up to 5 searches per reply |
-| **`[WEB_SEARCH: query]`** | Searches the live web for current information (weather, news, prices, addresses). Uses OpenRouter's `:online` model suffix |
+| **`[WEB_SEARCH: query]`** | Searches the live web for current information (weather, news, prices, addresses). Uses OpenRouter's `openrouter:web_search` server tool |
 | **`[GENERATE_IMAGE: model \| prompt]`** | Generates an image using `gpt5` (GPT-5 Image — photorealistic) or `gemini` (Gemini 3 Pro — design, diagrams, text). AI chooses the model and writes the prompt |
 | **`[SCHEDULE_MESSAGE: datetime \| text]`** | Schedules a push notification for later. The AI decides when and what to send — a reminder, a thought, a check-in |
 

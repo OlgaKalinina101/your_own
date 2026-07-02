@@ -33,7 +33,7 @@ This document describes the full data flow of the system — from a chat message
 │  Agentic loop — AI can emit skill commands mid-stream:               │
 │                                                                      │
 │  [SEARCH_MEMORIES: q]  → pgvector search → results injected back     │
-│  [WEB_SEARCH: q]       → OpenRouter :online → results injected back  │
+│  [WEB_SEARCH: q]       → openrouter:web_search tool → grounded reply │
 │  [SAVE_MEMORY: hint]   → extract + rate + dedup → ChromaDB           │
 │  [GENERATE_IMAGE: m|p] → image API → PNG saved → shown inline        │
 │  [SCHEDULE_MESSAGE: t] → autonomy_tasks table (PostgreSQL)           │

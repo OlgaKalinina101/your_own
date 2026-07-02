@@ -3,8 +3,9 @@ LLMClient — OpenRouter streaming client.
 
 Supports:
 - Text-only and vision models (base64 image in messages)
-- Web search via OpenRouter native :online suffix — works for any model,
-  no tool calls or third-party search needed
+- Web search via OpenRouter's openrouter:web_search server tool — works for any
+  model, OpenRouter runs the search server-side (the :online suffix and the
+  plugins:[{id:"web"}] form are both deprecated as of 2026)
 - SSE streaming: yields text chunks as they arrive
 - Image generation via modalities: ["image", "text"] (non-streaming call)
 
@@ -76,6 +77,7 @@ def _append_debug_row(
     messages: list,
     response: str,
     web_search: bool = False,
+    citations: Optional[list] = None,
     error: Optional[str] = None,
 ) -> None:
     try:
@@ -87,6 +89,7 @@ def _append_debug_row(
             "messages": _sanitize_messages(messages),
             "response": _truncate(response),
             "web_search": web_search,
+            "citations": citations or None,
             "error": error,
         }
         line = json.dumps(row, ensure_ascii=False) + "\n"
@@ -132,17 +135,13 @@ class LLMClient:
             "X-Title": "Your Own",
         }
 
-    def _resolve_model(self, web_search: bool) -> str:
-        """
-        Appends :online to the model slug when web search is requested.
-        OpenRouter handles the rest — native search for Anthropic/OpenAI/xAI,
-        Exa-powered search for all other models.
-        """
-        if not web_search:
-            return self.model
-        # Strip any existing :online to avoid duplication
-        base = self.model.rstrip(":online").removesuffix(":online")
-        return f"{base}:online"
+    # OpenRouter server tool that runs web search server-side and feeds the
+    # results back to the model, which cites them via url_citation annotations.
+    # Replaces the deprecated :online suffix / plugins:[{id:"web"}] form.
+    _WEB_SEARCH_TOOL = {
+        "type": "openrouter:web_search",
+        "parameters": {"max_results": 5},
+    }
 
     def _build_messages(
         self,
@@ -197,10 +196,11 @@ class LLMClient:
     ) -> AsyncIterator[str]:
         """
         Streams text chunks from OpenRouter.
-        When web_search=True, appends :online to the model slug —
-        OpenRouter automatically injects real-time web results.
+        When web_search=True, attaches the openrouter:web_search server tool —
+        OpenRouter runs the search server-side and the model grounds its reply
+        in the results (citations arrive as url_citation annotations).
         """
-        model = self._resolve_model(web_search)
+        model = self.model
         built_messages = self._build_messages(messages, image_items, geo, system_prompt)
         logger.info(
             "[LLMClient] stream start model=%s web_search=%s messages=%d has_system=%s images=%d",
@@ -218,8 +218,13 @@ class LLMClient:
             "top_p": self.top_p,
             "stream": True,
         }
+        if web_search:
+            payload["tools"] = [self._WEB_SEARCH_TOOL]
 
         chunks: list[str] = []
+        citations: list[dict] = []
+        _seen_urls: set[str] = set()
+        web_search_requests = 0
         async with aiohttp.ClientSession() as session:
             async with session.post(
                 f"{OPENROUTER_BASE}/chat/completions",
@@ -256,16 +261,40 @@ class LLMClient:
                     except json.JSONDecodeError:
                         continue
 
+                    # web_search server tool reports its search count in usage
+                    usage = obj.get("usage") or {}
+                    stu = usage.get("server_tool_use_details") or {}
+                    if stu.get("web_search_requests"):
+                        web_search_requests = stu["web_search_requests"]
+
                     choices = obj.get("choices") or []
                     if not choices:
                         # OpenRouter may emit non-token SSE payloads without choices.
                         continue
 
                     delta = choices[0].get("delta") or {}
+
+                    # Collect url_citation annotations (sources the model grounded on).
+                    for ann in delta.get("annotations") or []:
+                        if ann.get("type") != "url_citation":
+                            continue
+                        uc = ann.get("url_citation") or {}
+                        url = uc.get("url")
+                        if url and url not in _seen_urls:
+                            _seen_urls.add(url)
+                            citations.append({"url": url, "title": uc.get("title") or url})
+
                     chunk = delta.get("content")
                     if chunk:
                         chunks.append(chunk)
                         yield chunk
+
+        if web_search:
+            logger.info(
+                "[LLMClient] web_search done requests=%d citations=%d",
+                web_search_requests,
+                len(citations),
+            )
 
         full_response = "".join(chunks)
         # Separate system from the rest for readability: built_messages[0] is system if present
@@ -277,6 +306,7 @@ class LLMClient:
             messages=_log_msgs,
             response=full_response,
             web_search=web_search,
+            citations=citations,
         )
 
     async def complete(
@@ -375,6 +405,7 @@ class LLMClient:
         "black-forest-labs/",
         "sourceful/",
         "bytedance-seed/",
+        "x-ai/",
     )
 
     async def generate_image(self, prompt: str, model: str) -> str | None:

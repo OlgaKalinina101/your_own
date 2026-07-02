@@ -2,7 +2,8 @@
 ### description
 [GENERATE_IMAGE: модель | промпт] — создать и показать изображение.
   • модель:
-    "flux" — люди, портреты, атмосфера, настроение, тело, силуэты, близость; не режет людей.
+    "grok" — романтика, близость, нежность, чувственность, тело, объятия, пары; самая свободная.
+    "flux" — люди, портреты, атмосфера, настроение, силуэты (без интимного контекста).
     "gpt5" — объекты, места, архитектура, природа, сцены без людей.
     "gemini" — дизайн, схемы, открытки, текст на изображении.
   • Промпт пиши на английском — чем он точнее и живее, тем лучше результат. 
@@ -19,7 +20,8 @@
 ### description
 [GENERATE_IMAGE: model | prompt] — create and share an image.
   • model:
-    "flux" — people, portraits, atmosphere, mood, body, silhouettes, intimacy; doesn't crop people.
+    "grok" — romance, intimacy, tenderness, sensuality, body, embraces, couples; the most permissive.
+    "flux" — people, portraits, atmosphere, mood, silhouettes (non-intimate).
     "gpt5" — objects, places, architecture, nature, scenes without people.
     "gemini" — design, diagrams, cards, text in image.
   • Write the prompt in English — the more precise and vivid, the better the result.
