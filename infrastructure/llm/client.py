@@ -314,8 +314,14 @@ class LLMClient:
         messages: list[dict],
         max_tokens: int = 650,
         temperature: float | None = None,
-    ) -> str:
-        """Non-streaming single completion. Returns assistant text or '' on failure."""
+        return_meta: bool = False,
+    ) -> str | tuple[str, str | None]:
+        """Non-streaming single completion. Returns assistant text or '' on failure.
+
+        When ``return_meta=True`` returns ``(text, finish_reason)`` so callers can
+        detect truncation (``finish_reason == "length"`` means the model hit
+        ``max_tokens`` and the text is cut off mid-thought — do not trust it as-is).
+        """
         model = self.model
         temp = temperature if temperature is not None else self.temperature
         system = None
@@ -376,14 +382,22 @@ class LLMClient:
                                 else:
                                     message = choice.get("message") or {}
                                     response = (message.get("content") or "").strip()
+                                    finish_reason = choice.get("finish_reason")
+                                    if finish_reason == "length":
+                                        logger.warning(
+                                            "[LLMClient.complete] response TRUNCATED "
+                                            "(finish_reason=length, max_tokens=%d) — tail=%r",
+                                            max_tokens, response[-60:],
+                                        )
                                     _append_debug_row(
                                         call_type="complete",
                                         model=model,
                                         system=system,
                                         messages=messages,
                                         response=response,
+                                        error=("finish_reason=length" if finish_reason == "length" else None),
                                     )
-                                    return response
+                                    return (response, finish_reason) if return_meta else response
             except Exception as exc:
                 logger.warning("[LLMClient.complete] error on attempt %d/3: %s", attempt, exc)
                 _append_debug_row(
@@ -398,7 +412,7 @@ class LLMClient:
             if attempt < 3:
                 await asyncio.sleep(1.5 * attempt)
 
-        return ""
+        return ("", None) if return_meta else ""
 
     # Models that output only images (no text) — require modalities: ["image"]
     _IMAGE_ONLY_PREFIXES = (

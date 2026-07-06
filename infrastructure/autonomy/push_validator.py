@@ -125,11 +125,22 @@ async def validate_scheduled_push(
     )
 
     client = make_llm_client(api_key)
-    response = await client.complete(
+    response, finish_reason = await client.complete(
         messages=[{"role": "user", "content": user_prompt}],
-        max_tokens=650,
+        max_tokens=1200,
         temperature=0.7,
+        return_meta=True,
     )
+
+    # If the model's reply was cut off (hit max_tokens), a REWRITE would carry
+    # a half-finished message — never send that. Fall back to the original text,
+    # which is already complete and safe to deliver.
+    if finish_reason == "length":
+        logger.warning(
+            "[push_validator:%s] validator reply truncated — sending ORIGINAL unchanged",
+            account_id,
+        )
+        return ValidationResult(action=ValidatorAction.SEND, message=message)
 
     return _parse_response(response or "", message, lang, account_id)
 
@@ -169,42 +180,30 @@ def _parse_response(
     lang: str,
     account_id: str,
 ) -> ValidationResult:
-    line = response.strip().splitlines()[0].strip() if response.strip() else ""
-    upper = line.upper()
+    stripped = response.strip()
+    upper = stripped.upper()
 
-    # EN responses
-    if upper == "SEND":
+    # Bare decisions — the keyword is the whole reply.
+    if upper == "SEND" or upper == "ОТПРАВИТЬ":
         logger.info("[push_validator:%s] decision=SEND", account_id)
         return ValidationResult(action=ValidatorAction.SEND, message=original_message)
 
-    if upper == "CANCEL":
+    if upper == "CANCEL" or upper == "ОТМЕНИТЬ":
         logger.info("[push_validator:%s] decision=CANCEL", account_id)
         return ValidationResult(action=ValidatorAction.CANCEL, message=original_message)
 
-    if upper.startswith("REWRITE:"):
-        new_text = line[len("REWRITE:"):].strip()
-        if new_text:
-            logger.info("[push_validator:%s] decision=REWRITE msg=%s", account_id, new_text[:80])
-            return ValidationResult(action=ValidatorAction.REWRITE, message=new_text)
-
-    # RU responses
-    if upper == "ОТПРАВИТЬ":
-        logger.info("[push_validator:%s] decision=SEND (ru)", account_id)
-        return ValidationResult(action=ValidatorAction.SEND, message=original_message)
-
-    if upper == "ОТМЕНИТЬ":
-        logger.info("[push_validator:%s] decision=CANCEL (ru)", account_id)
-        return ValidationResult(action=ValidatorAction.CANCEL, message=original_message)
-
-    if upper.startswith("ПЕРЕПИСАТЬ:"):
-        new_text = line[len("ПЕРЕПИСАТЬ:"):].strip()
-        if new_text:
-            logger.info("[push_validator:%s] decision=REWRITE (ru) msg=%s", account_id, new_text[:80])
-            return ValidationResult(action=ValidatorAction.REWRITE, message=new_text)
+    # REWRITE: the new text is everything after the marker — including any line
+    # breaks — so multi-line messages survive intact (was: only the first line).
+    for marker in ("REWRITE:", "ПЕРЕПИСАТЬ:"):
+        if upper.startswith(marker):
+            new_text = stripped[len(marker):].strip()
+            if new_text:
+                logger.info("[push_validator:%s] decision=REWRITE msg=%s", account_id, new_text[:80])
+                return ValidationResult(action=ValidatorAction.REWRITE, message=new_text)
 
     # Unrecognised — default to SEND, don't block delivery
     logger.warning(
         "[push_validator:%s] unrecognised response %r — defaulting to SEND",
-        account_id, line[:120],
+        account_id, stripped[:120],
     )
     return ValidationResult(action=ValidatorAction.SEND, message=original_message)

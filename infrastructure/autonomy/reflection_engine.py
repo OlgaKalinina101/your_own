@@ -108,7 +108,9 @@ def _set_last_reflection_ts() -> None:
     _REFLECTION_TS_FILE.write_text(datetime.now(timezone.utc).isoformat())
 
 
-async def _complete(api_key: str, messages: list[dict], max_tokens: int = 1300) -> str:
+# fable-5 writes verbose Russian; a reflection step carries a journal note plus
+# any [SCHEDULE_MESSAGE] commands, so keep the ceiling generous to avoid cut-offs.
+async def _complete(api_key: str, messages: list[dict], max_tokens: int = 2200) -> str:
     client = make_llm_client(api_key)
     return await client.complete(messages, max_tokens=max_tokens, temperature=0.7)
 

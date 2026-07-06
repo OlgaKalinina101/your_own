@@ -261,17 +261,26 @@ async def run_post_analysis(
     logger.info("[post_analyzer:%s] starting, lang=%s history_pairs=%d", account_id, lang, len(recent_pairs))
 
     client = make_llm_client(api_key)
-    response = await client.complete(
+    # The reply holds a full journal note PLUS any [SCHEDULE_MESSAGE] commands.
+    # fable-5 writes verbose Russian, so give it enough room to finish — a cut-off
+    # reply loses the trailing command and leaves the journal mid-sentence.
+    response, finish_reason = await client.complete(
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ],
-        max_tokens=1300,
+        max_tokens=2200,
         temperature=0.7,
+        return_meta=True,
     )
     if not response:
         logger.info("[post_analyzer:%s] empty LLM response", account_id)
         return
+    if finish_reason == "length":
+        logger.warning(
+            "[post_analyzer:%s] reply hit max_tokens — journal/commands may be clipped",
+            account_id,
+        )
 
     if response.strip().upper() == "SKIP":
         logger.info("[post_analyzer:%s] SKIP", account_id)
