@@ -23,12 +23,14 @@ _PLACEHOLDERS = dict(
     ai_name="Victor",
     identity_content="Я — Victor.",
     workbench_content="[2026-03-17 21:00] Тишина.",
+    open_threads="1. Ютуб — вернуть — с 17.03.2026 · #a1b2",
     recent_dialogue="User: Привет\nAssistant: Привет!",
     current_time="2026-03-17 22:00",
     hours_since_last="3.0 h",
     pending_tasks_block="",
     cooldown_h=4,
     interval_h=12,
+    timezone_label="Asia/Yerevan",
 )
 
 _ALL_REFLECTION_CMDS = [
@@ -43,6 +45,9 @@ _ALL_REFLECTION_CMDS = [
     "CANCEL_MESSAGE",
     "RESCHEDULE_MESSAGE",
     "REWRITE_MESSAGE",
+    "PIN_THREAD",
+    "UNPIN_THREAD",
+    "UPDATE_THREAD",
     "SLEEP",
 ]
 

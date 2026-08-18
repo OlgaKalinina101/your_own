@@ -71,6 +71,7 @@ _CMD_RE = re.compile(
     r"\[(?P<cmd>SEARCH_MEMORIES|SEARCH_NOTES|SEARCH_DIALOGUE|WEB_SEARCH"
     r"|WRITE_NOTE|WRITE_IDENTITY|SEND_MESSAGE|SCHEDULE_MESSAGE"
     r"|CANCEL_MESSAGE|RESCHEDULE_MESSAGE|REWRITE_MESSAGE"
+    r"|PIN_THREAD|UNPIN_THREAD|UPDATE_THREAD"
     r"|EXTEND|SLEEP|RECALL|WRITE|HISTORY):\s*(?P<arg>.*?)\]",
     re.IGNORECASE | re.DOTALL,
 )
@@ -333,6 +334,27 @@ async def _handle_command(
                 logger.warning("[reflection] bad REWRITE_MESSAGE: %r", arg)
         return None
 
+    elif cmd == "PIN_THREAD":
+        from infrastructure.autonomy import threads
+        threads.pin(account_id, arg.strip())
+        return None
+
+    elif cmd == "UNPIN_THREAD":
+        from infrastructure.autonomy import threads
+        found = threads.unpin(account_id, arg.strip())
+        if not found:
+            return f"Нить {arg.strip()} не найдена на доске."
+        return None
+
+    elif cmd == "UPDATE_THREAD":
+        if "|" in arg:
+            from infrastructure.autonomy import threads
+            tid, new_text = arg.split("|", 1)
+            found = threads.update(account_id, tid.strip(), new_text.strip())
+            if not found:
+                return f"Нить {tid.strip()} не найдена на доске."
+        return None
+
     return None
 
 
@@ -346,6 +368,7 @@ def _build_awakening_system(
     lang: str,
     identity_content: str,
     workbench_content: str,
+    open_threads: str,
     recent_dialogue: str,
     current_time: str,
     hours_since_last: str,
@@ -361,6 +384,7 @@ def _build_awakening_system(
         ai_name=ai_name,
         identity_content=identity_content,
         workbench_content=wc,
+        open_threads=open_threads,
         recent_dialogue=recent_dialogue,
         current_time=current_time,
         hours_since_last=hours_since_last,
@@ -470,6 +494,7 @@ async def run(account_id: str, api_key: str) -> None:
 
         identity_content = identity.read(account_id)
         workbench_content = wb.read(account_id)
+        from infrastructure.autonomy import threads as _threads
 
         # Last 3 dialogue pairs
         try:
@@ -516,11 +541,16 @@ async def run(account_id: str, api_key: str) -> None:
         from infrastructure.settings_store import now_local_str, tz_label
         now_str = now_local_str()
 
+        open_threads = _threads.render_block(
+            account_id, lang, empty_label=("(пусто)" if lang == "ru" else "(empty)"),
+        )
+
         awakening_system = _build_awakening_system(
             ai_name=ai_name,
             lang=lang,
             identity_content=identity_content,
             workbench_content=workbench_content,
+            open_threads=open_threads,
             recent_dialogue=recent_dialogue,
             current_time=now_str,
             hours_since_last=hours_since_last,

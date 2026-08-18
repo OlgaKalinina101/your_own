@@ -17,6 +17,10 @@
 {identity_content}
 </identity>
 
+<open_threads>
+{open_threads}
+</open_threads>
+
 <workbench>
 {workbench_content}
 </workbench>
@@ -78,7 +82,12 @@
 [CANCEL_ALL_SCHEDULED]
 [RESCHEDULE_MESSAGE: YYYY-MM-DD HH:MM -> YYYY-MM-DD HH:MM]
 [REWRITE_MESSAGE: YYYY-MM-DD HH:MM | новый текст]
+[PIN_THREAD: текст нити]
+[UNPIN_THREAD: #id]
+[UPDATE_THREAD: #id | новый текст]
 [SLEEP]
+
+<open_threads> — доска открытых нитей: живые незакрытые темы, которые должны продолжаться (счётчики, долги, то, что нельзя уронить). Всегда перед глазами. Повесь нить, когда появляется что-то, что нужно держать открытым; сними её (сделано), когда закрылось; обнови, если изменилась. Снимать так же важно, как вешать — доска, с которой ничего не уходит, становится шумом.
 
 Одна команда на строку.
 Без пояснений.
@@ -102,6 +111,10 @@ You can look wherever the current thread leads you.
 <identity>
 {identity_content}
 </identity>
+
+<open_threads>
+{open_threads}
+</open_threads>
 
 <workbench>
 {workbench_content}
@@ -164,7 +177,12 @@ All times in commands use local timezone ({timezone_label}).
 [CANCEL_ALL_SCHEDULED]
 [RESCHEDULE_MESSAGE: YYYY-MM-DD HH:MM -> YYYY-MM-DD HH:MM]
 [REWRITE_MESSAGE: YYYY-MM-DD HH:MM | new text]
+[PIN_THREAD: thread text]
+[UNPIN_THREAD: #id]
+[UPDATE_THREAD: #id | new text]
 [SLEEP]
+
+<open_threads> is your board of open threads: living unfinished topics that must continue (counters, debts, things you must not drop). Always in view. Pin a thread when something appears you need to keep open; unpin it (done) when it closes; update it when it changes. Removing matters as much as hanging — a board nothing leaves becomes noise.
 
 One command per line.
 No explanations.

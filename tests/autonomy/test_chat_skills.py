@@ -79,6 +79,7 @@ class TestPromptAssembly:
             lang=lang,
             now_str="2026-03-18 11:00",
             workbench_block="",
+            timezone_label="Asia/Yerevan",
         )
 
     def test_ru_loads_without_unresolved_placeholders(self):
@@ -109,6 +110,7 @@ class TestPromptAssembly:
             lang="en",
             now_str="2026-03-18 11:00",
             workbench_block=wb,
+            timezone_label="Asia/Yerevan",
         )
         assert "She's sleeping." in text
 
@@ -117,8 +119,9 @@ class TestPromptAssembly:
             lang="ru",
             now_str="2026-03-18 11:00",
             workbench_block="",
+            timezone_label="Asia/Yerevan",
         )
-        assert "## Skills" in text
+        assert "<skills>" in text
 
     def test_footer_note_present_ru(self):
         text = self._build("ru")
@@ -137,6 +140,7 @@ class TestPromptAssembly:
             skills=without_image,
             now_str="2026-03-18 11:00",
             workbench_block="",
+            timezone_label="Asia/Yerevan",
         )
         assert "GENERATE_IMAGE" not in text
         assert "SEARCH_MEMORIES" in text
@@ -392,12 +396,12 @@ class TestPromptCodeParity:
 
     @pytest.mark.parametrize("cmd", _ADVERTISED)
     def test_cmd_in_assembled_ru_prompt(self, cmd):
-        text = registry.build_prompt(lang="ru", now_str="2026-03-18 11:00", workbench_block="")
+        text = registry.build_prompt(lang="ru", now_str="2026-03-18 11:00", workbench_block="", timezone_label="Asia/Yerevan")
         assert cmd in text, f"{cmd} missing from assembled RU prompt"
 
     @pytest.mark.parametrize("cmd", _ADVERTISED)
     def test_cmd_in_assembled_en_prompt(self, cmd):
-        text = registry.build_prompt(lang="en", now_str="2026-03-18 11:00", workbench_block="")
+        text = registry.build_prompt(lang="en", now_str="2026-03-18 11:00", workbench_block="", timezone_label="Asia/Yerevan")
         assert cmd in text, f"{cmd} missing from assembled EN prompt"
 
     @pytest.mark.parametrize("cmd", _ADVERTISED)

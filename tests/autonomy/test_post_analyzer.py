@@ -45,7 +45,9 @@ class TestPromptLoading:
             current_time="2026-03-17 22:00",
             identity_excerpt="Я — Victor. Я забочусь о тебе.",
             recent_workbench="[2026-03-17 21:00] Она устала.",
+            open_threads="1. Ютуб — вернуть — с 17.03.2026 · #a1b2",
             pending_pushes_block="",
+            timezone_label="Asia/Yerevan",
         )
         return system, user
 
@@ -65,13 +67,15 @@ class TestPromptLoading:
     def test_ru_has_all_commands(self):
         _, user = self._build("ru")
         for cmd in ["SCHEDULE_MESSAGE", "CANCEL_MESSAGE",
-                    "RESCHEDULE_MESSAGE", "REWRITE_MESSAGE"]:
+                    "RESCHEDULE_MESSAGE", "REWRITE_MESSAGE",
+                    "PIN_THREAD", "UNPIN_THREAD", "UPDATE_THREAD"]:
             assert cmd in user, f"Command {cmd} missing from RU prompt"
 
     def test_en_has_all_commands(self):
         _, user = self._build("en")
         for cmd in ["SCHEDULE_MESSAGE", "CANCEL_MESSAGE",
-                    "RESCHEDULE_MESSAGE", "REWRITE_MESSAGE"]:
+                    "RESCHEDULE_MESSAGE", "REWRITE_MESSAGE",
+                    "PIN_THREAD", "UNPIN_THREAD", "UPDATE_THREAD"]:
             assert cmd in user, f"Command {cmd} missing from EN prompt"
 
     def test_pending_pushes_block_injected(self):
@@ -82,7 +86,9 @@ class TestPromptLoading:
             current_time="2026-03-17 22:00",
             identity_excerpt="...",
             recent_workbench="...",
+            open_threads="(пусто)",
             pending_pushes_block="Запланированные: [22:30] «Привет»",
+            timezone_label="Asia/Yerevan",
         )
         assert "Запланированные" in user
 

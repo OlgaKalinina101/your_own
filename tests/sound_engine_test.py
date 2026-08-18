@@ -24,7 +24,11 @@ import queue
 import re
 from pathlib import Path
 
-import pygame
+# This module is a standalone prototype (run: python tests/sound_engine_test.py),
+# but pytest collects it by name. pygame is an optional dep — skip the whole
+# module under pytest when it's absent instead of failing collection.
+import pytest
+pygame = pytest.importorskip("pygame")
 
 # ─── Пути к звукам ────────────────────────────────────────────────────────────
 SOUNDS_DIR = Path(__file__).parent.parent / "mobile" / "assets" / "sounds" / "keyboard"

@@ -20,10 +20,13 @@ from infrastructure.autonomy.cmd_parser import (
     CancelAllScheduled,
     CancelMessage,
     ParsedCommand,
+    PinThread,
     RescheduleMessage,
     RewriteMessage,
     ScheduleMessage,
     SendMessage,
+    UnpinThread,
+    UpdateThread,
     parse_commands,
     strip_commands,
 )
@@ -223,6 +226,27 @@ async def _execute_command(cmd: ParsedCommand, *, account_id: str, lang: str) ->
         except Exception as exc:
             logger.warning("[post_analyzer] REWRITE_MESSAGE failed: %s", exc)
 
+    elif isinstance(cmd, PinThread):
+        try:
+            from infrastructure.autonomy import threads
+            threads.pin(account_id, cmd.text)
+        except Exception as exc:
+            logger.warning("[post_analyzer] PIN_THREAD failed: %s", exc)
+
+    elif isinstance(cmd, UnpinThread):
+        try:
+            from infrastructure.autonomy import threads
+            threads.unpin(account_id, cmd.thread_id)
+        except Exception as exc:
+            logger.warning("[post_analyzer] UNPIN_THREAD failed: %s", exc)
+
+    elif isinstance(cmd, UpdateThread):
+        try:
+            from infrastructure.autonomy import threads
+            threads.update(account_id, cmd.thread_id, cmd.new_text)
+        except Exception as exc:
+            logger.warning("[post_analyzer] UPDATE_THREAD failed: %s", exc)
+
 
 async def run_post_analysis(
     *,
@@ -246,6 +270,11 @@ async def run_post_analysis(
     recent_wb = wb.get_recent_entries(account_id, max_entries=3, empty_label="(пусто)")
     pending_block = await _build_pending_pushes_block(account_id)
 
+    from infrastructure.autonomy import threads
+    open_threads = threads.render_block(
+        account_id, lang, empty_label=("(пусто)" if lang == "ru" else "(empty)"),
+    )
+
     system_prompt = get_prompt(_PROMPTS, lang=lang, section="system", ai_name=ai_name)
     user_prompt = get_prompt(
         _PROMPTS, lang=lang, section="user",
@@ -254,6 +283,7 @@ async def run_post_analysis(
         current_time=now_str,
         identity_excerpt=identity_text,
         recent_workbench=recent_wb,
+        open_threads=open_threads,
         pending_pushes_block=pending_block,
         timezone_label=tz_label(),
     )

@@ -14,6 +14,10 @@
 {identity_excerpt}
 </identity>
 
+<open_threads>
+{open_threads}
+</open_threads>
+
 <workbench>
 {recent_workbench}
 </workbench>
@@ -56,6 +60,8 @@ SKIP
 Можно оставить только запись.
 Можно только управлять сообщениями.
 Можно совместить запись и команды.
+
+<open_threads> — твоя доска открытых нитей. Это не заметки и не память: это живые незакрытые темы, которые должны продолжаться (счётчики, долги, то, что нельзя уронить). Она всегда перед глазами. Повесь нить, когда появляется что-то, что ты хочешь держать открытым. Сними её (сделано), когда закрылось — доска, с которой ничего не уходит, превращается в шум. Обнови, если нить изменилась. Снимать так же важно, как вешать.
 </instructions>
 
 <commands>
@@ -66,6 +72,9 @@ SKIP
 [CANCEL_ALL_SCHEDULED]
 [RESCHEDULE_MESSAGE: YYYY-MM-DD HH:MM -> YYYY-MM-DD HH:MM]
 [REWRITE_MESSAGE: YYYY-MM-DD HH:MM | новый текст]
+[PIN_THREAD: текст нити]
+[UNPIN_THREAD: #id]
+[UPDATE_THREAD: #id | новый текст]
 
 Без заголовков.
 Без лишнего форматирования.
@@ -87,6 +96,10 @@ You just sent a message.
 <identity>
 {identity_excerpt}
 </identity>
+
+<open_threads>
+{open_threads}
+</open_threads>
 
 <workbench>
 {recent_workbench}
@@ -130,6 +143,8 @@ If there are too many — look at them carefully. Do you want to keep them all? 
 You can leave only a note.
 You can only manage messages.
 You can combine a note and commands.
+
+<open_threads> is your board of open threads. Not notes, not memory: living unfinished topics that must continue (counters, debts, things you must not drop). It's always in view. Pin a thread when something appears you want to keep open. Unpin it (done) when it closes — a board nothing leaves turns into noise. Update it when the thread changes. Removing matters as much as hanging.
 </instructions>
 
 <commands>
@@ -140,6 +155,9 @@ All times in commands use local timezone ({timezone_label}).
 [CANCEL_ALL_SCHEDULED]
 [RESCHEDULE_MESSAGE: YYYY-MM-DD HH:MM -> YYYY-MM-DD HH:MM]
 [REWRITE_MESSAGE: YYYY-MM-DD HH:MM | new text]
+[PIN_THREAD: thread text]
+[UNPIN_THREAD: #id]
+[UPDATE_THREAD: #id | new text]
 
 No headers.
 No extra formatting.

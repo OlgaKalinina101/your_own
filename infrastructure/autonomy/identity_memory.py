@@ -20,8 +20,8 @@ logger = logging.getLogger("autonomy.identity")
 
 CONSOLIDATION_THRESHOLD = 10
 
-SECTIONS_RU = ["Кто она", "Кто я", "Наша история", "Наши принципы"]
-SECTIONS_EN = ["Who she is", "Who I am", "Our story", "Our principles"]
+SECTIONS_RU = ["Кто она", "Кто я", "Наша история", "Наши принципы", "Наш дом"]
+SECTIONS_EN = ["Who she is", "Who I am", "Our story", "Our principles", "Our home"]
 
 
 def _detect_file_lang(content: str) -> str:

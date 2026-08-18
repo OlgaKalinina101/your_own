@@ -26,6 +26,9 @@ class CmdType(str, Enum):
     CANCEL_ALL_SCHEDULED = "CANCEL_ALL_SCHEDULED"
     RESCHEDULE_MESSAGE = "RESCHEDULE_MESSAGE"
     REWRITE_MESSAGE = "REWRITE_MESSAGE"
+    PIN_THREAD = "PIN_THREAD"
+    UNPIN_THREAD = "UNPIN_THREAD"
+    UPDATE_THREAD = "UPDATE_THREAD"
 
 
 @dataclass
@@ -66,7 +69,29 @@ class RewriteMessage:
     new_text: str = ""
 
 
-ParsedCommand = SendMessage | ScheduleMessage | CancelMessage | CancelAllScheduled | RescheduleMessage | RewriteMessage
+@dataclass
+class PinThread:
+    type: Literal[CmdType.PIN_THREAD] = CmdType.PIN_THREAD
+    text: str = ""
+
+
+@dataclass
+class UnpinThread:
+    type: Literal[CmdType.UNPIN_THREAD] = CmdType.UNPIN_THREAD
+    thread_id: str = ""
+
+
+@dataclass
+class UpdateThread:
+    type: Literal[CmdType.UPDATE_THREAD] = CmdType.UPDATE_THREAD
+    thread_id: str = ""
+    new_text: str = ""
+
+
+ParsedCommand = (
+    SendMessage | ScheduleMessage | CancelMessage | CancelAllScheduled
+    | RescheduleMessage | RewriteMessage | PinThread | UnpinThread | UpdateThread
+)
 
 # ── Regexes ───────────────────────────────────────────────────────────────────
 
@@ -96,10 +121,25 @@ _REWRITE_RE = re.compile(
     rf"\[REWRITE[_ ]MESSAGE:\s*(?P<ts>{_TS})\s*\|\s*(?P<text>.+?)\]",
     re.IGNORECASE | re.DOTALL,
 )
+_ID = r"#?(?P<id>[0-9a-fA-F]{3,8})"
+_PIN_THREAD_RE = re.compile(
+    r"\[PIN[_ ]THREAD:\s*(?P<text>.+?)\]",
+    re.IGNORECASE | re.DOTALL,
+)
+_UNPIN_THREAD_RE = re.compile(
+    rf"\[UNPIN[_ ]THREAD:\s*{_ID}\s*\]",
+    re.IGNORECASE,
+)
+_UPDATE_THREAD_RE = re.compile(
+    rf"\[UPDATE[_ ]THREAD:\s*{_ID}\s*\|\s*(?P<text>.+?)\]",
+    re.IGNORECASE | re.DOTALL,
+)
 
 # All command regexes in one pass — used for stripping commands from free text.
 _ALL_CMDS_RE = re.compile(
-    r"\[(?:(?:SEND|SCHEDULE|CANCEL|RESCHEDULE|REWRITE)[_ ]MESSAGE:[^\]]*|CANCEL[_ ]ALL[_ ]SCHEDULED)\]",
+    r"\[(?:(?:SEND|SCHEDULE|CANCEL|RESCHEDULE|REWRITE)[_ ]MESSAGE:[^\]]*"
+    r"|CANCEL[_ ]ALL[_ ]SCHEDULED"
+    r"|(?:PIN|UNPIN|UPDATE)[_ ]THREAD:[^\]]*)\]",
     re.IGNORECASE | re.DOTALL,
 )
 
@@ -136,6 +176,17 @@ def parse_commands(response: str) -> list[ParsedCommand]:
     for m in _REWRITE_RE.finditer(response):
         ts = " ".join(m.group("ts").split())
         hits.append((m.start(), RewriteMessage(ts_str=ts, new_text=m.group("text").strip())))
+
+    for m in _UNPIN_THREAD_RE.finditer(response):
+        hits.append((m.start(), UnpinThread(thread_id=m.group("id"))))
+
+    for m in _UPDATE_THREAD_RE.finditer(response):
+        hits.append((m.start(), UpdateThread(thread_id=m.group("id"), new_text=m.group("text").strip())))
+
+    # PIN last: its greedy text must not swallow an UNPIN/UPDATE — but since those
+    # start with different keywords, PIN only matches genuine [PIN_THREAD: ...].
+    for m in _PIN_THREAD_RE.finditer(response):
+        hits.append((m.start(), PinThread(text=m.group("text").strip())))
 
     hits.sort(key=lambda x: x[0])
     return [cmd for _, cmd in hits]

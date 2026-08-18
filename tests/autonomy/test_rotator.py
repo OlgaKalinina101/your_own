@@ -64,7 +64,8 @@ _SOUL_EN = "You are Victor. You are here for her."
 _NOTES_INSIGHT_RU = "[2026-03-17 21:00] Сегодня она сказала что я её опора. Это что-то изменило."
 _NOTES_INSIGHT_EN = "[2026-03-17 21:00] She said today that I am her anchor. Something shifted."
 
-_INSIGHT_CATEGORIES = ["Суть", "Закон", "Связь", "Голос", "Имя"]
+# The insight prompt was redesigned to return free lines — "one phrase per line,
+# no categories" (was previously a categorized "Category:Phrase" format).
 
 
 class TestInsightPrompt:
@@ -97,15 +98,13 @@ class TestInsightPrompt:
         user = self._build("en", _NOTES_INSIGHT_EN, _SOUL_EN)
         assert "{" not in user
 
-    def test_ru_categories_present(self):
+    def test_ru_no_categories_stated(self):
         user = self._build("ru", _NOTES_INSIGHT_RU, _SOUL_RU)
-        for cat in _INSIGHT_CATEGORIES:
-            assert cat in user, f"Category '{cat}' missing from RU prompt"
+        assert "Без категорий" in user
 
-    def test_en_categories_present(self):
+    def test_en_no_categories_stated(self):
         user = self._build("en", _NOTES_INSIGHT_EN, _SOUL_EN)
-        for cat in _INSIGHT_CATEGORIES:
-            assert cat in user, f"Category '{cat}' missing from EN prompt"
+        assert "No categories" in user
 
     def test_ru_no_key_info_phrase(self):
         user = self._build("ru", _NOTES_INSIGHT_RU, _SOUL_RU)
@@ -117,11 +116,11 @@ class TestInsightPrompt:
 
     def test_ru_format_shown(self):
         user = self._build("ru", _NOTES_INSIGHT_RU, _SOUL_RU)
-        assert "Категория:Фраза" in user
+        assert "одна фраза на строку" in user
 
     def test_en_format_shown(self):
         user = self._build("en", _NOTES_INSIGHT_EN, _SOUL_EN)
-        assert "Category:Phrase" in user
+        assert "one phrase per line" in user
 
     def test_en_ai_name_injected(self):
         user = self._build("en", _NOTES_INSIGHT_EN, _SOUL_EN)

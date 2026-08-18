@@ -412,11 +412,18 @@ async def chat(
     _now_str = now_local_str()
     _tz_label = tz_label()
 
-    # Recent workbench entries for context
+    # Open-threads board (read-only in chat) + recent workbench entries for context.
+    # The board sits just above the notes — he sees it, but only manages it in autonomy.
+    from infrastructure.autonomy import threads as _threads
+    _open_threads = _threads.render_block(account_id or "default", prompt_language)
+    _threads_block = (
+        f"<open_threads>\n{_open_threads}\n</open_threads>\n\n"
+        if _open_threads else ""
+    )
     _recent_wb = wb.get_recent_entries(account_id or "default")
     _workbench_block = (
-        f"<workbench>\n{_recent_wb}\n</workbench>\n\n"
-        if _recent_wb else ""
+        _threads_block
+        + (f"<workbench>\n{_recent_wb}\n</workbench>\n\n" if _recent_wb else "")
     )
 
     # ── Skill registry ─────────────────────────────────────────────────────
