@@ -41,6 +41,10 @@ _DEFAULTS: dict[str, object] = {
     "enabled_skills": None,
     # Model used for body image generation (image-to-image with anchor reference)
     "body_image_model": "sourceful/riverflow-v2-fast",
+    # ResearchAgent — the single orchestrator behind every search
+    "research_model": "google/gemini-3.5-flash",
+    "research_web_engine": "parallel",   # parallel (cheap) | exa (richer)
+    "research_max_attempts": 3,
 }
 
 _lock = Lock()

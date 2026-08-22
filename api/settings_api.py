@@ -34,6 +34,9 @@ class SettingsPatch(BaseModel):
     reflection_interval_hours: int | None = None
     enabled_skills: list[str] | None = None
     body_image_model: str | None = None
+    research_model: str | None = None
+    research_web_engine: str | None = None
+    research_max_attempts: int | None = None
 
 
 class SoulBody(BaseModel):

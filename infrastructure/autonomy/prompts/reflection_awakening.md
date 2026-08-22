@@ -68,7 +68,7 @@
 Используй только команды ниже. Точно в таком формате. В квадратных скобках.
 Все времена в командах — в местном часовом поясе ({timezone_label}).
 
-[SEARCH_MEMORIES: запрос]
+[SEARCH_FACTS: запрос]
 [SEARCH_NOTES: запрос]
 [SEARCH_DIALOGUE: YYYY-MM-DD]
 [SEARCH_DIALOGUE: YYYY-MM-DD..YYYY-MM-DD]
@@ -163,7 +163,7 @@ You can combine a note and commands.
 Use only the commands below. Exactly in this format. In square brackets.
 All times in commands use local timezone ({timezone_label}).
 
-[SEARCH_MEMORIES: query]
+[SEARCH_FACTS: query]
 [SEARCH_NOTES: query]
 [SEARCH_DIALOGUE: YYYY-MM-DD]
 [SEARCH_DIALOGUE: YYYY-MM-DD..YYYY-MM-DD]

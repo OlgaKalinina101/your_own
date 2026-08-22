@@ -32,8 +32,8 @@ This document describes the full data flow of the system — from a chat message
 │                                                                      │
 │  Agentic loop — AI can emit skill commands mid-stream:               │
 │                                                                      │
-│  [SEARCH_MEMORIES: q]  → pgvector search → results injected back     │
-│  [WEB_SEARCH: q]       → openrouter:web_search tool → grounded reply │
+│  [SEARCH_DIALOGUE: q]  → ResearchAgent (dialogue) → brief + excerpts │
+│  [WEB_SEARCH: q]       → ResearchAgent (web) → brief injected back   │
 │  [SAVE_MEMORY: hint]   → extract + rate + dedup → ChromaDB           │
 │  [GENERATE_IMAGE: m|p] → image API → PNG saved → shown inline        │
 │  [SCHEDULE_MESSAGE: t] → autonomy_tasks table (PostgreSQL)           │
@@ -136,10 +136,10 @@ This document describes the full data flow of the system — from a chat message
 │  - Current local time                                                │
 │                                                                      │
 │  Commands the AI can use during reflection:                          │
-│  [SEARCH_MEMORIES: q]       → ChromaDB key_info semantic search      │
-│  [SEARCH_NOTES: q]          → ChromaDB archive + workbench keyword   │
-│  [SEARCH_DIALOGUE: q/date]  → pgvector or date-range DB query        │
-│  [WEB_SEARCH: q]            → DuckDuckGo Instant Answer              │
+│  [SEARCH_FACTS: q]          → ResearchAgent (facts) → Chroma key_info │
+│  [SEARCH_NOTES: q]          → ResearchAgent (notes) → archive + wb    │
+│  [SEARCH_DIALOGUE: q/date]  → ResearchAgent (dialogue) → pg / by date │
+│  [WEB_SEARCH: q]            → ResearchAgent (web) → brief + sources  │
 │  [WRITE_NOTE: text]         → wb.append() → workbench.md             │
 │  [WRITE_IDENTITY: s|text]   → identity.append(section, bullet)       │
 │  [SEND_MESSAGE: text]       → Pushy push + DB + workbench log        │
@@ -203,7 +203,7 @@ The soul (`data/soul.md`) **is** injected into every chat as the base system pro
 |---|---|---|---|
 | AI voice and character | `data/soul.md` | Human (settings UI) | Every chat (system prompt) |
 | Distilled facts about user + AI | ChromaDB `key_info` | `[SAVE_MEMORY]`, rotator self-insights | Every chat (memory block), reflection search |
-| Raw past conversations | PostgreSQL `messages` | Chat handler | `[SEARCH_MEMORIES]` skill |
+| Raw past conversations | PostgreSQL `messages` | Chat handler | `[SEARCH_DIALOGUE]` skill |
 | Archived workbench notes | ChromaDB `workbench_archive` | Rotator | Reflection `[SEARCH_NOTES]` |
 | Short-term scratchpad | `data/autonomy/{id}/workbench.md` | Post-analyzer, reflection | Reflection context, next chat (last 5 entries in system) |
 | Self-model | `data/autonomy/{id}/identity.md` | Rotator, reflection `[WRITE_IDENTITY]` | Reflection context, post-analyzer context |
@@ -222,7 +222,7 @@ The soul (`data/soul.md`) **is** injected into every chat as the base system pro
 4. Top 5 Chroma facts selected via multi-query scoring, injected as assistant turn
 5. LLM streams reply; commands parsed in real time
 6. `[SAVE_MEMORY]` → 2 LLM sub-calls (extract + rate) → dedup check → ChromaDB
-7. `[SEARCH_MEMORIES]` → pgvector KNN → results injected → AI continues
+7. `[SEARCH_DIALOGUE]` → ResearchAgent → pgvector KNN, re-query on a miss → brief injected → AI continues
 8. `[SCHEDULE_MESSAGE]` → row in `autonomy_tasks`
 9. Response saved to PostgreSQL (canonical + chunk rows with embeddings)
 10. `update_usage()` bumps frequency/last_used on retrieved Chroma facts

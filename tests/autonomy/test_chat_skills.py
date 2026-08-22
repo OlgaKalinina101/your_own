@@ -49,7 +49,7 @@ class TestRegistryDiscovery:
 
     def test_discovers_all_five_skills(self, all_skills):
         ids = {s.id for s in all_skills}
-        expected = {"search_memories", "web_search", "save_memory", "generate_image", "schedule_message"}
+        expected = {"search_dialogue", "web_search", "save_memory", "generate_image", "schedule_message"}
         assert ids == expected
 
     def test_get_skill_by_id(self):
@@ -94,13 +94,13 @@ class TestPromptAssembly:
 
     def test_ru_contains_all_commands(self):
         text = self._build("ru")
-        for cmd in ["SEARCH_MEMORIES", "WEB_SEARCH", "SAVE_MEMORY",
+        for cmd in ["SEARCH_DIALOGUE", "WEB_SEARCH", "SAVE_MEMORY",
                     "GENERATE_IMAGE", "SCHEDULE_MESSAGE"]:
             assert cmd in text, f"Command {cmd} missing from assembled RU prompt"
 
     def test_en_contains_all_commands(self):
         text = self._build("en")
-        for cmd in ["SEARCH_MEMORIES", "WEB_SEARCH", "SAVE_MEMORY",
+        for cmd in ["SEARCH_DIALOGUE", "WEB_SEARCH", "SAVE_MEMORY",
                     "GENERATE_IMAGE", "SCHEDULE_MESSAGE"]:
             assert cmd in text, f"Command {cmd} missing from assembled EN prompt"
 
@@ -143,7 +143,7 @@ class TestPromptAssembly:
             timezone_label="Asia/Yerevan",
         )
         assert "GENERATE_IMAGE" not in text
-        assert "SEARCH_MEMORIES" in text
+        assert "SEARCH_DIALOGUE" in text
 
 
 # ── 3. Per-skill regex parsing ────────────────────────────────────────────────
@@ -151,7 +151,7 @@ class TestPromptAssembly:
 class TestPerSkillParsing:
 
     @pytest.mark.parametrize("skill_id,sample", [
-        ("search_memories", "[SEARCH_MEMORIES: бывший, расставание]"),
+        ("search_dialogue", "[SEARCH_DIALOGUE: бывший, расставание]"),
         ("web_search", "[WEB_SEARCH: weather Yerevan today]"),
         ("save_memory", "[SAVE_MEMORY: She loves coffee]"),
         ("generate_image", "[GENERATE_IMAGE: gpt5 | a sunrise]"),
@@ -165,7 +165,7 @@ class TestPerSkillParsing:
         assert m.group(1).strip(), f"{skill_id} regex captured empty group"
 
     @pytest.mark.parametrize("skill_id,variant", [
-        ("search_memories", "[SEARCH MEMORIES: test]"),
+        ("search_dialogue", "[SEARCH DIALOGUE: test]"),
         ("web_search", "[WEB SEARCH: test]"),
         ("save_memory", "[SAVE MEMORY: test]"),
         ("generate_image", "[GENERATE IMAGE: gpt5 | test]"),
@@ -178,12 +178,35 @@ class TestPerSkillParsing:
 
     @pytest.mark.parametrize("skill_id,variant", [
         ("save_memory", "[save_memory: lowercase fact]"),
-        ("search_memories", "[search_memories: test]"),
+        ("search_dialogue", "[search_dialogue: test]"),
     ])
     def test_case_insensitive(self, skill_id, variant):
         s = registry.get_skill(skill_id)
         assert s is not None
         assert s.parse_re.search(variant), f"{skill_id} missed lowercase variant"
+
+    @pytest.mark.parametrize("legacy", [
+        "[SEARCH_MEMORIES: бывший, расставание]",
+        "[SEARCH MEMORIES: test]",
+        "[search_memories: test]",
+    ])
+    def test_legacy_search_memories_still_parses(self, legacy):
+        """Replies already in the database carry the old command name."""
+        s = registry.get_skill("search_dialogue")
+        m = s.parse_re.search(legacy)
+        assert m is not None
+        assert m.group(1).strip()
+
+    def test_legacy_name_triggers_buffering(self):
+        """The open regex must catch the old name too, or the raw command leaks."""
+        open_re = registry.build_open_re([registry.get_skill("search_dialogue")])
+        assert open_re.search("[SEARCH_MEMORIES: test")
+        assert open_re.search("[SEARCH_DIALOGUE: test")
+
+    def test_legacy_name_resolves_to_the_dialogue_skill(self):
+        """One name, one meaning: SEARCH_MEMORIES is the dialogue store now."""
+        matches = registry.parse_all("текст\n[SEARCH_MEMORIES: q]")
+        assert [s.id for s, _ in matches] == ["search_dialogue"]
 
 
 # ── 4. strip_skills (registry version) ───────────────────────────────────────
@@ -208,19 +231,19 @@ class TestStripSkills:
     def test_multiple_skills(self):
         text = (
             "Текст.\n"
-            "[SEARCH_MEMORIES: test]\n"
+            "[SEARCH_DIALOGUE: test]\n"
             "[SAVE_MEMORY: fact]"
         )
         clean, matches = registry.strip_skills(text)
         assert clean == "Текст."
         ids = [s.id for s, _ in matches]
-        assert "search_memories" in ids
+        assert "search_dialogue" in ids
         assert "save_memory" in ids
 
     def test_all_five_skills(self):
         text = (
             "Всё сразу.\n"
-            "[SEARCH_MEMORIES: test]\n"
+            "[SEARCH_DIALOGUE: test]\n"
             "[WEB_SEARCH: Yerevan weather]\n"
             "[SAVE_MEMORY: fact]\n"
             "[GENERATE_IMAGE: gpt5 | prompt]\n"
@@ -229,13 +252,13 @@ class TestStripSkills:
         clean, matches = registry.strip_skills(text)
         assert clean == "Всё сразу."
         ids = {s.id for s, _ in matches}
-        assert ids == {"search_memories", "web_search", "save_memory", "generate_image", "schedule_message"}
+        assert ids == {"search_dialogue", "web_search", "save_memory", "generate_image", "schedule_message"}
 
     def test_matches_ordered_by_position(self):
         text = (
             "Text.\n"
             "[SAVE_MEMORY: first]\n"
-            "[SEARCH_MEMORIES: second]\n"
+            "[SEARCH_DIALOGUE: second]\n"
             "[WEB_SEARCH: third]"
         )
         _, matches = registry.strip_skills(text)
@@ -254,8 +277,8 @@ class TestStripSkills:
 class TestBuildOpenRe:
 
     @pytest.mark.parametrize("fragment", [
-        "[SEARCH_MEMORIES:",
-        "[SEARCH MEMORIES:",
+        "[SEARCH_DIALOGUE:",
+        "[SEARCH DIALOGUE:",
         "[WEB_SEARCH:",
         "[WEB SEARCH:",
         "[SAVE_MEMORY:",
@@ -278,9 +301,9 @@ class TestBuildOpenRe:
         assert not open_re.search("[GENERATED_IMAGE: /path/to/img.png]")
 
     def test_limited_to_enabled_skills(self):
-        only_search = [s for s in registry.get_all() if s.id == "search_memories"]
+        only_search = [s for s in registry.get_all() if s.id == "search_dialogue"]
         open_re = registry.build_open_re(only_search)
-        assert open_re.search("[SEARCH_MEMORIES: test")
+        assert open_re.search("[SEARCH_DIALOGUE: test")
         assert not open_re.search("[WEB_SEARCH: test")
 
 
@@ -289,41 +312,77 @@ class TestBuildOpenRe:
 class TestSectionLoading:
 
     def test_search_continuation_ru(self):
-        s = registry.get_skill("search_memories")
-        text = s.get_section("search_continuation", "ru", results_block="[вчера] Она: привет")
+        s = registry.get_skill("search_dialogue")
+        text = s.get_section(
+            "search_continuation", "ru",
+            brief="Вы говорили об этом вчера.",
+            results_block="[вчера] Она: привет",
+        )
         assert "вчера" in text
+        assert "Говорили" in text or "говорили" in text
         assert "{" not in text
 
     def test_search_continuation_en(self):
-        s = registry.get_skill("search_memories")
-        text = s.get_section("search_continuation", "en", results_block="[yesterday] Them: hi")
+        s = registry.get_skill("search_dialogue")
+        text = s.get_section(
+            "search_continuation", "en",
+            brief="You talked about it yesterday.",
+            results_block="[yesterday] Them: hi",
+        )
         assert "yesterday" in text
+        assert "You talked about it" in text
         assert "{" not in text
 
     def test_search_empty_ru(self):
-        s = registry.get_skill("search_memories")
+        s = registry.get_skill("search_dialogue")
         text = s.get_section("search_empty", "ru", query="бывший парень")
         assert "бывший парень" in text
 
     def test_search_empty_en(self):
-        s = registry.get_skill("search_memories")
+        s = registry.get_skill("search_dialogue")
         text = s.get_section("search_empty", "en", query="old friend")
         assert "old friend" in text
 
     def test_search_cont_hint(self):
-        s = registry.get_skill("search_memories")
+        s = registry.get_skill("search_dialogue")
         text = s.get_section("search_cont_hint", "ru", attempts_left=3)
         assert "3" in text
 
     def test_web_continuation_ru(self):
         s = registry.get_skill("web_search")
-        text = s.get_section("web_continuation", "ru", web_query="погода Ереван")
+        text = s.get_section(
+            "web_continuation", "ru",
+            web_query="погода Ереван",
+            brief="В Ереване сегодня 24 градуса.",
+            sources_block="- Gismeteo (https://example.com)",
+        )
         assert "погода Ереван" in text
+        assert "24 градуса" in text
+        assert "example.com" in text
 
     def test_web_continuation_en(self):
         s = registry.get_skill("web_search")
-        text = s.get_section("web_continuation", "en", web_query="weather Yerevan")
+        text = s.get_section(
+            "web_continuation", "en",
+            web_query="weather Yerevan",
+            brief="It is 24 degrees in Yerevan today.",
+            sources_block="- Gismeteo (https://example.com)",
+        )
         assert "weather Yerevan" in text
+        assert "24 degrees" in text
+        assert "example.com" in text
+
+    def test_web_empty_ru(self):
+        s = registry.get_skill("web_search")
+        text = s.get_section("web_empty", "ru", web_query="погода Ереван")
+        assert "погода Ереван" in text
+        assert "{" not in text
+
+    def test_web_empty_en(self):
+        s = registry.get_skill("web_search")
+        text = s.get_section("web_empty", "en", web_query="weather Yerevan")
+        assert "weather Yerevan" in text
+        assert "{" not in text
 
     def test_image_error_ru(self):
         s = registry.get_skill("generate_image")
@@ -356,13 +415,13 @@ class TestRegexBuilders:
         markers_re = registry.build_internal_markers_re()
         text = (
             "Text before "
-            "[SEARCH_MEMORIES: q] "
+            "[SEARCH_DIALOGUE: q] "
             "[GENERATED_IMAGE: /path.png] "
             "[SAVED_FACT: cat | 3 | fact] "
             "text after"
         )
         cleaned = markers_re.sub("", text)
-        assert "SEARCH_MEMORIES" not in cleaned
+        assert "SEARCH_DIALOGUE" not in cleaned
         assert "GENERATED_IMAGE" not in cleaned
         assert "SAVED_FACT" not in cleaned
         assert "Text before" in cleaned
@@ -371,7 +430,7 @@ class TestRegexBuilders:
     def test_cleanup_re_only_strips_non_persistent(self):
         cleanup_re = registry.build_cleanup_re()
         text = (
-            "[SEARCH_MEMORIES: q]\n"
+            "[SEARCH_DIALOGUE: q]\n"
             "[WEB_SEARCH: q]\n"
             "[GENERATE_IMAGE: gpt5 | p]\n"
             "[SAVE_MEMORY: f]\n"
@@ -379,7 +438,7 @@ class TestRegexBuilders:
         )
         cleaned = cleanup_re.sub("", text)
         # Search and web should be preserved (persist_in_db=True)
-        assert "SEARCH_MEMORIES" in cleaned
+        assert "SEARCH_DIALOGUE" in cleaned
         assert "WEB_SEARCH" in cleaned
         # Image, save, schedule should be stripped (persist_in_db=False)
         assert "GENERATE_IMAGE" not in cleaned
@@ -391,7 +450,7 @@ class TestRegexBuilders:
 
 class TestPromptCodeParity:
 
-    _ADVERTISED = ["SEARCH_MEMORIES", "WEB_SEARCH", "SAVE_MEMORY",
+    _ADVERTISED = ["SEARCH_DIALOGUE", "WEB_SEARCH", "SAVE_MEMORY",
                    "GENERATE_IMAGE", "SCHEDULE_MESSAGE"]
 
     @pytest.mark.parametrize("cmd", _ADVERTISED)
@@ -407,7 +466,7 @@ class TestPromptCodeParity:
     @pytest.mark.parametrize("cmd", _ADVERTISED)
     def test_cmd_parsed_by_registry(self, cmd):
         samples = {
-            "SEARCH_MEMORIES":  f"text.\n[{cmd}: query, detail]",
+            "SEARCH_DIALOGUE":  f"text.\n[{cmd}: query, detail]",
             "WEB_SEARCH":       f"text.\n[{cmd}: weather today]",
             "SAVE_MEMORY":      f"text.\n[{cmd}: She loves coffee]",
             "GENERATE_IMAGE":   f"text.\n[{cmd}: gpt5 | a sunrise]",
@@ -461,8 +520,8 @@ _CASES = [
     ),
     (
         "search only",
-        "Дай вспомню.\n[SEARCH_MEMORIES: переезд, Ереван, квартира]",
-        {"search_memories": 1},
+        "Дай вспомню.\n[SEARCH_DIALOGUE: переезд, Ереван, квартира]",
+        {"search_dialogue": 1},
         "вспомню",
     ),
     (
@@ -485,21 +544,21 @@ _CASES = [
     ),
     (
         "search + save together",
-        "Проверю и запомню.\n[SEARCH_MEMORIES: job, team]\n[SAVE_MEMORY: She got a promotion]",
-        {"search_memories": 1, "save_memory": 1},
+        "Проверю и запомню.\n[SEARCH_DIALOGUE: job, team]\n[SAVE_MEMORY: She got a promotion]",
+        {"search_dialogue": 1, "save_memory": 1},
         "Проверю",
     ),
     (
         "all skills at once",
         (
             "Всё сразу.\n"
-            "[SEARCH_MEMORIES: test]\n"
+            "[SEARCH_DIALOGUE: test]\n"
             "[WEB_SEARCH: Yerevan weather]\n"
             "[SAVE_MEMORY: fact]\n"
             "[GENERATE_IMAGE: gpt5 | prompt]\n"
             "[SCHEDULE_MESSAGE: 2026-03-19 09:00 | msg]"
         ),
-        {"search_memories": 1, "web_search": 1, "save_memory": 1, "generate_image": 1, "schedule_message": 1},
+        {"search_dialogue": 1, "web_search": 1, "save_memory": 1, "generate_image": 1, "schedule_message": 1},
         "Всё сразу",
     ),
 ]

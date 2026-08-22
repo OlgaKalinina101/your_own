@@ -50,10 +50,11 @@ type Part =
 // ── Parser ────────────────────────────────────────────────────────────────────
 
 const ALL_COMMANDS_RE =
-  /\[(SAVE(?:_| )MEMORY|SEARCH(?:_| )MEMORIES|WEB(?:_| )SEARCH|GENERATE(?:_| )IMAGE|SCHEDULE(?:_| )MESSAGE):\s*(.*?)\]|\[SAVED(?:_| )FACT:\s*(.*?)\s*\|\s*(\d)\s*\|\s*(.*?)\]|\[GENERATED(?:_| )IMAGE:\s*(.*?)\s*\|\s*(.*?)\s*\|\s*(.*?)\]/gs;
+  /\[(SAVE(?:_| )MEMORY|SEARCH(?:_| )(?:DIALOGUE|MEMORIES)|WEB(?:_| )SEARCH|GENERATE(?:_| )IMAGE|SCHEDULE(?:_| )MESSAGE):\s*(.*?)\]|\[SAVED(?:_| )FACT:\s*(.*?)\s*\|\s*(\d)\s*\|\s*(.*?)\]|\[GENERATED(?:_| )IMAGE:\s*(.*?)\s*\|\s*(.*?)\s*\|\s*(.*?)\]/gs;
 
 const KIND_MAP: Record<string, SkillKind> = {
   SAVE_MEMORY: "save",
+  SEARCH_DIALOGUE: "search",
   SEARCH_MEMORIES: "search",
   WEB_SEARCH: "web",
 };
@@ -61,6 +62,8 @@ const KIND_MAP: Record<string, SkillKind> = {
 const PARTIAL_PREFIXES = [
   "[SAVE_MEMORY:",
   "[SAVE MEMORY:",
+  "[SEARCH_DIALOGUE:",
+  "[SEARCH DIALOGUE:",
   "[SEARCH_MEMORIES:",
   "[SEARCH MEMORIES:",
   "[WEB_SEARCH:",

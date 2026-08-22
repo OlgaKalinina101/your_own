@@ -49,10 +49,11 @@ type InlinePart =
 // Groups: 1=skill_name, 2=skill_arg | 3=fact_cat, 4=fact_stars, 5=fact_text | 6=img_path, 7=img_model, 8=img_prompt
 // GENERATE_IMAGE is matched but not rendered — just hidden from display (legacy DB entries)
 const ALL_COMMANDS_RE =
-  /\[(SAVE(?:_| )MEMORY|SEARCH(?:_| )MEMORIES|WEB(?:_| )SEARCH|GENERATE(?:_| )IMAGE|SCHEDULE(?:_| )MESSAGE):\s*(.*?)\]|\[SAVED(?:_| )FACT:\s*(.*?)\s*\|\s*(\d)\s*\|\s*(.*?)\]|\[GENERATED(?:_| )IMAGE:\s*(.*?)\s*\|\s*(.*?)\s*\|\s*(.*?)\]/gs;
+  /\[(SAVE(?:_| )MEMORY|SEARCH(?:_| )(?:DIALOGUE|MEMORIES)|WEB(?:_| )SEARCH|GENERATE(?:_| )IMAGE|SCHEDULE(?:_| )MESSAGE):\s*(.*?)\]|\[SAVED(?:_| )FACT:\s*(.*?)\s*\|\s*(\d)\s*\|\s*(.*?)\]|\[GENERATED(?:_| )IMAGE:\s*(.*?)\s*\|\s*(.*?)\s*\|\s*(.*?)\]/gs;
 
 const KIND_MAP: Record<string, SkillBadgeKind> = {
   SAVE_MEMORY: "save",
+  SEARCH_DIALOGUE: "search",
   SEARCH_MEMORIES: "search",
   WEB_SEARCH: "web",
 };
@@ -72,6 +73,8 @@ const BADGE_ICONS: Record<SkillBadgeKind, string> = {
 const PARTIAL_PREFIXES = [
   "[SAVE_MEMORY:",
   "[SAVE MEMORY:",
+  "[SEARCH_DIALOGUE:",
+  "[SEARCH DIALOGUE:",
   "[SEARCH_MEMORIES:",
   "[SEARCH MEMORIES:",
   "[WEB_SEARCH:",

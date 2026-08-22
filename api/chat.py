@@ -154,6 +154,24 @@ def _build_chroma_block(facts: list[dict], language: str) -> str:
     return f"<memory>\n{body}\n</memory>"
 
 
+def _build_web_block(result, language: str) -> str:
+    """Format a ResearchAgent web brief for injection before the user turn.
+
+    Used by the manual web toggle; the [WEB_SEARCH: ...] command feeds its
+    brief through the skill's own continuation prompt instead.
+    """
+    lines = [result.brief.strip()]
+    if result.citations:
+        lines.append("")
+        lines.append("Источники:" if language == "ru" else "Sources:")
+        for citation in result.citations:
+            lines.append(
+                f"- {citation.title} ({citation.url})" if citation.url else f"- {citation.title}"
+            )
+    body = "\n".join(lines).strip()
+    return f"<web_search>\n{body}\n</web_search>"
+
+
 
 
 @router.delete("/chat/pair/{pair_id}")
@@ -514,10 +532,46 @@ async def chat(
         stream_completed = False
         buffering = False
         try:
+            # Manual web toggle: research the user's message up front and put
+            # the brief in context, so the toggle and [WEB_SEARCH: ...] both
+            # go through the one orchestrator.
+            if do_web_search and current_user_text.strip():
+                from infrastructure.agents import Source, research
+
+                yield "event: web_start\n"
+                yield f"data: {json.dumps({'query': current_user_text[:200]})}\n\n"
+
+                web_result = await research(
+                    task=current_user_text,
+                    source=Source.WEB,
+                    api_key=api_key,
+                    account_id=account_id or "default",
+                    lang=prompt_language,
+                )
+                _dbg(
+                    f"WEB_TOGGLE attempts={web_result.attempts} "
+                    f"citations={len(web_result.citations)} found={web_result.found}"
+                )
+                logger.info(
+                    "[chat] web toggle research attempts=%d found=%s",
+                    web_result.attempts, web_result.found,
+                )
+                web_sources = [c.to_dict() for c in web_result.citations]
+
+                yield "event: web_results\n"
+                yield f"data: {json.dumps({'query': current_user_text[:200], 'brief': web_result.brief, 'sources': web_sources, 'attempts': web_result.attempts})}\n\n"
+                yield "event: web_done\n"
+                yield f"data: {json.dumps({'query': current_user_text[:200]})}\n\n"
+
+                if web_result.found:
+                    llm_messages.insert(
+                        len(llm_messages) - 1,
+                        {"role": "assistant", "content": _build_web_block(web_result, prompt_language)},
+                    )
+
             logger.info("[chat] initial stream start")
             async for chunk in client.stream(
                 messages=llm_messages,
-                web_search=do_web_search,
                 image_items=image_items or None,
                 system_prompt=combined_system_prompt,
             ):
@@ -639,8 +693,8 @@ async def chat(
                 continuation_prompt = result.continuation or ""
 
                 # For search: prepend cont_hint if more loops remain
-                if current_skill.id == "search_memories" and agent_loop < MAX_AGENT_LOOPS:
-                    from infrastructure.skills.search_memories.skill import skill as search_skill
+                if current_skill.id == "search_dialogue" and agent_loop < MAX_AGENT_LOOPS:
+                    from infrastructure.skills.search_dialogue.skill import skill as search_skill
                     cont_hint = search_skill.get_cont_hint(prompt_language, MAX_AGENT_LOOPS - agent_loop)
                     continuation_prompt = cont_hint + "\n\n" + continuation_prompt
 
@@ -656,14 +710,9 @@ async def chat(
                 for sse_line in _yield_chunk(separator):
                     yield sse_line
 
-                if current_skill.id == "web_search":
-                    yield "event: web_done\n"
-                    yield f"data: {json.dumps({'query': action_match.group(1).strip()})}\n\n"
-
                 continuation_parts: list[str] = []
                 async for chunk in client.stream(
                     messages=continuation_messages,
-                    web_search=result.continuation_web_search,
                     system_prompt=combined_system_prompt,
                 ):
                     if not chunk:

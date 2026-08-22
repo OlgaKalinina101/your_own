@@ -41,7 +41,6 @@ class SkillContext:
 class SkillResult:
     sse_events: list[tuple[str, dict]] = field(default_factory=list)
     continuation: str | None = None
-    continuation_web_search: bool = False
     db_markers: list[str] = field(default_factory=list)
     stream_chunks: list[str] = field(default_factory=list)
 

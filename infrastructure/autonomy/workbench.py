@@ -25,7 +25,7 @@ _OLD_HDR = re.compile(r"^###\s+(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})\s*(?:\(.*\))?\s
 _NEW_HDR = re.compile(r"^\[(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})\s*(?:UTC)?\]\s*$")
 
 _CMD_NAMES = (
-    "SEARCH_MEMORIES", "SEARCH_NOTES", "SEARCH_DIALOGUE", "WEB_SEARCH",
+    "SEARCH_FACTS", "SEARCH_MEMORIES", "SEARCH_NOTES", "SEARCH_DIALOGUE", "WEB_SEARCH",
     "WRITE_NOTE", "WRITE_IDENTITY", "SEND_MESSAGE", "SCHEDULE_MESSAGE",
     "CANCEL_MESSAGE", "RESCHEDULE_MESSAGE", "REWRITE_MESSAGE",
     "EXTEND", "SLEEP", "RECALL", "WRITE", "HISTORY",

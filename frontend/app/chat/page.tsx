@@ -407,6 +407,7 @@ export default function ChatPage() {
             eventType === "search_start" ||
             eventType === "search_results" ||
             eventType === "web_start" ||
+            eventType === "web_results" ||
             eventType === "web_done"
           ) {
             continue;

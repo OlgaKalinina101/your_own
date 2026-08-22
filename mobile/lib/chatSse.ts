@@ -16,6 +16,7 @@ const SKIP_EVENTS = new Set([
   "search_start",
   "search_results",
   "web_start",
+  "web_results",
   "web_done",
   "image_urls",
 ]);

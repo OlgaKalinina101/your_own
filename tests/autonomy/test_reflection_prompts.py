@@ -46,7 +46,7 @@ from infrastructure.autonomy.reflection_engine import (
 )
 
 _ALL_CMDS = [
-    "SEARCH_MEMORIES",
+    "SEARCH_FACTS",
     "SEARCH_NOTES",
     "SEARCH_DIALOGUE",
     "WEB_SEARCH",
@@ -273,7 +273,7 @@ class TestLoopSequence:
         assert "SLEEP" in system
 
     def test_continuation_after_search(self):
-        result = "[SEARCH_MEMORIES: детство] → [факт] Она любит море."
+        result = "[SEARCH_FACTS: детство] → [факт] Она любит море."
         text = _build_continuation("Victor", "ru", steps_left=6, result=result, timezone_label="Asia/Yerevan")
         assert "детство" in text
         assert "WRITE_NOTE" in text
@@ -283,7 +283,7 @@ class TestLoopSequence:
         text = _build_after_action("Victor", "en", steps_left=4, timezone_label="Asia/Yerevan")
         assert "4" in text
         assert "SLEEP" in text
-        assert "SEARCH_MEMORIES" in text
+        assert "SEARCH_FACTS" in text
 
     def test_extend_offer_at_correct_step(self):
         """Extend offer appears when steps_left == EXTEND_ASK_BEFORE (2)."""

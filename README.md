@@ -274,7 +274,7 @@ API requests from the phone go through a built-in Next.js proxy (`/api/*` → ba
 
 **ChromaDB facts** are automatically loaded into the AI context as its "memory block" — filtered by age so only older, settled memories surface.
 
-**pgvector** is used when the AI explicitly calls `[SEARCH_MEMORIES]` to dig into raw past conversations.
+**pgvector** is used when the AI explicitly calls `[SEARCH_DIALOGUE]` to dig into raw past conversations.
 
 ### Hybrid Retrieval
 
@@ -296,8 +296,8 @@ The AI doesn't just respond — it acts. During a conversation, the model invoke
 | Skill | What it does |
 |-------|-------------|
 | **`[SAVE_MEMORY: fact]`** | Extracts a key fact, categorizes it, rates importance 1–4, deduplicates via AI, stores in ChromaDB |
-| **`[SEARCH_MEMORIES: query]`** | Searches raw conversation history in pgvector. Results are fed back as a continuation prompt — AI replies with awareness of what it found. Up to 5 searches per reply |
-| **`[WEB_SEARCH: query]`** | Searches the live web for current information (weather, news, prices, addresses). Uses OpenRouter's `openrouter:web_search` server tool |
+| **`[SEARCH_DIALOGUE: query]`** | Searches raw conversation history in pgvector through the `ResearchAgent`, which re-queries with a different formulation when the first attempt misses. A brief plus the excerpts is fed back as a continuation prompt. Up to 5 searches per reply. `[SEARCH_MEMORIES]` is still accepted as the old name |
+| **`[WEB_SEARCH: query]`** | Searches the live web for current information (weather, news, prices, addresses). Runs through the `ResearchAgent` orchestrator, which drives a searcher model with OpenRouter's `openrouter:web_search` and `openrouter:web_fetch` server tools, judges the result, re-queries when it misses, and returns a brief with sources |
 | **`[GENERATE_IMAGE: model \| prompt]`** | Generates an image using `gpt5` (GPT-5 Image — photorealistic) or `gemini` (Gemini 3 Pro — design, diagrams, text). AI chooses the model and writes the prompt |
 | **`[SCHEDULE_MESSAGE: datetime \| text]`** | Schedules a push notification for later. The AI decides when and what to send — a reminder, a thought, a check-in |
 
@@ -305,7 +305,7 @@ The AI doesn't just respond — it acts. During a conversation, the model invoke
 
 1. AI streams its reply
 2. Backend detects skill commands and buffers the stream
-3. For `[SEARCH_MEMORIES]` / `[WEB_SEARCH]` — executes the action, injects results, AI continues
+3. For `[SEARCH_DIALOGUE]` / `[WEB_SEARCH]` — the research agent runs the search, injects its brief, AI continues
 4. For `[GENERATE_IMAGE]` — calls the image API, saves PNG, shows inline with pulsing shimmer
 5. For `[SAVE_MEMORY]` — extracts fact via LLM, rates, deduplicates, stores in ChromaDB
 6. For `[SCHEDULE_MESSAGE]` — creates a timed task, delivered as a push notification
@@ -320,7 +320,7 @@ The AI doesn't just wait for you to write. It has its own inner life.
 A background worker wakes the AI up periodically — first after a configurable cooldown (default: 4 hours after your last message), then at regular intervals (default: every 12 hours). During reflection, the AI:
 
 - Reads its identity core, workbench notes, and recent dialogue
-- Can search its long-term memories (`SEARCH_MEMORIES`), archived notes (`SEARCH_NOTES`), and dialogue history (`SEARCH_DIALOGUE`)
+- Can search its long-term facts (`SEARCH_FACTS`), archived notes (`SEARCH_NOTES`), and dialogue history (`SEARCH_DIALOGUE`) — all through the same research agent as the chat
 - Can search the web for things that interest it
 - Can write or update notes on its workbench
 - Can send you a message (`SEND_MESSAGE`) — delivered as a push notification

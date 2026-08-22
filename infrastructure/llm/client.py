@@ -135,14 +135,6 @@ class LLMClient:
             "X-Title": "Your Own",
         }
 
-    # OpenRouter server tool that runs web search server-side and feeds the
-    # results back to the model, which cites them via url_citation annotations.
-    # Replaces the deprecated :online suffix / plugins:[{id:"web"}] form.
-    _WEB_SEARCH_TOOL = {
-        "type": "openrouter:web_search",
-        "parameters": {"max_results": 5},
-    }
-
     def _build_messages(
         self,
         messages: list[dict],
@@ -189,23 +181,22 @@ class LLMClient:
     async def stream(
         self,
         messages: list[dict],
-        web_search: bool = False,
         image_items: Optional[list[tuple[bytes, str]]] = None,
         geo: Optional[dict] = None,
         system_prompt: Optional[str] = None,
     ) -> AsyncIterator[str]:
-        """
-        Streams text chunks from OpenRouter.
-        When web_search=True, attaches the openrouter:web_search server tool —
-        OpenRouter runs the search server-side and the model grounds its reply
-        in the results (citations arrive as url_citation annotations).
+        """Stream text chunks from OpenRouter.
+
+        Plain generation only. Web research goes through
+        :class:`~infrastructure.agents.research.ResearchAgent`, which calls
+        :meth:`complete_with_tools` — no search path runs through the reply
+        stream any more.
         """
         model = self.model
         built_messages = self._build_messages(messages, image_items, geo, system_prompt)
         logger.info(
-            "[LLMClient] stream start model=%s web_search=%s messages=%d has_system=%s images=%d",
+            "[LLMClient] stream start model=%s messages=%d has_system=%s images=%d",
             model,
-            web_search,
             len(built_messages),
             bool(system_prompt),
             len(image_items or []),
@@ -218,13 +209,8 @@ class LLMClient:
             "top_p": self.top_p,
             "stream": True,
         }
-        if web_search:
-            payload["tools"] = [self._WEB_SEARCH_TOOL]
 
         chunks: list[str] = []
-        citations: list[dict] = []
-        _seen_urls: set[str] = set()
-        web_search_requests = 0
         async with aiohttp.ClientSession() as session:
             async with session.post(
                 f"{OPENROUTER_BASE}/chat/completions",
@@ -261,40 +247,16 @@ class LLMClient:
                     except json.JSONDecodeError:
                         continue
 
-                    # web_search server tool reports its search count in usage
-                    usage = obj.get("usage") or {}
-                    stu = usage.get("server_tool_use_details") or {}
-                    if stu.get("web_search_requests"):
-                        web_search_requests = stu["web_search_requests"]
-
                     choices = obj.get("choices") or []
                     if not choices:
                         # OpenRouter may emit non-token SSE payloads without choices.
                         continue
 
                     delta = choices[0].get("delta") or {}
-
-                    # Collect url_citation annotations (sources the model grounded on).
-                    for ann in delta.get("annotations") or []:
-                        if ann.get("type") != "url_citation":
-                            continue
-                        uc = ann.get("url_citation") or {}
-                        url = uc.get("url")
-                        if url and url not in _seen_urls:
-                            _seen_urls.add(url)
-                            citations.append({"url": url, "title": uc.get("title") or url})
-
                     chunk = delta.get("content")
                     if chunk:
                         chunks.append(chunk)
                         yield chunk
-
-        if web_search:
-            logger.info(
-                "[LLMClient] web_search done requests=%d citations=%d",
-                web_search_requests,
-                len(citations),
-            )
 
         full_response = "".join(chunks)
         # Separate system from the rest for readability: built_messages[0] is system if present
@@ -305,8 +267,6 @@ class LLMClient:
             system=system_prompt,
             messages=_log_msgs,
             response=full_response,
-            web_search=web_search,
-            citations=citations,
         )
 
     async def complete(
@@ -413,6 +373,139 @@ class LLMClient:
                 await asyncio.sleep(1.5 * attempt)
 
         return ("", None) if return_meta else ""
+
+    async def complete_with_tools(
+        self,
+        messages: list[dict],
+        *,
+        tools: list[dict],
+        max_tokens: int = 1200,
+        temperature: float | None = None,
+        timeout_s: int = 120,
+    ) -> tuple[str, list[dict]]:
+        """Non-streaming completion with OpenRouter server tools attached.
+
+        Server tools (``openrouter:web_search``, ``openrouter:web_fetch``) run
+        on OpenRouter's side: the model decides when and how often to call them
+        and the whole search loop happens inside this single request. The reply
+        text arrives with ``url_citation`` annotations for the sources it used.
+
+        Returns ``(text, citations)`` where each citation is
+        ``{"url": ..., "title": ...}``. Returns ``("", [])`` on failure.
+
+        The timeout is generous by default — several searches plus a page fetch
+        can take well over the 60s used by :meth:`complete`.
+        """
+        system = None
+        if messages and messages[0].get("role") == "system":
+            system = messages[0].get("content", "")
+
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": temperature if temperature is not None else self.temperature,
+            "top_p": self.top_p,
+            "max_tokens": max_tokens,
+            "tools": tools,
+            "stream": False,
+        }
+        client_timeout = aiohttp.ClientTimeout(total=timeout_s)
+
+        for attempt in range(1, 4):
+            try:
+                async with aiohttp.ClientSession(timeout=client_timeout) as session:
+                    async with session.post(
+                        f"{OPENROUTER_BASE}/chat/completions",
+                        headers=self._headers(),
+                        json=payload,
+                    ) as resp:
+                        if resp.status != 200:
+                            body = await resp.text()
+                            logger.warning(
+                                "[LLMClient.complete_with_tools] %d on attempt %d/3: %s",
+                                resp.status, attempt, body[:200],
+                            )
+                            _append_debug_row(
+                                call_type="research",
+                                model=self.model,
+                                system=system,
+                                messages=messages,
+                                response="",
+                                web_search=True,
+                                error=f"HTTP {resp.status}: {body[:500]}",
+                            )
+                        else:
+                            data = await resp.json()
+                            choices = data.get("choices") or []
+                            if choices and not choices[0].get("error"):
+                                message = choices[0].get("message") or {}
+                                text_out = (message.get("content") or "").strip()
+
+                                citations: list[dict] = []
+                                seen: set[str] = set()
+                                for ann in message.get("annotations") or []:
+                                    if ann.get("type") != "url_citation":
+                                        continue
+                                    uc = ann.get("url_citation") or {}
+                                    url = uc.get("url")
+                                    if url and url not in seen:
+                                        seen.add(url)
+                                        citations.append(
+                                            {"url": url, "title": uc.get("title") or url}
+                                        )
+
+                                usage = data.get("usage") or {}
+                                stu = usage.get("server_tool_use_details") or {}
+                                logger.info(
+                                    "[LLMClient.complete_with_tools] model=%s searches=%s citations=%d len=%d",
+                                    self.model,
+                                    stu.get("web_search_requests", 0),
+                                    len(citations),
+                                    len(text_out),
+                                )
+                                _append_debug_row(
+                                    call_type="research",
+                                    model=self.model,
+                                    system=system,
+                                    messages=messages,
+                                    response=text_out,
+                                    web_search=True,
+                                    citations=citations,
+                                )
+                                return text_out, citations
+
+                            err = choices[0].get("error") if choices else "no choices"
+                            logger.warning(
+                                "[LLMClient.complete_with_tools] provider error on attempt %d/3: %s",
+                                attempt, err,
+                            )
+                            _append_debug_row(
+                                call_type="research",
+                                model=self.model,
+                                system=system,
+                                messages=messages,
+                                response="",
+                                web_search=True,
+                                error=str(err),
+                            )
+            except Exception as exc:
+                logger.warning(
+                    "[LLMClient.complete_with_tools] error on attempt %d/3: %s", attempt, exc
+                )
+                _append_debug_row(
+                    call_type="research",
+                    model=self.model,
+                    system=system,
+                    messages=messages,
+                    response="",
+                    web_search=True,
+                    error=str(exc),
+                )
+
+            if attempt < 3:
+                await asyncio.sleep(1.5 * attempt)
+
+        return "", []
 
     # Models that output only images (no text) — require modalities: ["image"]
     _IMAGE_ONLY_PREFIXES = (

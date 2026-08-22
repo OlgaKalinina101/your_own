@@ -12,7 +12,7 @@ On each reflection the engine:
   4. On [SLEEP] or no meaningful output the loop ends.
 
 Commands:
-  [SEARCH_MEMORIES: query]       — Chroma key_info (long-term facts)
+  [SEARCH_FACTS: query]          — Chroma key_info (long-term facts)
   [SEARCH_NOTES: query]          — Chroma workbench_archive + current workbench
   [SEARCH_DIALOGUE: YYYY-MM-DD]  — date-based dialogue lookup
   [SEARCH_DIALOGUE: YYYY-MM-DD..YYYY-MM-DD]
@@ -24,11 +24,14 @@ Commands:
   [SCHEDULE_MESSAGE: YYYY-MM-DD HH:MM | text]
   [EXTEND: N]   (1-5, up to 3 times)
   [SLEEP]
+
+Every search command runs through infrastructure.agents.ResearchAgent: it
+probes the backend, judges whether the result answers the query, re-queries
+with a different formulation when it does not, and returns a brief.
 """
 from __future__ import annotations
 
 import asyncio
-import aiohttp
 import json
 import logging
 import re
@@ -40,8 +43,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from infrastructure.autonomy import identity_memory as identity
 from infrastructure.autonomy import workbench as wb
+from infrastructure.agents import Source, research
 from infrastructure.database.engine import get_db_session
-from infrastructure.memory.chroma_pipeline import get_chroma_pipeline
 from infrastructure.llm.prompt_loader import get_prompt
 
 from infrastructure.autonomy.helpers import (
@@ -68,7 +71,7 @@ MAX_EXTEND_PER_ASK = 5
 MAX_EXTEND_ASKS = 3
 
 _CMD_RE = re.compile(
-    r"\[(?P<cmd>SEARCH_MEMORIES|SEARCH_NOTES|SEARCH_DIALOGUE|WEB_SEARCH"
+    r"\[(?P<cmd>SEARCH_FACTS|SEARCH_MEMORIES|SEARCH_NOTES|SEARCH_DIALOGUE|WEB_SEARCH"
     r"|WRITE_NOTE|WRITE_IDENTITY|SEND_MESSAGE|SCHEDULE_MESSAGE"
     r"|CANCEL_MESSAGE|RESCHEDULE_MESSAGE|REWRITE_MESSAGE"
     r"|PIN_THREAD|UNPIN_THREAD|UPDATE_THREAD"
@@ -79,11 +82,15 @@ _SLEEP_RE = re.compile(r"\[SLEEP\]", re.IGNORECASE)
 _CANCEL_ALL_RE = re.compile(r"\[CANCEL[_ ]ALL[_ ]SCHEDULED\]", re.IGNORECASE)
 _EXTEND_RE = re.compile(r"\[EXTEND:\s*(\d+)\]", re.IGNORECASE)
 
-_SEARCH_CMDS = {"SEARCH_MEMORIES", "SEARCH_NOTES", "SEARCH_DIALOGUE", "WEB_SEARCH"}
+_SEARCH_CMDS = {"SEARCH_FACTS", "SEARCH_NOTES", "SEARCH_DIALOGUE", "WEB_SEARCH"}
 _WRITE_CMDS = {"WRITE_NOTE", "WRITE_IDENTITY", "SEND_MESSAGE", "SCHEDULE_MESSAGE"}
 
+# Back-compat: SEARCH_MEMORIES used to mean Chroma facts here and Postgres
+# dialogue in chat. One name, one meaning now - it resolves to the dialogue
+# store, and facts have their own command.
 _ALIASES = {
-    "RECALL": "SEARCH_MEMORIES",
+    "SEARCH_MEMORIES": "SEARCH_DIALOGUE",
+    "RECALL": "SEARCH_FACTS",
     "WRITE": "WRITE_NOTE",
     "HISTORY": "SEARCH_DIALOGUE",
 }
@@ -116,131 +123,63 @@ async def _complete(api_key: str, messages: list[dict], max_tokens: int = 2200) 
     return await client.complete(messages, max_tokens=max_tokens, temperature=0.7)
 
 
-# ── Command handlers ──────────────────────────────────────────────────────────
+# ── Command handlers ─────────────────────────────────────────────────────
 
-async def _search_memories(account_id: str, query: str) -> str:
-    """Semantic search in Chroma key_info (long-term facts)."""
-    try:
-        pipeline = get_chroma_pipeline()
-        results = pipeline.query_similar_multi(account_id, query, top_k=5)
-        if not results:
-            return "Ничего не найдено."
-        lines = []
-        for r in results:
-            cat = r.get("metadata", {}).get("category", "?")
-            lines.append(f"[{cat}] {r['text']}")
-        return "\n".join(lines)
-    except Exception as exc:
-        logger.warning("[reflection] search_memories (chroma) error: %s", exc)
-        return f"Ошибка поиска: {exc}"
-
-
-async def _search_notes(account_id: str, query: str) -> str:
-    """Semantic search in Chroma workbench_archive + keyword search in current workbench."""
-    parts: list[str] = []
-    try:
-        from infrastructure.memory.chroma_pipeline import _get_archive_collection
-        from infrastructure.memory.embedder import embed_one
-        col = _get_archive_collection()
-        if col is not None:
-            embedding = embed_one(query)
-            if embedding is not None:
-                results = col.query(
-                    query_embeddings=[embedding],
-                    n_results=5,
-                    where={"account_id": account_id},
-                    include=["documents", "metadatas", "distances"],
-                )
-                if results and results["ids"] and results["ids"][0]:
-                    for doc, meta, dist in zip(
-                        results["documents"][0],
-                        results["metadatas"][0],
-                        results["distances"][0],
-                    ):
-                        if dist < 0.65:
-                            ts = meta.get("created_at", "?")
-                            parts.append(f"[archive {ts}] {doc}")
-    except Exception as exc:
-        logger.warning("[reflection] search_notes (archive) error: %s", exc)
-
-    current = wb.search(account_id, query)
-    if current and not current.startswith("(workbench is empty)") and not current.startswith("No notes"):
-        parts.append(f"[workbench] {current}")
-
-    return "\n---\n".join(parts) if parts else "Ничего не найдено."
-
+# Every search command maps to one backend of the shared research agent.
+# Reflection no longer talks to Chroma, Postgres or the workbench directly.
+_SEARCH_SOURCES = {
+    "SEARCH_DIALOGUE": Source.DIALOGUE,
+    "SEARCH_FACTS": Source.FACTS,
+    "SEARCH_NOTES": Source.NOTES,
+    "WEB_SEARCH": Source.WEB,
+}
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}")
 
 
-async def _search_dialogue(db: AsyncSession, account_id: str, arg: str) -> str:
-    """Date-based or semantic search in PostgreSQL dialogue history."""
+async def _run_search(
+    cmd: str,
+    arg: str,
+    account_id: str,
+    api_key: str,
+    db: AsyncSession,
+    lang: str,
+) -> str:
+    """Hand one search command to the research agent and render its brief."""
+    source = _SEARCH_SOURCES[cmd]
     arg = arg.strip()
 
-    # Free-text query → semantic search via embeddings
-    if not _DATE_RE.match(arg):
-        try:
-            from infrastructure.memory.retrieval import retrieve_relevant_pairs
-            pairs = await retrieve_relevant_pairs(db, account_id, arg, top_n=5)
-            if not pairs:
-                return "Ничего не найдено."
-            lines = []
-            for p in pairs:
-                ts = p.created_at.strftime("%Y-%m-%d") if p.created_at else "?"
-                lines.append(f"[{ts}] {p.user_text} → {p.assistant_text}")
-            return "\n".join(lines)
-        except Exception as exc:
-            logger.warning("[reflection] search_dialogue (semantic) error: %s", exc)
-            return f"Ошибка поиска: {exc}"
+    # A dialogue lookup by date has nothing to reformulate — one pass only.
+    max_attempts = 1 if (source == Source.DIALOGUE and _DATE_RE.match(arg)) else None
 
-    # Date-based lookup
     try:
-        from infrastructure.database.repositories.message_repo import MessageRepository
-        repo = MessageRepository(db)
-
-        if ".." in arg:
-            parts = arg.split("..")
-            before_date = datetime.strptime(parts[1].strip(), "%Y-%m-%d").replace(
-                hour=23, minute=59, second=59, tzinfo=timezone.utc
-            )
-        else:
-            before_date = datetime.strptime(arg.strip(), "%Y-%m-%d").replace(
-                hour=23, minute=59, second=59, tzinfo=timezone.utc
-            )
-
-        pairs, _, _ = await repo.get_canonical_pairs_page(
-            account_id, limit_pairs=10, before=before_date
+        result = await research(
+            task=arg,
+            source=source,
+            api_key=api_key,
+            account_id=account_id,
+            lang=lang,
+            db=db,
+            max_attempts=max_attempts,
         )
-        if not pairs:
-            return f"Переписка за {arg} не найдена."
-        lines = []
-        for p in pairs:
-            lines.append(
-                f"User: {p.get('user_text','')}\nAssistant: {p.get('assistant_text','')}\n"
-            )
-        return "\n---\n".join(lines)
     except Exception as exc:
-        logger.warning("[reflection] search_dialogue error: %s", exc)
-        return f"Ошибка поиска диалога: {exc}"
+        logger.warning("[reflection] %s error: %s", cmd, exc)
+        return f"Ошибка поиска: {exc}"
 
+    if not result.found:
+        return "Ничего не найдено."
 
-async def _web_search(query: str) -> str:
-    try:
-        import urllib.parse
-        url = (
-            "https://api.duckduckgo.com/?q="
-            + urllib.parse.quote(query)
-            + "&format=json&no_redirect=1&no_html=1"
-        )
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                data = await resp.json(content_type=None)
-        abstract = data.get("AbstractText") or ""
-        related = [r.get("Text", "") for r in data.get("RelatedTopics", [])[:3]]
-        result = abstract or " | ".join(related) or "Нет результатов."
-        return result[:500]
-    except Exception as exc:
-        return f"Ошибка веб-поиска: {exc}"
+    parts = [result.brief]
+    if source == Source.WEB and result.citations:
+        sources = ", ".join(c.url or c.title for c in result.citations[:5])
+        parts.append(f"Источники: {sources}")
+    else:
+        # For memory sources the verbatim material carries the texture the
+        # brief flattens — keep it under the summary.
+        excerpts = "\n---\n".join(str(h.get("text", "")) for h in result.raw_hits)
+        if excerpts:
+            parts.append(excerpts)
+    return "\n\n".join(p for p in parts if p)
 
 
 async def _handle_command(
@@ -249,21 +188,13 @@ async def _handle_command(
     account_id: str,
     api_key: str,
     db: AsyncSession,
+    lang: str = "ru",
 ) -> str | None:
     """Execute one command. Returns result text (search) or None (write/action)."""
     cmd = _ALIASES.get(cmd.upper(), cmd.upper())
 
-    if cmd == "SEARCH_MEMORIES":
-        return await _search_memories(account_id, arg)
-
-    elif cmd == "SEARCH_NOTES":
-        return await _search_notes(account_id, arg)
-
-    elif cmd == "SEARCH_DIALOGUE":
-        return await _search_dialogue(db, account_id, arg)
-
-    elif cmd == "WEB_SEARCH":
-        return await _web_search(arg)
+    if cmd in _SEARCH_SOURCES:
+        return await _run_search(cmd, arg, account_id, api_key, db, lang)
 
     elif cmd == "WRITE_NOTE":
         wb.append(account_id, arg.strip())
@@ -621,7 +552,7 @@ async def run(account_id: str, api_key: str) -> None:
                     continue
                 resolved = _ALIASES.get(cmd_name.upper(), cmd_name.upper())
                 try:
-                    result = await _handle_command(cmd_name, arg, account_id, api_key, db)
+                    result = await _handle_command(cmd_name, arg, account_id, api_key, db, lang)
                     if result is not None:
                         search_results.append(f"[{resolved}: {arg[:40]}] → {result}")
                     else:

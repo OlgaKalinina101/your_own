@@ -26,8 +26,8 @@ const HOW_IT_WORKS = [
   },
   {
     step: "02",
-    text: "For [SEARCH_MEMORIES] or [WEB_SEARCH], the backend executes the action, feeds results back — AI continues with new context",
-    textRu: "Для [SEARCH_MEMORIES] или [WEB_SEARCH] бэкенд выполняет действие, возвращает результат — AI продолжает с новым контекстом",
+    text: "For [SEARCH_DIALOGUE] or [WEB_SEARCH], the research agent runs the search, judges the result, re-queries if it missed, and feeds a brief back — AI continues with new context",
+    textRu: "Для [SEARCH_DIALOGUE] или [WEB_SEARCH] агент-поисковик выполняет поиск, оценивает результат, переформулирует запрос при промахе и возвращает сводку — AI продолжает с новым контекстом",
   },
   {
     step: "03",
@@ -222,7 +222,7 @@ export default function SkillsPage() {
                 { label: "→" },
                 { label: "ai streams reply", sub: "with skills" },
                 { label: "→" },
-                { label: "[SEARCH_MEMORIES]", sub: "raw history" },
+                { label: "[SEARCH_DIALOGUE]", sub: "raw history" },
                 { label: "[WEB_SEARCH]", sub: "live internet" },
                 { label: "[GENERATE_IMAGE]", sub: "gpt5 / gemini" },
                 { label: "→" },

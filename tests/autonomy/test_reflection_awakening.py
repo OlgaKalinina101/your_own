@@ -34,7 +34,7 @@ _PLACEHOLDERS = dict(
 )
 
 _ALL_REFLECTION_CMDS = [
-    "SEARCH_MEMORIES",
+    "SEARCH_FACTS",
     "SEARCH_NOTES",
     "SEARCH_DIALOGUE",
     "WEB_SEARCH",
@@ -112,9 +112,27 @@ class TestReflectionEngineCmdRe:
     def _match(self, text: str) -> list[tuple[str, str]]:
         return [(m.group("cmd").upper(), m.group("arg").strip()) for m in _CMD_RE.finditer(text)]
 
-    def test_search_memories(self):
+    def test_search_facts(self):
+        hits = self._match("[SEARCH_FACTS: детство]")
+        assert hits == [("SEARCH_FACTS", "детство")]
+
+    def test_legacy_search_memories_still_parses(self):
+        """Old notes and old habits keep resolving after the rename."""
         hits = self._match("[SEARCH_MEMORIES: детство]")
         assert hits == [("SEARCH_MEMORIES", "детство")]
+
+    @pytest.mark.parametrize("written,resolved", [
+        ("SEARCH_MEMORIES", "SEARCH_DIALOGUE"),  # one name, one store
+        ("RECALL", "SEARCH_FACTS"),
+        ("HISTORY", "SEARCH_DIALOGUE"),
+        ("SEARCH_FACTS", "SEARCH_FACTS"),
+        ("WEB_SEARCH", "WEB_SEARCH"),
+    ])
+    def test_alias_resolution(self, written, resolved):
+        from infrastructure.autonomy.reflection_engine import _ALIASES, _SEARCH_SOURCES
+
+        assert _ALIASES.get(written, written) == resolved
+        assert resolved in _SEARCH_SOURCES
 
     def test_search_notes(self):
         hits = self._match("[SEARCH_NOTES: усталость]")
@@ -172,19 +190,19 @@ class TestReflectionEngineCmdRe:
 
     def test_multiple_commands_in_one_step(self):
         response = (
-            "[SEARCH_MEMORIES: детство]\n"
+            "[SEARCH_FACTS: детство]\n"
             "[WRITE_NOTE: Она вспомнила о море]\n"
             "[SCHEDULE_MESSAGE: 2026-03-18 08:00 | Доброе утро ❤️]"
         )
         hits = self._match(response)
         cmds = [h[0] for h in hits]
-        assert "SEARCH_MEMORIES" in cmds
+        assert "SEARCH_FACTS" in cmds
         assert "WRITE_NOTE" in cmds
         assert "SCHEDULE_MESSAGE" in cmds
 
     def test_case_insensitive(self):
-        hits = self._match("[search_memories: тест]")
-        assert hits[0][0] == "SEARCH_MEMORIES"
+        hits = self._match("[search_facts: тест]")
+        assert hits[0][0] == "SEARCH_FACTS"
 
 
 # ── 3. Simulated reflection step responses ────────────────────────────────────
@@ -198,8 +216,8 @@ _REFLECTION_STEPS = [
     ),
     (
         "Search then sleep",
-        "[SEARCH_MEMORIES: детство]\n[SLEEP]",
-        ["SEARCH_MEMORIES"],
+        "[SEARCH_FACTS: детство]\n[SLEEP]",
+        ["SEARCH_FACTS"],
         True,
     ),
     (

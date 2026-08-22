@@ -11,7 +11,7 @@ There are two independent memory stores. Both are queried on every chat request.
 | Store | Technology | What it holds | When it's used |
 |---|---|---|---|
 | **key_info** | ChromaDB | Distilled facts — events, decisions, relationships, self-insights. Rated 1–4 by importance. | Automatically injected into every chat as the AI's passive memory |
-| **messages** | PostgreSQL + pgvector | Raw conversation chunks with embeddings | Queried only when the AI explicitly calls `[SEARCH_MEMORIES: query]` |
+| **messages** | PostgreSQL + pgvector | Raw conversation chunks with embeddings | Queried only when the AI explicitly calls `[SEARCH_DIALOGUE: query]` |
 
 ---
 
@@ -98,7 +98,7 @@ After the response is sent, `update_usage()` is called for every fact that was r
 
 ## Explicit Memory Search (AI-initiated)
 
-When the AI emits `[SEARCH_MEMORIES: query]` during a response, a different pipeline runs:
+When the AI emits `[SEARCH_DIALOGUE: query]` during a response, the `ResearchAgent` drives a different pipeline:
 
 `infrastructure/memory/retrieval.py` → `retrieve_relevant_pairs()`
 
