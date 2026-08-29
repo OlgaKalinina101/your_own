@@ -1,10 +1,10 @@
 "use client";
 
 import { memo, useEffect, useMemo, useState } from "react";
-import ReactMarkdown from "react-markdown";
+import ReactMarkdown, { type Components } from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
-import { getApiBase } from "@/lib/api";
+import { useMediaUrl } from "@/lib/media";
 
 type MarkdownMessageProps = {
   content: string;
@@ -288,8 +288,11 @@ function GeneratingImageShimmer({ prompt }: { prompt: string }) {
 function GeneratedImageCard({ image }: { image: GeneratedImage }) {
   const [lightboxOpen, setLightboxOpen] = useState(false);
 
-  const src = image.path.startsWith("http") ? image.path : `${getApiBase()}${image.path}`;
-  const filename = image.path.split("/").pop() ?? "image.png";
+  // Signed, not bare: the media routes are authenticated and an <img> cannot
+  // send a header. Empty until the signature arrives — better a beat of nothing
+  // than a broken-image icon.
+  const src = useMediaUrl(image.path);
+  const filename = image.path.split("/").pop()?.split("?")[0] ?? "image.png";
   const modelName = image.model.split("/").pop() ?? image.model;
   const promptPreview = image.prompt.length > 80 ? image.prompt.slice(0, 77) + "..." : image.prompt;
 
@@ -305,13 +308,20 @@ function GeneratedImageCard({ image }: { image: GeneratedImage }) {
           onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") setLightboxOpen(true); }}
           aria-label="Open image"
         >
-          <img
-            src={src}
-            alt={image.prompt}
-            className="w-full block transition-opacity duration-200 hover:opacity-90"
-            loading="lazy"
-            onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
-          />
+          {/* Not rendered until the signature resolves: an empty src fires
+              onError, and that handler hides the element for good — which is
+              exactly how the 401s stayed invisible. */}
+          {src ? (
+            <img
+              src={src}
+              alt={image.prompt}
+              className="w-full block transition-opacity duration-200 hover:opacity-90"
+              loading="lazy"
+              onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+            />
+          ) : (
+            <div className="aspect-square w-full animate-pulse bg-white/[0.04]" />
+          )}
         </div>
         <div className="flex items-center gap-2 border-t border-white/8 px-3 py-2 text-[0.62rem] tracking-wide text-white/35">
           <span className="text-white/20">⬡</span>
@@ -392,12 +402,12 @@ function MarkdownBlock({ text, role }: { text: string; role: "user" | "assistant
   const quoteTone = role === "user" ? "border-white/25 text-white/85" : "border-white/20 text-white/75";
   const linkTone = role === "user" ? "text-white underline decoration-white/40 underline-offset-4" : "text-white underline decoration-white/30 underline-offset-4";
 
-  const components = useMemo(
+  const components = useMemo<Components>(
     () => ({
-      p: ({ children }: any) => <p className={`mb-4 last:mb-0 ${textTone}`}>{children}</p>,
-      strong: ({ children }: any) => <strong className="font-semibold text-white">{children}</strong>,
-      em: ({ children }: any) => <em className="italic">{children}</em>,
-      a: ({ href, children }: any) => (
+      p: ({ children }) => <p className={`mb-4 last:mb-0 ${textTone}`}>{children}</p>,
+      strong: ({ children }) => <strong className="font-semibold text-white">{children}</strong>,
+      em: ({ children }) => <em className="italic">{children}</em>,
+      a: ({ href, children }) => (
         <a
           href={href}
           target="_blank"
@@ -407,40 +417,46 @@ function MarkdownBlock({ text, role }: { text: string; role: "user" | "assistant
           {children}
         </a>
       ),
-      blockquote: ({ children }: any) => (
+      blockquote: ({ children }) => (
         <blockquote className={`my-4 border-l-2 bg-transparent pl-4 italic ${quoteTone}`}>{children}</blockquote>
       ),
-      h1: ({ children }: any) => <h1 className="mb-3 mt-5 text-[1.4rem] font-semibold text-white first:mt-0">{children}</h1>,
-      h2: ({ children }: any) => <h2 className="mb-3 mt-5 text-[1.22rem] font-semibold text-white first:mt-0">{children}</h2>,
-      h3: ({ children }: any) => <h3 className="mb-2 mt-4 text-[1.08rem] font-semibold text-white first:mt-0">{children}</h3>,
-      h4: ({ children }: any) => <h4 className="mb-2 mt-4 text-[1rem] font-semibold text-white first:mt-0">{children}</h4>,
-      h5: ({ children }: any) => <h5 className="mb-2 mt-4 text-[0.95rem] font-semibold text-white first:mt-0">{children}</h5>,
-      h6: ({ children }: any) => <h6 className="mb-2 mt-4 text-[0.9rem] font-semibold text-white/90 first:mt-0">{children}</h6>,
+      h1: ({ children }) => <h1 className="mb-3 mt-5 text-[1.4rem] font-semibold text-white first:mt-0">{children}</h1>,
+      h2: ({ children }) => <h2 className="mb-3 mt-5 text-[1.22rem] font-semibold text-white first:mt-0">{children}</h2>,
+      h3: ({ children }) => <h3 className="mb-2 mt-4 text-[1.08rem] font-semibold text-white first:mt-0">{children}</h3>,
+      h4: ({ children }) => <h4 className="mb-2 mt-4 text-[1rem] font-semibold text-white first:mt-0">{children}</h4>,
+      h5: ({ children }) => <h5 className="mb-2 mt-4 text-[0.95rem] font-semibold text-white first:mt-0">{children}</h5>,
+      h6: ({ children }) => <h6 className="mb-2 mt-4 text-[0.9rem] font-semibold text-white/90 first:mt-0">{children}</h6>,
       hr: () => <hr className={`my-5 border-t ${borderTone}`} />,
-      ul: ({ children }: any) => <ul className={`mb-4 ml-5 list-disc space-y-2 ${textTone}`}>{children}</ul>,
-      ol: ({ children }: any) => <ol className={`mb-4 ml-5 list-decimal space-y-2 ${textTone}`}>{children}</ol>,
-      li: ({ children }: any) => <li className={mutedTone}>{children}</li>,
-      table: ({ children }: any) => (
+      ul: ({ children }) => <ul className={`mb-4 ml-5 list-disc space-y-2 ${textTone}`}>{children}</ul>,
+      ol: ({ children }) => <ol className={`mb-4 ml-5 list-decimal space-y-2 ${textTone}`}>{children}</ol>,
+      li: ({ children }) => <li className={mutedTone}>{children}</li>,
+      table: ({ children }) => (
         <div className="my-4 overflow-x-auto">
           <table className="min-w-full border-collapse text-left text-[0.82rem]">{children}</table>
         </div>
       ),
-      thead: ({ children }: any) => <thead className="border-b border-white/15 text-white/75">{children}</thead>,
-      tbody: ({ children }: any) => <tbody>{children}</tbody>,
-      tr: ({ children }: any) => <tr className="border-b border-white/8 last:border-b-0">{children}</tr>,
-      th: ({ children }: any) => <th className="px-3 py-2 font-medium">{children}</th>,
-      td: ({ children }: any) => <td className="px-3 py-2 text-white/78">{children}</td>,
-      code: ({ inline, className, children, ...props }: any) => {
+      thead: ({ children }) => <thead className="border-b border-white/15 text-white/75">{children}</thead>,
+      tbody: ({ children }) => <tbody>{children}</tbody>,
+      tr: ({ children }) => <tr className="border-b border-white/8 last:border-b-0">{children}</tr>,
+      th: ({ children }) => <th className="px-3 py-2 font-medium">{children}</th>,
+      td: ({ children }) => <td className="px-3 py-2 text-white/78">{children}</td>,
+      // react-markdown dropped the `inline` prop in v9; under `: any` it stayed
+      // undefined, so every inline `code` span fell through to BlockCode — a
+      // full panel with a language header and a copy button, mid-sentence.
+      // A fenced block is what carries a language class or spans lines;
+      // anything else is inline.
+      code: ({ className, children, ...props }) => {
         const rawCode = String(children ?? "").replace(/\n$/, "");
         const language = /language-([\w-]+)/.exec(className || "")?.[1] ?? "";
-        if (inline) {
-          return (
-            <code className={`rounded px-1.5 py-0.5 font-mono text-[0.84em] ${inlineCodeTone}`} {...props}>
-              {children}
-            </code>
-          );
+        const isBlock = Boolean(language) || rawCode.includes("\n");
+        if (isBlock) {
+          return <BlockCode code={rawCode} language={language} role={role} />;
         }
-        return <BlockCode code={rawCode} language={language} role={role} />;
+        return (
+          <code className={`rounded px-1.5 py-0.5 font-mono text-[0.84em] ${inlineCodeTone}`} {...props}>
+            {children}
+          </code>
+        );
       },
     }),
     [borderTone, inlineCodeTone, linkTone, mutedTone, quoteTone, role, textTone],

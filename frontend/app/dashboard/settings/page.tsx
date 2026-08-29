@@ -10,42 +10,30 @@ import {
   apiGet,
   apiPut,
 } from "@/lib/api";
+import type { Settings } from "@/lib/types";
 
 const MODELS = [
-  { id: "anthropic/claude-fable-5",       label: "Claude Fable 5",        vision: true  },
-  { id: "anthropic/claude-opus-4.6",      label: "Claude Opus 4.6",       vision: true  },
-  { id: "anthropic/claude-sonnet-4.6",    label: "Claude Sonnet 4.6",     vision: true  },
-  { id: "openai/gpt-5.5",                 label: "GPT 5.5",               vision: true  },
-  { id: "openai/gpt-5.4",                 label: "GPT 5.4",               vision: true  },
-  { id: "openai/gpt-5.1",                 label: "GPT 5.1",               vision: true  },
-  { id: "google/gemini-3.1-pro-preview",  label: "Gemini 3.1 Pro",        vision: false },
-  { id: "google/gemini-3-pro-preview",    label: "Gemini 3 Pro",          vision: false },
-  { id: "deepseek/deepseek-v4-pro",       label: "DeepSeek V4 Pro",       vision: false },
-  { id: "deepseek/deepseek-v4-flash",     label: "DeepSeek V4 Flash",     vision: false },
-  { id: "z-ai/glm-5.1",                   label: "GLM 5.1",               vision: false },
-  { id: "z-ai/glm-5",                     label: "GLM 5",                 vision: false },
-  { id: "qwen/qwen3.6-plus",              label: "Qwen 3.6 Plus",         vision: false },
-  { id: "qwen/qwen3-max",                 label: "Qwen 3 Max",            vision: false },
-  { id: "xiaomi/mimo-v2-omni",            label: "MiMo V2 Omni",          vision: true  },
-  { id: "xiaomi/mimo-v2-pro",             label: "MiMo V2 Pro",           vision: false },
-  { id: "moonshotai/kimi-k2.5",           label: "Kimi K2.5",             vision: false },
-  { id: "meta-llama/llama-4-maverick",    label: "Llama 4 Maverick",      vision: false },
-  { id: "meta-llama/llama-4-scout",       label: "Llama 4 Scout",         vision: false },
-  { id: "mistralai/mistral-large",        label: "Mistral Large",         vision: false },
+  { id: "~anthropic/claude-fable-latest", label: "Claude Fable", vision: true  },
+  { id: "~moonshotai/kimi-latest",        label: "Kimi",         vision: true  },
+  { id: "~google/gemini-pro-latest",      label: "Gemini Pro",   vision: true  },
+  { id: "openai/gpt-chat-latest",         label: "GPT Chat",     vision: true  },
+  { id: "~z-ai/glm-latest",               label: "GLM",          vision: false },
 ] as const;
 
 type ModelId = (typeof MODELS)[number]["id"];
 
 const IMAGE_GEN_MODELS = [
   {
-    id: "sourceful/riverflow-v2-fast",
-    label: "Riverflow V2 Fast",
+    id: "sourceful/riverflow-v2.5-fast",
+    label: "Riverflow V2.5 Fast",
     hint: "fastest · $0.02–$0.04/img",
   },
   {
-    id: "sourceful/riverflow-v2-pro",
-    label: "Riverflow V2 Pro",
-    hint: "best quality · $0.15–$0.33/img",
+    id: "sourceful/riverflow-v2.5-pro",
+    label: "Riverflow V2.5 Pro",
+    // Scaled from the V2 range by the catalogue price ratio: V2.5 costs
+    // 0.87x per image token, so the same picture is cheaper, not dearer.
+    hint: "best quality · $0.13–$0.29/img",
   },
 ] as const;
 
@@ -138,8 +126,8 @@ export default function SettingsPage() {
 
   async function loadRemoteSettings() {
     try {
-      const data: Record<string, unknown> = await apiGet("/api/settings/raw");
-      const key = data.openrouter_api_key as string;
+      const data = await apiGet<Settings>("/api/settings/raw");
+      const key = data.openrouter_api_key;
 
       // One-time migration: if server has no API key but Electron keytar does, push it
       if (!key && typeof window !== "undefined" && "yourOwn" in window) {
@@ -168,19 +156,19 @@ export default function SettingsPage() {
         }
       }
 
-      if (data.ai_name) setAiName(data.ai_name as string);
+      if (data.ai_name) setAiName(data.ai_name);
       if (key) setApiKey(key);
-      const m = data.model as string;
+      const m = data.model;
       if (m && MODELS.find((x) => x.id === m)) setModel(m as ModelId);
-      if (data.temperature != null) setTemperature(Math.round((data.temperature as number) * 10));
-      if (data.top_p != null) setTopP(Math.round((data.top_p as number) * 10));
-      if (data.history_pairs != null) setHistoryPairs(data.history_pairs as number);
-      if (data.memory_cutoff_days != null) setMemoryCutoffDays(data.memory_cutoff_days as number);
-      if (data.pushy_api_key) setPushyApiKey(data.pushy_api_key as string);
-      if (data.pushy_device_token) setPushyDeviceToken(data.pushy_device_token as string);
-      if (data.reflection_cooldown_hours != null) setReflectionCooldown(data.reflection_cooldown_hours as number);
-      if (data.reflection_interval_hours != null) setReflectionInterval(data.reflection_interval_hours as number);
-      const bim = data.body_image_model as string;
+      if (data.temperature != null) setTemperature(Math.round(data.temperature * 10));
+      if (data.top_p != null) setTopP(Math.round(data.top_p * 10));
+      if (data.history_pairs != null) setHistoryPairs(data.history_pairs);
+      if (data.memory_cutoff_days != null) setMemoryCutoffDays(data.memory_cutoff_days);
+      if (data.pushy_api_key) setPushyApiKey(data.pushy_api_key);
+      if (data.pushy_device_token) setPushyDeviceToken(data.pushy_device_token);
+      if (data.reflection_cooldown_hours != null) setReflectionCooldown(data.reflection_cooldown_hours);
+      if (data.reflection_interval_hours != null) setReflectionInterval(data.reflection_interval_hours);
+      const bim = data.body_image_model;
       if (bim && IMAGE_GEN_MODELS.find((x) => x.id === bim)) setBodyImageModel(bim as ImageGenModelId);
       setConnected(true);
     } catch {

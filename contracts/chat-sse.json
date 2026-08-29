@@ -1,0 +1,250 @@
+{
+  "$comment": [
+    "The chat SSE contract, as frames on the wire and what a client must make of them.",
+    "",
+    "Read by every client's parser test. Neither client owns this file; a change here",
+    "breaks both at once, in CI, which is the point — the desktop and the phone share",
+    "no code, and four divergences had already accumulated silently between them.",
+    "",
+    "The backend's side is api/chat.py: _sse() for named events, _yield_chunk() for text,",
+    "_SSE_DONE for the terminator, _SSE_KEEPALIVE while a command is buffered.",
+    "",
+    "The rule that makes 'unknown event' detectable: text chunks carry NO 'event:' line.",
+    "Every named event has one. So an unrecognised name is an unrecognised event, never",
+    "text — which is what both clients used to get wrong.",
+    "Frames marked \"synthetic\" are not emitted by the backend: `skill` never was — both clients carry it in a skip-list that predates the contract — and the unknown-event case is invented on purpose. They pin client behaviour, so the backend's coverage test ignores them."
+  ],
+  "frames": [
+    {
+      "name": "plain text chunk has no event line",
+      "raw": "data: Привет",
+      "expect": {
+        "type": "text",
+        "chunk": "Привет"
+      }
+    },
+    {
+      "name": "multi-line text is rejoined with newlines",
+      "raw": "data: first\ndata: second",
+      "expect": {
+        "type": "text",
+        "chunk": "first\nsecond"
+      }
+    },
+    {
+      "name": "an empty line inside a chunk survives",
+      "raw": "data: a\ndata: \ndata: b",
+      "expect": {
+        "type": "text",
+        "chunk": "a\n\nb"
+      }
+    },
+    {
+      "name": "text that looks like JSON stays text",
+      "raw": "data: {\"not\": \"an event\"}",
+      "expect": {
+        "type": "text",
+        "chunk": "{\"not\": \"an event\"}"
+      }
+    },
+    {
+      "name": "terminator",
+      "raw": "data: [DONE]",
+      "expect": {
+        "type": "done"
+      }
+    },
+    {
+      "name": "pair_id — always first, and the only handle for deleting a broken pair",
+      "raw": "event: pair_id\ndata: {\"pair_id\": \"3f2b\"}",
+      "expect": {
+        "type": "pair_id",
+        "pairId": "3f2b"
+      }
+    },
+    {
+      "name": "rewrite replaces the shown text, never appends",
+      "raw": "event: rewrite\ndata: {\"text\": \"final answer\"}",
+      "expect": {
+        "type": "rewrite",
+        "text": "final answer"
+      }
+    },
+    {
+      "name": "memory carries the recalled facts",
+      "raw": "event: memory\ndata: {\"chroma_facts\": [{\"id\": \"1\", \"text\": \"t\", \"category\": \"c\", \"impressive\": 3, \"time_label\": \"вчера\"}]}",
+      "expect": {
+        "type": "memory",
+        "chromaFacts": [
+          {
+            "id": "1",
+            "text": "t",
+            "category": "c",
+            "impressive": 3,
+            "time_label": "вчера"
+          }
+        ]
+      }
+    },
+    {
+      "name": "error must surface as an error, not as reply text",
+      "raw": "event: error\ndata: {\"message\": \"upstream refused\", \"pair_id\": \"3f2b\"}",
+      "expect": {
+        "type": "error",
+        "message": "upstream refused"
+      }
+    },
+    {
+      "name": "error with no message still parses as an error",
+      "raw": "event: error\ndata: {\"pair_id\": \"3f2b\"}",
+      "expect": {
+        "type": "error",
+        "message": ""
+      }
+    },
+    {
+      "name": "image_start",
+      "raw": "event: image_start\ndata: {\"prompt\": \"a cat\"}",
+      "expect": {
+        "type": "image_start",
+        "prompt": "a cat"
+      }
+    },
+    {
+      "name": "image_ready",
+      "raw": "event: image_ready\ndata: {\"path\": \"/api/generated_images/a.png\", \"model\": \"m\", \"prompt\": \"a cat\"}",
+      "expect": {
+        "type": "image_ready",
+        "path": "/api/generated_images/a.png",
+        "model": "m",
+        "prompt": "a cat"
+      }
+    },
+    {
+      "name": "image_cancel carries nothing",
+      "raw": "event: image_cancel\ndata: {}",
+      "expect": {
+        "type": "image_cancel"
+      }
+    },
+    {
+      "name": "known but not consumed: skill",
+      "raw": "event: skill\ndata: {\"name\": \"web_search\"}",
+      "expect": {
+        "type": "skip",
+        "event": "skill"
+      },
+      "synthetic": true
+    },
+    {
+      "name": "known but not consumed: web_results",
+      "raw": "event: web_results\ndata: {\"sources\": []}",
+      "expect": {
+        "type": "skip",
+        "event": "web_results"
+      }
+    },
+    {
+      "name": "known but not consumed: image_urls",
+      "raw": "event: image_urls\ndata: {\"urls\": [\"/api/user_uploads/a.png\"]}",
+      "expect": {
+        "type": "skip",
+        "event": "image_urls"
+      }
+    },
+    {
+      "name": "known but not consumed: search_start",
+      "raw": "event: search_start\ndata: {\"query\": \"q\"}",
+      "expect": {
+        "type": "skip",
+        "event": "search_start"
+      }
+    },
+    {
+      "name": "known but not consumed: search_results",
+      "raw": "event: search_results\ndata: {\"pairs\": []}",
+      "expect": {
+        "type": "skip",
+        "event": "search_results"
+      }
+    },
+    {
+      "name": "known but not consumed: web_start",
+      "raw": "event: web_start\ndata: {\"query\": \"q\"}",
+      "expect": {
+        "type": "skip",
+        "event": "web_start"
+      }
+    },
+    {
+      "name": "known but not consumed: web_done",
+      "raw": "event: web_done\ndata: {\"query\": \"q\"}",
+      "expect": {
+        "type": "skip",
+        "event": "web_done"
+      }
+    },
+    {
+      "name": "an event the client has never heard of is skipped, NOT shown as text",
+      "raw": "event: something_added_next_release\ndata: {\"x\": 1}",
+      "expect": {
+        "type": "skip",
+        "event": "something_added_next_release"
+      },
+      "synthetic": true
+    },
+    {
+      "name": "a named event with unparseable data is skipped, not shown",
+      "raw": "event: memory\ndata: {not json",
+      "expect": {
+        "type": "skip",
+        "event": "memory"
+      }
+    },
+    {
+      "name": "a keepalive comment is not an event at all",
+      "raw": ": keepalive",
+      "expect": null
+    },
+    {
+      "name": "a frame with no data line is not an event",
+      "raw": "event: rewrite",
+      "expect": null
+    }
+  ],
+  "buffering": [
+    {
+      "name": "two complete frames and nothing left over",
+      "buffer": "data: a\n\ndata: b\n\n",
+      "events": [
+        "data: a",
+        "data: b"
+      ],
+      "remainder": ""
+    },
+    {
+      "name": "a frame cut in half stays in the remainder",
+      "buffer": "data: a\n\nevent: rew",
+      "events": [
+        "data: a"
+      ],
+      "remainder": "event: rew"
+    },
+    {
+      "name": "nothing complete yet",
+      "buffer": "data: par",
+      "events": [],
+      "remainder": "data: par"
+    },
+    {
+      "name": "a keepalive between two chunks does not disturb the split",
+      "buffer": "data: a\n\n: keepalive\n\ndata: b\n\n",
+      "events": [
+        "data: a",
+        ": keepalive",
+        "data: b"
+      ],
+      "remainder": ""
+    }
+  ]
+}

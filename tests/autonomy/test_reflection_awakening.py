@@ -13,7 +13,6 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
-import re
 import pytest
 from infrastructure.llm.prompt_loader import get_prompt
 
@@ -21,13 +20,14 @@ _PROMPTS = "infrastructure/autonomy/prompts/reflection_awakening.md"
 
 _PLACEHOLDERS = dict(
     ai_name="Victor",
-    identity_content="Я — Victor.",
-    workbench_content="[2026-03-17 21:00] Тишина.",
+    identity="Я — Victor.",
+    workbench="[2026-03-17 21:00] Тишина.",
     open_threads="1. Ютуб — вернуть — с 17.03.2026 · #a1b2",
     recent_dialogue="User: Привет\nAssistant: Привет!",
     current_time="2026-03-17 22:00",
     hours_since_last="3.0 h",
     pending_tasks_block="",
+    vitals="",
     cooldown_h=4,
     interval_h=12,
     timezone_label="Asia/Yerevan",

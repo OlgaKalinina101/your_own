@@ -32,14 +32,14 @@ import re
 from functools import lru_cache
 from pathlib import Path
 
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
 
+from infrastructure.paths import PROJECT_ROOT
 @lru_cache(maxsize=64)
 def _load_raw(path: str | Path) -> str:
     p = Path(path)
     if not p.is_absolute():
-        p = _PROJECT_ROOT / p
+        p = PROJECT_ROOT / p
     return p.read_text(encoding="utf-8")
 
 

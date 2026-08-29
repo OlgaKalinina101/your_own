@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import logging
 import re
+
+from infrastructure import language
 from typing import Literal
 
 logger = logging.getLogger(__name__)
@@ -125,16 +127,15 @@ def _clean(text: str) -> list[str]:
 
 
 def detect_language(text: str) -> Language:
-    """
-    Lightweight query-time language detector.
+    """Language of *text*, for indexing and querying memory.
 
-    Default heuristic:
-      - any Cyrillic character -> Russian
-      - otherwise -> English
+    Deliberately pure: callers here pass a fact, a query or a stored sentence
+    and always have real text, so this stays a plain string test with no file
+    reads in the retrieval path. A caller that may hold empty text is choosing a
+    language to *write* in and wants
+    :func:`infrastructure.language.detect_or_soul` instead.
     """
-    if re.search(r"[А-Яа-яЁёІіЇїЄєҐґ]", text or ""):
-        return "ru"
-    return "en"
+    return language.detect(text)
 
 
 # ── Russian pipeline ──────────────────────────────────────────────────────────

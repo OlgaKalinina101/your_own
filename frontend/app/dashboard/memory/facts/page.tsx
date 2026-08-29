@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { apiFetch } from "@/lib/api";
+import { apiErrorFrom, describeApiError } from "@/lib/apiError";
 const ACCOUNT_ID = "default";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -229,10 +230,15 @@ export default function FactsPage() {
   const [filterCategory, setFilterCategory] = useState<string>("");
   const [sort, setSort] = useState<SortKey>("created_at");
   const [loading, setLoading] = useState(true);
+  // A network failure here escaped as an unhandled rejection: only `finally`
+  // wrapped the awaits, so the page went from "loading…" to "no facts saved
+  // yet" and told a person their memory was empty when it was unreachable.
+  const [loadError, setLoadError] = useState("");
   const [expandedCats, setExpandedCats] = useState<Set<string>>(new Set());
 
   const loadFacts = useCallback(async () => {
     setLoading(true);
+    setLoadError("");
     try {
       const params = new URLSearchParams({
         account_id: ACCOUNT_ID,
@@ -243,12 +249,16 @@ export default function FactsPage() {
         apiFetch(`/api/chroma/facts?${params}`),
         apiFetch(`/api/chroma/categories?account_id=${ACCOUNT_ID}`),
       ]);
-      if (factsRes.ok) setFacts(await factsRes.json());
+      if (!factsRes.ok) throw await apiErrorFrom(factsRes);
+      setFacts(await factsRes.json());
       if (catsRes.ok) {
         const data = await catsRes.json() as { categories: string[] };
         setCategories(data.categories);
         setExpandedCats(new Set(data.categories));
       }
+      setLoadError("");
+    } catch (err: unknown) {
+      setLoadError(describeApiError(err));
     } finally {
       setLoading(false);
     }
@@ -265,7 +275,8 @@ export default function FactsPage() {
   const toggleCat = (cat: string) => {
     setExpandedCats((prev) => {
       const next = new Set(prev);
-      next.has(cat) ? next.delete(cat) : next.add(cat);
+      if (next.has(cat)) next.delete(cat);
+      else next.add(cat);
       return next;
     });
   };
@@ -358,7 +369,20 @@ export default function FactsPage() {
           </p>
         )}
 
-        {!loading && facts.length === 0 && (
+        {!loading && loadError && (
+          <div className="flex flex-col items-center justify-center h-64 gap-4">
+            <p className="text-[0.75rem] tracking-wide text-red-200/70">{loadError}</p>
+            <button
+              type="button"
+              onClick={() => void loadFacts()}
+              className="text-[0.62rem] tracking-[0.2em] uppercase text-white/40 transition-colors hover:text-white/80"
+            >
+              retry
+            </button>
+          </div>
+        )}
+
+        {!loading && !loadError && facts.length === 0 && (
           <div className="flex flex-col items-center justify-center h-64 gap-4">
             <p className="text-[0.75rem] tracking-[0.16em] uppercase text-white/25">
               no facts saved yet
@@ -370,7 +394,7 @@ export default function FactsPage() {
           </div>
         )}
 
-        {!loading && facts.length > 0 && (
+        {!loading && !loadError && facts.length > 0 && (
           <div className="mx-auto max-w-3xl flex flex-col gap-8">
             {sortedCats.map((cat) => {
               const catFacts = grouped[cat];

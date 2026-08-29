@@ -15,17 +15,19 @@ import logging
 from dataclasses import dataclass
 from enum import Enum
 
+from infrastructure.autonomy import context
+from infrastructure.clock import format_local
 from infrastructure.llm.prompt_loader import get_prompt
-from infrastructure.settings_store import load_settings, now_local_str
+from infrastructure.settings_store import load_settings
 from infrastructure.autonomy.helpers import detect_lang, make_llm_client
 
 logger = logging.getLogger("autonomy.push_validator")
 
 _PROMPTS = "infrastructure/autonomy/prompts/push_validator.md"
 
-# Same limits as post_analyzer
+# Same dialogue depth as post_analyzer. How much of the workbench is shown is
+# no longer decided here — see infrastructure/autonomy/context.py.
 _HISTORY_PAIRS = 6
-_WB_ENTRIES = 3
 
 
 class ValidatorAction(str, Enum):
@@ -41,8 +43,8 @@ class ValidationResult:
 
 
 def _format_dialogue(pairs: list[dict]) -> str:
-    from infrastructure.settings_store import get_user_tz
-    user_tz = get_user_tz()
+    from infrastructure.clock import user_tz
+    user_tz = user_tz()
 
     lines: list[str] = []
     for p in pairs:
@@ -72,12 +74,12 @@ async def validate_scheduled_push(
 ) -> ValidationResult:
     """Ask the LLM whether to send, rewrite, or cancel a scheduled push.
 
-    Fetches recent dialogue and workbench notes internally.
+    Fetches the recent dialogue itself; the shared state blocks come from
+    the context registry.
     Returns a ValidationResult with the resolved action and final text.
     """
     from infrastructure.database.engine import get_db_session
     from infrastructure.database.repositories.message_repo import MessageRepository
-    from infrastructure.autonomy import workbench as wb
 
     # Fetch dialogue history (same count as post_analyzer)
     settings = load_settings()
@@ -93,30 +95,31 @@ async def validate_scheduled_push(
     dialogue_history = _format_dialogue(recent_pairs) or "(нет сообщений)"
     lang = detect_lang(dialogue_history)
 
-    workbench_notes = wb.get_recent_entries(
-        account_id, max_entries=_WB_ENTRIES, empty_label="(пусто)" if lang == "ru" else "(empty)",
+    # The board and the clock arrive here now. This call decides whether to
+    # interrupt her, and it used to make that call without knowing what was
+    # still open between them or what hour it was on her side.
+    state = context.build(
+        context.Consumer.PUSH_VALIDATION,
+        context.Request(account_id=account_id, lang=lang),
     )
 
-    current_time = now_local_str()
-
-    if last_user_at:
-        from infrastructure.settings_store import TIME_FMT
-        # created_at is now stored in local time; format directly
-        last_message_time = last_user_at.strftime(TIME_FMT)
-    else:
-        last_message_time = "неизвестно" if lang == "ru" else "unknown"
+    # Through the clock, not strftime: rows come back UTC-aware, and printing
+    # one straight showed her last message four hours before it happened —
+    # right next to a local "now" in the same prompt.
+    last_message_time = format_local(
+        last_user_at, empty="неизвестно" if lang == "ru" else "unknown",
+    )
 
     # Warn if this exact text was recently sent as a push
     same_text_warning = await _same_text_warning(account_id, message, lang)
 
     user_prompt = get_prompt(
         _PROMPTS, lang=lang, section="user",
-        current_time=current_time,
         last_message_time=last_message_time,
         dialogue_history=dialogue_history,
-        workbench_notes=workbench_notes,
         planned_message=message,
         same_text_warning=same_text_warning,
+        **state,
     )
 
     logger.info(

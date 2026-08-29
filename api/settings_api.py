@@ -1,13 +1,14 @@
 """REST API for server-side settings and soul prompt.
 
-All endpoints require Bearer authentication except /ping and /local-token.
+All endpoints require Bearer authentication except /ping.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Request
+from infrastructure.account import ACCOUNT_ID
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
-from infrastructure.auth import AUTH_TOKEN, require_auth
+from infrastructure.auth import require_auth
 from infrastructure.settings_store import (
     load_settings,
     load_soul,
@@ -118,7 +119,7 @@ async def trigger_reflection(_token: str = Depends(require_auth)):
         api_key = load_settings().get("openrouter_api_key", "")
         if not api_key:
             return {"ok": False, "error": "no_api_key"}
-        task = asyncio.create_task(_reflect("default", api_key))
+        task = asyncio.create_task(_reflect(ACCOUNT_ID, api_key))
         task.add_done_callback(lambda t: t.result() if not t.cancelled() and not t.exception() else None)
         return {"ok": True, "message": "reflection started"}
     except Exception as exc:
@@ -129,7 +130,7 @@ async def trigger_reflection(_token: str = Depends(require_auth)):
 
 @router.get("/workbench/latest")
 async def workbench_latest(
-    account_id: str = "default",
+    account_id: str = ACCOUNT_ID,
     _token: str = Depends(require_auth),
 ):
     """Return the most recent workbench note for the given account."""
@@ -153,7 +154,7 @@ async def workbench_latest(
 
 @router.get("/workbench/entries")
 async def workbench_entries(
-    account_id: str = "default",
+    account_id: str = ACCOUNT_ID,
     offset: int = 0,
     limit: int = 25,
     _token: str = Depends(require_auth),
@@ -217,7 +218,7 @@ async def workbench_entries(
 
 @router.get("/identity")
 async def get_identity(
-    account_id: str = "default",
+    account_id: str = ACCOUNT_ID,
     _token: str = Depends(require_auth),
 ):
     """Return raw identity.md content."""
@@ -233,21 +234,49 @@ async def ping():
     return {"status": "ok"}
 
 
+@router.get("/media-signature")
+async def media_signature(_token: str = Depends(require_auth)):
+    """Short-lived proof of auth for `<img src=…>`, which cannot send a header.
+
+    The client appends the value as `?sig=` to media URLs. See the block above
+    :func:`infrastructure.auth.issue_media_signature` for why the master token
+    itself must not go there.
+    """
+    from infrastructure.auth import issue_media_signature
+
+    signature, ttl = issue_media_signature()
+    return {"sig": signature, "expires_in": ttl}
+
+
+@router.post("/rotate-token")
+async def rotate_token_endpoint(_token: str = Depends(require_auth)):
+    """Issue a new token; the old one stops working at once.
+
+    Requires the current token, so only someone who already has it can do this.
+    Every other client — the phone, another browser — is signed out and needs
+    the new value, which is the correct outcome after a leak.
+    """
+    from infrastructure.auth import rotate_token
+
+    return {"ok": True, "token": rotate_token()}
+
+
 @router.post("/verify-token")
 async def verify_token(_token: str = Depends(require_auth)):
     """Client sends token, gets 200 if valid, 401 if not."""
     return {"ok": True}
 
 
-@router.get("/local-token", dependencies=[])
-async def local_token(request: Request):
-    """Return auth token ONLY to localhost clients (127.0.0.1 / ::1).
-
-    This lets the Electron desktop app auto-configure itself without
-    the user having to copy-paste the token from the console.
-    Remote clients get 403.
-    """
-    client_host = request.client.host if request.client else ""
-    if client_host in ("127.0.0.1", "::1", "localhost"):
-        return {"token": AUTH_TOKEN}
-    return {"error": "forbidden"}
+# GET /local-token is deliberately gone.
+#
+# It returned AUTH_TOKEN, without auth, to any caller whose socket address was
+# 127.0.0.1 — and a reverse proxy makes every remote caller look like that.
+# This app ships one: next.config.mjs rewrites /api/:path* to the backend so
+# the UI works through an ngrok tunnel. Measured end to end: a request from
+# 192.168.31.37 straight to the backend got {"error":"forbidden"}, the same
+# request through the rewrite got the real token. Anyone with the tunnel URL
+# had the key to the whole API.
+#
+# The desktop app now reads data/auth_token.txt off disk over IPC
+# (get-backend-auth-token in electron/main.js) — it starts the backend and
+# knows where the file is. Browsers paste the token in Settings.

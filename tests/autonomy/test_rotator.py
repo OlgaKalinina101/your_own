@@ -236,7 +236,7 @@ class TestIdentityPrompt:
     def _build(self, lang: str, identity: str, notes: str) -> tuple[str, str]:
         system = get_prompt(_IDENTITY_PATH, lang=lang, section="system", ai_name="Victor")
         user   = get_prompt(_IDENTITY_PATH, lang=lang, section="user",
-                            identity=identity, notes=notes)
+                            ai_name="Victor", identity=identity, notes=notes)
         return system, user
 
     def test_ru_loads(self):

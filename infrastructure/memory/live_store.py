@@ -3,17 +3,10 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
+from infrastructure.clock import now_local
 from infrastructure.database.models.message import Message
 from infrastructure.memory.embedder import embed_texts
 from infrastructure.memory.focus_point import extract_focus_fast, split_to_sentences
-
-
-def now_local() -> datetime:
-    """Return current server time (naive, no timezone)."""
-    return datetime.now()
-
-
-now_utc = now_local
 
 
 def build_canonical_row(

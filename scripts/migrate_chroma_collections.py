@@ -10,6 +10,7 @@ metadata when it is safe to do so.
 """
 from __future__ import annotations
 
+from infrastructure.account import resolve
 import argparse
 from typing import Any
 
@@ -120,7 +121,7 @@ def migrate_collection(
 
         for doc_id, doc, meta, emb in zip(ids, docs, metas, embs):
             meta = meta or {}
-            row_account_id = meta.get("account_id") or source_account_id or "default"
+            row_account_id = resolve(meta.get("account_id") or source_account_id)
             if source_account_id and row_account_id != source_account_id:
                 continue
             if not doc or emb is None:

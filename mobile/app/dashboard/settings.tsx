@@ -210,7 +210,7 @@ export default function SettingsScreen() {
           <Text style={sty.section}>AI Settings</Text>
           <Row label="AI Name" value={aiName} onChangeText={setAiName} placeholder="How your AI introduces itself" />
           <Row label="OpenRouter API Key" value={apiKey} onChangeText={setApiKey} secure placeholder="sk-or-..." />
-          <Row label="Model" value={model} onChangeText={setModel} placeholder="anthropic/claude-opus-4.6" />
+          <Row label="Model" value={model} onChangeText={setModel} placeholder="~anthropic/claude-fable-latest" />
 
           <View style={sty.divider} />
 

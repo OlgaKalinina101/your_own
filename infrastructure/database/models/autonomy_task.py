@@ -2,10 +2,8 @@
 from __future__ import annotations
 
 import enum
-from datetime import datetime
 
 from sqlalchemy import Column, DateTime, Enum as SAEnum, String, Text
-from sqlalchemy.dialects.postgresql import UUID
 
 from infrastructure.database.engine import Base
 

@@ -7,20 +7,26 @@ from pathlib import Path
 
 from infrastructure.skills.base import SkillBase, SkillContext, SkillResult
 
-_PROJECT_ROOT = Path(__file__).resolve().parents[3]
-_GENERATED_IMAGES_DIR = _PROJECT_ROOT / "generated_images"
+from infrastructure.paths import GENERATED_IMAGES_DIR as _GENERATED_IMAGES_DIR
 _GENERATED_IMAGES_DIR.mkdir(parents=True, exist_ok=True)
 
+# Newest release of each family as of 2026-08-29, checked against the
+# catalogue by release date rather than by the version in the name:
+# OpenRouter lists image models only under ?output_modalities=image, which is
+# why an earlier pass wrongly reported these as missing.
 _MODEL_MAP = {
-    "gpt5": "openai/gpt-5-image",
-    "gemini": "google/gemini-3-pro-image-preview",
-    "flux": "black-forest-labs/flux.2-pro",
-    "grok": "x-ai/grok-imagine-image-quality",
+    "gpt5": "openai/gpt-image-2",
+    "gemini": "google/gemini-3-pro-image",
+    "flux": "black-forest-labs/flux.2-max",
+    "grok": "x-ai/grok-imagine-image-2.0",
 }
 
 # Any image-generation failure (moderation, provider error, empty result)
-# falls back to Grok, which is the most permissive on romance/intimacy.
-_FALLBACK_MODEL = "x-ai/grok-imagine-image-quality"
+# falls back to Grok, which is the most permissive on romance/intimacy. That is
+# a claim about the older `grok-imagine-image-quality`; this is its successor
+# (2026-08-11) and its moderation has not been tried here. If refusals start
+# appearing where they did not before, this line is the first place to look.
+_FALLBACK_MODEL = "x-ai/grok-imagine-image-2.0"
 
 
 class GenerateImageSkill(SkillBase):
@@ -61,7 +67,7 @@ class GenerateImageSkill(SkillBase):
             model_alias = "gpt5"
             prompt = parts[0]
 
-        model_id = _MODEL_MAP.get(model_alias, "openai/gpt-5-image")
+        model_id = _MODEL_MAP.get(model_alias, "openai/gpt-image-2")
         ctx.logger.info("[generate_image] model=%s prompt=%s", model_id, prompt[:120])
         ctx.dbg(f"GENERATE_IMAGE model={model_id} prompt={prompt[:80]}")
 

@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { apiFetch } from "@/lib/api";
+import { apiFetch, apiGet } from "@/lib/api";
+import { describeApiError } from "@/lib/apiError";
 
 type ImportState =
   | { phase: "idle" }
@@ -126,14 +127,19 @@ export default function MemoryPage() {
   const fileRef = useRef<HTMLInputElement>(null);
   const [state, setState] = useState<ImportState>(sharedImportState);
   const [stats, setStats] = useState<MemoryStats | null>(null);
+  // `.then(r => r.json())` with no status check parsed the 401 body into stats,
+  // so the counters rendered a dash and the page looked like an empty memory
+  // rather than an unreachable one.
+  const [statsError, setStatsError] = useState("");
 
-  // Load existing message count on mount
-  useEffect(() => {
-    apiFetch(`/api/memory/stats?account_id=default`)
-      .then((r) => r.json())
-      .then((d) => setStats(d))
-      .catch(() => {});
+  const loadStats = useCallback(() => {
+    setStatsError("");
+    apiGet<MemoryStats>("/api/memory/stats?account_id=default")
+      .then(setStats)
+      .catch((err: unknown) => setStatsError(describeApiError(err)));
   }, []);
+
+  useEffect(() => { loadStats(); }, [loadStats]);
 
   useEffect(() => subscribeImportState(setState), []);
 
@@ -183,7 +189,20 @@ export default function MemoryPage() {
           <h1 className="text-[1.6rem] font-extralight tracking-[0.22em] uppercase text-white/85">
             Memory
           </h1>
-          {displayedPairCount !== null && (
+          {statsError && (
+            <p className="text-[0.68rem] tracking-wide text-red-200/70">
+              {statsError}{" "}
+              <button
+                type="button"
+                onClick={loadStats}
+                className="ml-1 uppercase tracking-[0.18em] text-white/40 transition-colors hover:text-white/80"
+              >
+                retry
+              </button>
+            </p>
+          )}
+
+          {!statsError && displayedPairCount !== null && (
             <p className="text-[0.72rem] tracking-[0.18em] text-white/30 uppercase">
               {displayedPairCount.toLocaleString()} imported pairs
               {displayedChunkCount !== null ? ` · ${displayedChunkCount.toLocaleString()} stored chunks` : ""}

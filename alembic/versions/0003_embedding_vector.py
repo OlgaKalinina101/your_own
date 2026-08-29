@@ -10,7 +10,6 @@ setup.js calls ensurePgVector() + CREATE EXTENSION before alembic runs.
 from __future__ import annotations
 
 from alembic import op
-import sqlalchemy as sa
 
 revision = "0003"
 down_revision = "0002"

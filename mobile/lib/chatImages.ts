@@ -1,6 +1,23 @@
 import type { ImageSourcePropType } from "react-native";
 
+import { peekAuthToken } from "@/lib/api";
+
 const NGROK_IMAGE_HEADERS = { "ngrok-skip-browser-warning": "true" };
+
+/**
+ * Headers for a remote image.
+ *
+ * `/api/generated_images`, `/api/user_uploads` and `/api/body` are behind the
+ * token — they used to be unauthenticated static mounts, which meant anyone who
+ * reached the port could enumerate them. Without the header every one of these
+ * comes back 401 and the card falls through to "image unavailable".
+ */
+function remoteImageHeaders(): Record<string, string> {
+  const token = peekAuthToken();
+  return token
+    ? { ...NGROK_IMAGE_HEADERS, Authorization: `Bearer ${token}` }
+    : { ...NGROK_IMAGE_HEADERS };
+}
 
 function normalizeBackendUrl(backendUrl: string): string {
   return backendUrl.replace(/\/$/, "");
@@ -21,7 +38,7 @@ export function buildChatImageSource(uri: string, backendUrl: string): ImageSour
   const resolved = resolveChatImageUri(uri, backendUrl);
   if (!resolved) return null;
   if (resolved.startsWith("http://") || resolved.startsWith("https://")) {
-    return { uri: resolved, headers: NGROK_IMAGE_HEADERS };
+    return { uri: resolved, headers: remoteImageHeaders() };
   }
   return { uri: resolved };
 }

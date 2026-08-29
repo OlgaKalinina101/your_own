@@ -1,20 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { useRouter } from "next/navigation";
 import { apiGet, apiPut } from "@/lib/api";
+import { useResource } from "@/lib/useResource";
+import type { SkillInfo } from "@/lib/types";
 
 // ── Types ────────────────────────────────────────────────────────────────────
-
-interface SkillInfo {
-  id: string;
-  cmd_name: string;
-  display: { en: string; ru: string };
-  description: { en: string; ru: string };
-  example: string | null;
-  action_type: string;
-  enabled: boolean;
-}
 
 // ── How-it-works steps (static) ──────────────────────────────────────────────
 
@@ -47,16 +39,15 @@ const HOW_IT_WORKS = [
 
 export default function SkillsPage() {
   const router = useRouter();
-  const [skills, setSkills] = useState<SkillInfo[]>([]);
-  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
-  useEffect(() => {
-    apiGet<{ skills: SkillInfo[] }>("/api/settings/skills")
-      .then((d) => setSkills(d.skills))
-      .catch(() => {})
-      .finally(() => setLoading(false));
-  }, []);
+  // Was `.catch(() => {})` then `setLoading(false)`: a 401 and "you have no
+  // skills" rendered as the same empty grid.
+  const { resource, reload, update } = useResource<SkillInfo[]>(
+    async () => (await apiGet<{ skills: SkillInfo[] }>("/api/settings/skills")).skills,
+  );
+  const skills = resource.status === "ready" ? resource.data : [];
+  const setSkills = (next: SkillInfo[]) => update(next);
 
   const toggleSkill = useCallback(
     async (id: string, enabled: boolean) => {
@@ -108,10 +99,29 @@ export default function SkillsPage() {
         <div className="mx-auto max-w-4xl flex flex-col gap-14">
 
           {/* ── Skill cards grid ── */}
-          {loading ? (
+          {resource.status === "loading" ? (
             <div className="flex items-center justify-center py-20">
               <span className="text-[0.7rem] tracking-[0.2em] uppercase text-white/25 animate-pulse">
                 loading skills…
+              </span>
+            </div>
+          ) : resource.status === "error" ? (
+            <div className="flex flex-col items-center justify-center gap-4 py-20">
+              <span className="text-[0.75rem] tracking-wide text-red-200/70">
+                {resource.message}
+              </span>
+              <button
+                type="button"
+                onClick={reload}
+                className="text-[0.62rem] tracking-[0.2em] uppercase text-white/40 transition-colors hover:text-white/80"
+              >
+                retry
+              </button>
+            </div>
+          ) : resource.data.length === 0 ? (
+            <div className="flex items-center justify-center py-20">
+              <span className="text-[0.7rem] tracking-[0.2em] uppercase text-white/25">
+                no skills registered
               </span>
             </div>
           ) : (

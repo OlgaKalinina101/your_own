@@ -2,7 +2,9 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { apiFetch, apiGet } from "@/lib/api";
+import { apiGet, apiPost } from "@/lib/api";
+import { describeApiError } from "@/lib/apiError";
+import { mediaUrl, useMediaSignature } from "@/lib/media";
 
 const NON_ANCHOR_STATES = ["listener", "warmth", "smirk", "ground", "shadow"];
 
@@ -30,12 +32,21 @@ export default function BodyPage() {
   const [imgVersion, setImgVersion] = useState(0);
   const [generatingStates, setGeneratingStates] = useState<string[]>([]);
   const [failedStates, setFailedStates] = useState<string[]>([]);
+  // A refused request used to be indistinguishable from an accepted one:
+  // apiFetch does not throw, so a 401 set the cards shimmering forever.
+  const [actionError, setActionError] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Crossfade preview state
   const [shownId, setShownId] = useState<string | null>(null);
   const [prevId, setPrevId] = useState<string | null>(null);
   const fadeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Body assets are authenticated and <img> cannot send a header, so every src
+  // below carries a short-lived signature. Subscribing here re-renders once it
+  // arrives; mediaUrl() returns "" until then, and a tag with an empty src is
+  // never rendered — some browsers resolve it against the page URL.
+  const mediaReady = Boolean(useMediaSignature());
 
   const switchPreview = useCallback((id: string) => {
     if (id === shownId) return;
@@ -91,12 +102,14 @@ export default function BodyPage() {
 
   const triggerGeneration = useCallback(async () => {
     try {
-      await apiFetch("/api/body/generate", { method: "POST" });
+      setActionError(null);
+      await apiPost("/api/body/generate");
       setGeneratingStates(NON_ANCHOR_STATES);
       setFailedStates([]);
       startPolling();
     } catch (err) {
-      console.warn("[body] generate trigger failed:", err);
+      // Not started: say so instead of shimmering.
+      setActionError(describeApiError(err));
     }
   }, [startPolling]);
 
@@ -104,12 +117,13 @@ export default function BodyPage() {
     e.stopPropagation();
     if (generatingStates.includes(stateId)) return;
     try {
-      await apiFetch(`/api/body/generate/${stateId}`, { method: "POST" });
+      setActionError(null);
+      await apiPost(`/api/body/generate/${stateId}`);
       setGeneratingStates((prev) => prev.includes(stateId) ? prev : [...prev, stateId]);
       setFailedStates((prev) => prev.filter((s) => s !== stateId));
       startPolling();
     } catch (err) {
-      console.warn("[body] regenerate failed:", err);
+      setActionError(describeApiError(err));
     }
   }, [generatingStates, startPolling]);
 
@@ -123,13 +137,14 @@ export default function BodyPage() {
 
     // Non-anchor failed: retry on single click
     if (stateId !== "anchor" && failedStates.includes(stateId)) {
-      apiFetch(`/api/body/generate/${stateId}`, { method: "POST" })
+      setActionError(null);
+      apiPost(`/api/body/generate/${stateId}`)
         .then(() => {
           setGeneratingStates((prev) => prev.includes(stateId) ? prev : [...prev, stateId]);
           setFailedStates((prev) => prev.filter((s) => s !== stateId));
           startPolling();
         })
-        .catch((err) => console.warn("[body] retry failed:", err));
+        .catch((err) => setActionError(describeApiError(err)));
     }
   };
 
@@ -147,10 +162,8 @@ export default function BodyPage() {
 
     const wasAnchor = uploadingId === "anchor";
     try {
-      await apiFetch(`/api/body/upload/${uploadingId}`, {
-        method: "POST",
-        body: form,
-      });
+      setActionError(null);
+      await apiPost(`/api/body/upload/${uploadingId}`, form);
       setImgVersion(v => v + 1);
       await loadStates();
       switchPreview(uploadingId);
@@ -158,7 +171,9 @@ export default function BodyPage() {
         await triggerGeneration();
       }
     } catch (err) {
-      console.warn("[body] upload failed:", err);
+      // A rejected upload used to leave the old picture in place with no word
+      // that the new one never arrived.
+      setActionError(describeApiError(err));
     } finally {
       setUploadingId(null);
       e.target.value = "";
@@ -190,6 +205,21 @@ export default function BodyPage() {
         </span>
       </header>
 
+      {/* What the server said, when it refused. Dismissible — the page still
+          works, one action did not. */}
+      {actionError && (
+        <div className="flex shrink-0 items-center justify-between gap-4 border-b border-red-500/25 bg-red-500/[0.07] px-8 py-2.5">
+          <span className="text-[0.72rem] tracking-wide text-red-200/80">{actionError}</span>
+          <button
+            type="button"
+            onClick={() => setActionError(null)}
+            className="shrink-0 text-[0.62rem] tracking-[0.2em] uppercase text-red-200/50 transition-colors hover:text-red-200/90"
+          >
+            dismiss
+          </button>
+        </div>
+      )}
+
       {/* Content */}
       <div className="flex flex-1 overflow-hidden">
         {/* Left: preview */}
@@ -198,19 +228,19 @@ export default function BodyPage() {
           {/* Crossfade image preview */}
           <div className="relative aspect-[3/4] w-full max-w-[380px] overflow-hidden border border-white/10">
             {/* Fading-out layer */}
-            {prevId && (
+            {prevId && mediaReady && (
               <img
                 key={`prev-${prevId}-${imgVersion}`}
-                src={`/api/body/${prevId}.png?v=${imgVersion}`}
+                src={mediaUrl(`/api/body/${prevId}.png?v=${imgVersion}`)}
                 alt=""
                 className="crossfade-out absolute inset-0 h-full w-full object-cover"
               />
             )}
             {/* Active layer */}
-            {shownId ? (
+            {shownId && mediaReady ? (
               <img
                 key={`shown-${shownId}-${imgVersion}`}
-                src={`/api/body/${shownId}.png?v=${imgVersion}`}
+                src={mediaUrl(`/api/body/${shownId}.png?v=${imgVersion}`)}
                 alt={shownMeta?.label ?? ""}
                 className="crossfade-in absolute inset-0 h-full w-full object-cover"
               />
@@ -310,9 +340,9 @@ export default function BodyPage() {
                   `}
                   style={{ animationDelay: `${120 + i * 60}ms` }}
                 >
-                  {hasImage && (
+                  {hasImage && mediaReady && (
                     <img
-                      src={`/api/body/${stateId}.png?v=${imgVersion}`}
+                      src={mediaUrl(`/api/body/${stateId}.png?v=${imgVersion}`)}
                       alt=""
                       className={`
                         absolute inset-0 h-full w-full object-cover

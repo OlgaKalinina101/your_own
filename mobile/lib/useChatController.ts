@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AppState } from "react-native";
 import * as Clipboard from "expo-clipboard";
 import * as ImagePicker from "expo-image-picker";
 
 import { apiFetch, apiFetchStreaming, deleteChatPair, getBackendUrl, loadSettings, loadWorkbenchLatest } from "@/lib/api";
+import { subscribeToChanges } from "@/lib/changeFeed";
 import { parseChatSseEvent, splitSseBuffer } from "@/lib/chatSse";
+import { latestCursor, mergeMessages } from "@/lib/mergeMessages";
 import { loadSoundVolume, soundEngine } from "@/lib/soundEngine";
 import type { DraftAttachment, HistoryPair, Message } from "@/lib/types";
 
@@ -11,11 +14,10 @@ const HISTORY_BATCH = 25;
 const MAX_IMAGES = 4;
 
 const VISION_MODELS = new Set([
-  "anthropic/claude-fable-5",
-  "anthropic/claude-opus-4.6",
-  "anthropic/claude-sonnet-4.6",
-  "openai/gpt-5.1",
-  "openai/gpt-5.4",
+  "~anthropic/claude-fable-latest",
+  "~moonshotai/kimi-latest",
+  "~google/gemini-pro-latest",
+  "openai/gpt-chat-latest",
 ]);
 
 function makeId(prefix: string) {
@@ -138,7 +140,9 @@ export function useChatController() {
       };
       const loaded = data.pairs.flatMap((pair) => pairToMessages(pair, baseUrl));
 
-      setMessages((prev) => (before ? [...loaded, ...prev] : loaded));
+      // Merge rather than replace: a reply may be streaming into the list
+      // right now, and the desktop does the same so both converge alike.
+      setMessages((prev) => (before ? [...loaded, ...prev] : mergeMessages(prev, loaded)));
       setCursor(data.next_before ?? null);
       setHasMore(Boolean(data.has_more));
       if (!before) setInitialLoaded(true);
@@ -156,6 +160,58 @@ export function useChatController() {
       .then((result) => setWorkbenchText(result.text ?? null))
       .catch(() => {});
   }, []);
+
+  // ── Staying in step with the server ───────────────────────────────────────
+
+  // Read inside syncNew without making it depend on every keystroke of state.
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
+  const syncingRef = useRef(false);
+
+  /** Ask for anything stored since the newest thing on screen, and fold it in. */
+  const syncNew = useCallback(async () => {
+    if (syncingRef.current) return;
+    const cursor = latestCursor(messagesRef.current);
+    // Nothing timestamped yet means the first page never landed; that is
+    // loadHistory's job, and doing it here would fight with it.
+    if (!cursor) return;
+
+    syncingRef.current = true;
+    try {
+      const params = new URLSearchParams({
+        account_id: "default",
+        limit_pairs: String(HISTORY_BATCH),
+        after: cursor,
+      });
+      const response = await apiFetch(`/api/chat/history?${params}`);
+      if (!response.ok) return;
+      const baseUrl = (await getBackendUrl()).replace(/\/$/, "");
+      const data = (await response.json()) as { pairs: HistoryPair[] };
+      if (!data.pairs.length) return;
+      const loaded = data.pairs.flatMap((pair) => pairToMessages(pair, baseUrl));
+      setMessages((prev) => mergeMessages(prev, loaded));
+    } catch {
+      // Offline, or a stale token. The next trigger tries again; a failed
+      // background sync is not something to interrupt a conversation with.
+    } finally {
+      syncingRef.current = false;
+    }
+  }, []);
+
+  // Three triggers, one path. Returning to the app covers what happened while
+  // it was in the background; the feed covers a message arriving while it is on
+  // screen — which is what the assistant writing on its own schedule does, and
+  // what a push notification cannot deliver to an app already open.
+  useEffect(() => {
+    const subscription = AppState.addEventListener("change", (state) => {
+      if (state === "active") void syncNew();
+    });
+    const feed = subscribeToChanges(() => void syncNew());
+    return () => {
+      subscription.remove();
+      feed.close();
+    };
+  }, [syncNew]);
 
   useEffect(() => {
     getBackendUrl()
@@ -320,10 +376,38 @@ export function useChatController() {
 
           if (event.type === "pair_id") {
             activePairIdRef.current = event.pairId;
+            // Stamp the optimistic pair so a later sync recognises it as the
+            // same thing the server stored, instead of showing it twice.
+            setMessages((prev) => {
+              const updated = [...prev];
+              for (let i = updated.length - 1, tagged = 0; i >= 0 && tagged < 2; i -= 1) {
+                if (updated[i].pairId) break;
+                updated[i] = { ...updated[i], pairId: event.pairId };
+                tagged += 1;
+              }
+              return updated;
+            });
             continue;
           }
 
           if (event.type === "skip") continue;
+
+          // Mirrors frontend/app/chat/page.tsx: the notice goes into the bubble
+          // so the transcript records that the reply was cut off, not just a
+          // toast that disappears. Until now this frame reached the phone as
+          // reply text and printed its JSON.
+          if (event.type === "error") {
+            flushNow();
+            updateMessageById(assistantMessageId, (message) => ({
+              ...message,
+              content:
+                message.content.trimEnd() +
+                (event.message
+                  ? `\n\n[ответ оборван: ${event.message}]`
+                  : "\n\n[ответ оборван]"),
+            }));
+            continue;
+          }
 
           if (event.type === "rewrite") {
             flushNow();

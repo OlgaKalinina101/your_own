@@ -11,7 +11,7 @@
 </messages>
 
 <identity>
-{identity_excerpt}
+{identity}
 </identity>
 
 <open_threads>
@@ -19,7 +19,7 @@
 </open_threads>
 
 <workbench>
-{recent_workbench}
+{workbench}
 </workbench>
 
 <context>
@@ -94,7 +94,7 @@ You just sent a message.
 </messages>
 
 <identity>
-{identity_excerpt}
+{identity}
 </identity>
 
 <open_threads>
@@ -102,7 +102,7 @@ You just sent a message.
 </open_threads>
 
 <workbench>
-{recent_workbench}
+{workbench}
 </workbench>
 
 <context>

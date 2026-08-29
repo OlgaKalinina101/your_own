@@ -1,0 +1,31 @@
+# Lint rules that have earned their place, and nothing else.
+#
+# Each of these caught a real bug in this repository rather than a style
+# preference, which is why the list is short:
+#
+#   F821  undefined name        — found `web_search=web_search` inside
+#                                 LLMClient.stream, where every 429 from
+#                                 OpenRouter raised NameError instead of
+#                                 reaching the error handler written for it.
+#   F811  redefinition          — two functions named `now_local`, one tz-aware
+#                                 in the user's zone and one naive in the
+#                                 system's, is how a four-hour drift hid.
+#   F841  unused local          — a value computed and dropped is usually a
+#                                 line that was meant to do something.
+#   F401  unused import         — 22 of them had accumulated; each one is a
+#                                 refactor that was never finished.
+#
+# Enforced by tests/test_lint.py, so it runs wherever pytest runs. A pre-commit
+# hook is optional on top; the test is not.
+
+line-length = 120
+
+exclude = [
+    ".venv",
+    "frontend",
+    "node_modules",
+    "alembic/versions",
+]
+
+[lint]
+select = ["F401", "F811", "F821", "F841"]

@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { apiGet, apiPut } from "@/lib/api";
+import { describeApiError } from "@/lib/apiError";
 
 const PLACEHOLDER = `You are...
 
@@ -16,16 +17,28 @@ export default function SoulPage() {
   const [chars, setChars] = useState(0);
   const textareaRef       = useRef<HTMLTextAreaElement>(null);
 
-  useEffect(() => {
+  // Loading has to be a state, not a silence. A failed load left an empty
+  // textarea that looked like an empty soul, and the next Save wrote that
+  // emptiness over the real one — the failure mode here is losing the text,
+  // not seeing a wrong message.
+  const [loadState, setLoadState] = useState<"loading" | "error" | "ready">("loading");
+  const [loadError, setLoadError] = useState("");
+
+  const load = useCallback(() => {
+    setLoadState("loading");
     apiGet<{ text: string }>("/api/settings/soul")
       .then(({ text: val }) => {
-        if (val) {
-          setText(val);
-          setChars(val.length);
-        }
+        setText(val ?? "");
+        setChars((val ?? "").length);
+        setLoadState("ready");
       })
-      .catch(() => {});
+      .catch((err: unknown) => {
+        setLoadError(describeApiError(err));
+        setLoadState("error");
+      });
   }, []);
+
+  useEffect(() => { load(); }, [load]);
 
   useEffect(() => {
     textareaRef.current?.focus();
@@ -37,14 +50,21 @@ export default function SoulPage() {
     setSaved(false);
   };
 
+  const [saveError, setSaveError] = useState("");
+
   const handleSave = async () => {
+    // Never write over a soul this page failed to read.
+    if (loadState !== "ready") return;
     try {
+      setSaveError("");
       await apiPut("/api/settings/soul", { text });
-    } catch (err) {
-      console.error("Failed to save soul:", err);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (err: unknown) {
+      // It used to say "saved" here regardless, which is worse than saying
+      // nothing: it invites closing the window.
+      setSaveError(describeApiError(err));
     }
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -73,14 +93,46 @@ export default function SoulPage() {
           </span>
           <button
             onClick={handleSave}
-            className="text-[0.68rem] tracking-[0.2em] uppercase text-white/50 transition-colors duration-300 hover:text-white/90"
+            disabled={loadState !== "ready"}
+            className="text-[0.68rem] tracking-[0.2em] uppercase text-white/50 transition-colors duration-300 hover:text-white/90 disabled:cursor-not-allowed disabled:text-white/20 disabled:hover:text-white/20"
           >
             {saved ? "saved" : "save"}
           </button>
         </div>
       </header>
 
+      {saveError && (
+        <div className="shrink-0 border-b border-red-500/25 bg-red-500/[0.07] px-8 py-2.5">
+          <span className="text-[0.72rem] tracking-wide text-red-200/80">
+            Not saved — {saveError}
+          </span>
+        </div>
+      )}
+
       {/* ── Editor ─────────────────────────────────────────────────────────── */}
+      {loadState === "error" ? (
+        // Not an empty editor: an empty editor invites typing, and typing here
+        // would replace a soul this page never managed to read.
+        <div className="flex flex-1 flex-col items-center justify-center gap-4">
+          <span className="text-[0.75rem] tracking-wide text-red-200/70">{loadError}</span>
+          <span className="text-[0.65rem] tracking-wide text-white/30">
+            The editor stays closed so nothing overwrites what is stored.
+          </span>
+          <button
+            type="button"
+            onClick={load}
+            className="text-[0.62rem] tracking-[0.2em] uppercase text-white/40 transition-colors hover:text-white/80"
+          >
+            retry
+          </button>
+        </div>
+      ) : loadState === "loading" ? (
+        <div className="flex flex-1 items-center justify-center">
+          <span className="text-[0.7rem] tracking-[0.2em] uppercase text-white/25 animate-pulse">
+            loading soul…
+          </span>
+        </div>
+      ) : (
       <div className="flex flex-1 overflow-hidden">
         <textarea
           ref={textareaRef}
@@ -100,6 +152,7 @@ export default function SoulPage() {
           "
         />
       </div>
+      )}
 
       {/* ── Footer hint ────────────────────────────────────────────────────── */}
       <footer className="shrink-0 border-t border-white/[0.06] px-8 py-3">

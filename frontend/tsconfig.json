@@ -1,5 +1,11 @@
 {
   "compilerOptions": {
+    // Without this TypeScript defaults to ES5, and `next build` fails at the
+    // type-check step on ordinary modern syntax the app already uses: `for…of`
+    // over a Set, `String.matchAll`, the `s` regex flag. The build has been
+    // failing on it, which is why nothing caught it — nobody ran it. Electron 35
+    // ships Chromium 134, so the target costs nothing.
+    "target": "ES2020",
     "lib": ["dom", "dom.iterable", "esnext"],
     "allowJs": true,
     "skipLibCheck": true,
