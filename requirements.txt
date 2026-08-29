@@ -25,8 +25,10 @@ torch>=2.3.0
 
 # NLP (focus_point extraction)
 pymorphy3>=2.0.0
-ruwordnet>=0.0.6
 nltk>=3.8.1
+# ruwordnet lives in requirements-nodeps.txt: its metadata pins sqlalchemy<2.0,
+# which pip cannot reconcile with the 2.0 this project runs on. The pin is stale
+# rather than real — see _import_ruwordnet() in memory/focus_point.py.
 
 # Utilities
 aiohttp>=3.9.0

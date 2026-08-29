@@ -1,0 +1,10 @@
+# Installed with --no-deps, deliberately.
+#
+# ruwordnet 0.0.6 (the newest there has ever been) declares sqlalchemy<2.0.
+# The constraint is stale: with the shim in memory/focus_point.py the package
+# works under SQLAlchemy 2.0, and it is only the declaration that stops pip
+# from installing both. Honouring it would mean holding the whole project on
+# SQLAlchemy 1.4 for one unmaintained dependency.
+#
+# Its database is not on PyPI — scripts/setup.js downloads it into data/.
+ruwordnet>=0.0.6

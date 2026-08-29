@@ -415,7 +415,10 @@ function ensurePython() {
   // Skip pip install if requirements.txt hasn't changed since last successful install.
   // Marker file stores the hash of requirements.txt at the time deps were installed.
   const markerPath = path.join(ROOT, ".pip_installed");
-  const reqContent = fs.readFileSync(reqPath, "utf8");
+  const nodepsPath = path.join(ROOT, "requirements-nodeps.txt");
+  const reqContent =
+    fs.readFileSync(reqPath, "utf8") +
+    (fs.existsSync(nodepsPath) ? fs.readFileSync(nodepsPath, "utf8") : "");
   const reqHash = require("crypto").createHash("md5").update(reqContent).digest("hex");
 
   if (fs.existsSync(markerPath) && fs.readFileSync(markerPath, "utf8").trim() === reqHash) {
@@ -430,11 +433,61 @@ function ensurePython() {
     process.exit(1);
   }
 
-  log("Ensuring ruwordnet>=0.0.6…");
-  run(`"${python}" -m pip install "ruwordnet>=0.0.6" --upgrade`, { timeout: 60_000 });
+  // ruwordnet declares sqlalchemy<2.0. The pin is stale — the package works
+  // under 2.0 with the shim in memory/focus_point.py — but pip will not resolve
+  // it alongside the 2.0 this project runs on, and without --no-deps it would
+  // quietly drag SQLAlchemy back to 1.4 and break the backend.
+  if (fs.existsSync(nodepsPath)) {
+    log("pip install --no-deps -r requirements-nodeps.txt …");
+    const nodeps = run(
+      `"${python}" -m pip install --no-deps -r requirements-nodeps.txt`,
+      { timeout: 120_000 }
+    );
+    if (nodeps.status !== 0) {
+      err(`pip install (no-deps) failed:\n${nodeps.stdout}\n${nodeps.stderr}`);
+      process.exit(1);
+    }
+  }
 
   fs.writeFileSync(markerPath, reqHash, "utf8");
   ok("Python dependencies installed");
+}
+
+// ── Step 5a: RuWordNet database ──────────────────────────────────────────────
+
+// Russian synonym expansion needs a 100 MB database that is published as a
+// GitHub release, not on PyPI. It goes in data/ rather than inside the
+// virtualenv (where `python -m ruwordnet download` would put it): the venv gets
+// rebuilt, and a dependency that disappears with it is one that stops working
+// without anyone noticing — retrieval keeps answering, just on lemmas alone.
+const RUWORDNET_URL =
+  "https://github.com/avidale/python-ruwordnet/releases/download/0.0.4/ruwordnet-2021.db";
+
+async function ensureRuWordNet() {
+  const dest = path.join(ROOT, "data", "ruwordnet.db");
+  if (fs.existsSync(dest) && fs.statSync(dest).size > 1_000_000) {
+    ok("RuWordNet database present");
+    return;
+  }
+
+  log("Downloading the RuWordNet database (~100 MB, once)…");
+  try {
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    const response = await fetch(RUWORDNET_URL);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+    const { Readable } = require("stream");
+    const { pipeline } = require("stream/promises");
+    const partial = `${dest}.part`;
+    await pipeline(Readable.fromWeb(response.body), fs.createWriteStream(partial));
+    fs.renameSync(partial, dest);
+    ok(`RuWordNet database downloaded (${(fs.statSync(dest).size / 1e6).toFixed(0)} MB)`);
+  } catch (e) {
+    // Not fatal: the app runs without it. Russian queries then match on lemmas
+    // only, which is worse but not broken — and the backend says so in its log.
+    warn(`Could not download the RuWordNet database: ${e.message}`);
+    warn("Russian synonym expansion will be off until it is fetched.");
+  }
 }
 
 // ── Step 5b: Ensure pgvector extension is installed ──────────────────────────
@@ -788,6 +841,7 @@ async function main() {
   ensureEnv();
   ensureFrontendDependencies();
   ensurePython();
+  await ensureRuWordNet();
   ensurePgVector();
   runMigrations();
 

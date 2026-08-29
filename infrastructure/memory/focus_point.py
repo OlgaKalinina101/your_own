@@ -15,6 +15,7 @@ import logging
 import re
 
 from infrastructure import language
+from infrastructure.paths import DATA_DIR
 from typing import Literal
 
 logger = logging.getLogger(__name__)
@@ -90,14 +91,64 @@ def _get_morph_ru():
     return _morph_ru
 
 
+#: Where the RuWordNet database lives. Inside ``data/`` rather than inside the
+#: virtualenv, which is where ``python -m ruwordnet download`` would put it: the
+#: venv is rebuilt routinely and a 100 MB download that disappears with it is a
+#: dependency that silently stops being there.
+RUWORDNET_DB = DATA_DIR / "ruwordnet.db"
+
+
+def _import_ruwordnet():
+    """Import the package under SQLAlchemy 2.0, where it does not import cleanly.
+
+    ``ruwordnet`` declares its ORM with pre-2.0 annotations, so 2.0 refuses the
+    class definitions outright — the whole package fails at import, not at use.
+    SQLAlchemy's own error names the way through: a declarative base with
+    ``__allow_unmapped__`` lets legacy annotations pass. This patches the base
+    factory for the duration of that one import and puts it straight back.
+
+    The alternative was pinning SQLAlchemy below 2.0 for one unmaintained
+    dependency (0.0.6 is the newest there has ever been), which is a bigger
+    price than a five-line shim.
+    """
+    import sqlalchemy.ext.declarative as declarative
+
+    original = declarative.declarative_base
+
+    def _permissive(*args, **kwargs):
+        base = original(*args, **kwargs)
+        base.__allow_unmapped__ = True
+        return base
+
+    declarative.declarative_base = _permissive
+    try:
+        from ruwordnet import RuWordNet
+
+        return RuWordNet
+    finally:
+        declarative.declarative_base = original
+
+
 def _get_ruwordnet():
     global _ruwordnet
     if _ruwordnet is None:
         try:
-            from ruwordnet import RuWordNet
-            _ruwordnet = RuWordNet()
+            RuWordNet = _import_ruwordnet()
+            if not RUWORDNET_DB.exists():
+                raise FileNotFoundError(
+                    f"{RUWORDNET_DB} is missing — run scripts/setup.js, or "
+                    "download it from the python-ruwordnet releases"
+                )
+            _ruwordnet = RuWordNet(str(RUWORDNET_DB))
+            logger.info("[focus_point] RuWordNet loaded from %s", RUWORDNET_DB)
         except Exception as e:
-            logger.warning("[focus_point] RuWordNet not available: %s", e)
+            # Said once, and loudly: without it Russian queries match on lemmas
+            # alone. Retrieval still answers, which is exactly why the loss has
+            # to be visible rather than inferred from worse results.
+            logger.warning(
+                "[focus_point] RuWordNet unavailable — Russian synonym expansion "
+                "is off: %s", e,
+            )
             _ruwordnet = False
     return _ruwordnet if _ruwordnet is not False else None
 
