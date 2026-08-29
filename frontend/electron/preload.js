@@ -15,4 +15,5 @@ contextBridge.exposeInMainWorld("yourOwn", {
   getHistoryPairs:     ()     => ipcRenderer.invoke("get-history-pairs"),
   saveMemoryCutoffDays: (val)  => ipcRenderer.invoke("save-memory-cutoff-days", val),
   getMemoryCutoffDays:  ()     => ipcRenderer.invoke("get-memory-cutoff-days"),
+  getBackendAuthToken:  ()     => ipcRenderer.invoke("get-backend-auth-token"),
 });

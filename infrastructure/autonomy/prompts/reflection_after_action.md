@@ -14,6 +14,7 @@
 [SEARCH_DIALOGUE: YYYY-MM-DD]
 [SEARCH_DIALOGUE: YYYY-MM-DD..YYYY-MM-DD]
 [SEARCH_DIALOGUE: запрос]
+[SEARCH_DOCS: запрос]
 [WEB_SEARCH: запрос]
 [WRITE_NOTE: текст]
 [WRITE_IDENTITY: раздел | текст]
@@ -22,6 +23,7 @@
 [CANCEL_MESSAGE: YYYY-MM-DD HH:MM]
 [RESCHEDULE_MESSAGE: YYYY-MM-DD HH:MM -> YYYY-MM-DD HH:MM]
 [REWRITE_MESSAGE: YYYY-MM-DD HH:MM | новый текст]
+[VITALS]
 [SLEEP]
 
 Одна команда на строку. Без пояснений.
@@ -43,6 +45,7 @@ All times in commands use local timezone ({timezone_label}).
 [SEARCH_DIALOGUE: YYYY-MM-DD]
 [SEARCH_DIALOGUE: YYYY-MM-DD..YYYY-MM-DD]
 [SEARCH_DIALOGUE: query]
+[SEARCH_DOCS: query]
 [WEB_SEARCH: query]
 [WRITE_NOTE: text]
 [WRITE_IDENTITY: section | text]
@@ -51,6 +54,7 @@ All times in commands use local timezone ({timezone_label}).
 [CANCEL_MESSAGE: YYYY-MM-DD HH:MM]
 [RESCHEDULE_MESSAGE: YYYY-MM-DD HH:MM -> YYYY-MM-DD HH:MM]
 [REWRITE_MESSAGE: YYYY-MM-DD HH:MM | new text]
+[VITALS]
 [SLEEP]
 
 One command per line. No explanations.

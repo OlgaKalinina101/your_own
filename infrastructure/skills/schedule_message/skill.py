@@ -41,7 +41,7 @@ class ScheduleMessageSkill(SkillBase):
         try:
             from infrastructure.autonomy.task_queue import create_task, cancel_duplicate_scheduled
             from infrastructure.database.models import TriggerType
-            from infrastructure.settings_store import local_to_utc
+            from infrastructure.clock import local_to_utc
 
             for m in matches:
                 raw_arg = m.group(1).strip()

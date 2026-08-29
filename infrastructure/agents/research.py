@@ -15,6 +15,7 @@ Backends live in :mod:`infrastructure.agents.sources`.
 """
 from __future__ import annotations
 
+from infrastructure.account import ACCOUNT_ID
 import logging
 import re
 from dataclasses import dataclass, field
@@ -28,7 +29,22 @@ logger = logging.getLogger("agents.research")
 _PROMPT_FILE = Path(__file__).resolve().parent / "prompts" / "research_agent.md"
 
 DEFAULT_MAX_ATTEMPTS = 3
+
+# Searcher models reason before they answer, and the thinking is billed against
+# max_tokens — a one-line verdict still needs headroom or it comes back as a
+# handful of characters that happen to parse.
+JUDGE_MAX_TOKENS = 800
+BRIEF_MAX_TOKENS = 6000
+
 _REFINE_RE = re.compile(r"REFINE\s*:\s*(.+)", re.IGNORECASE | re.DOTALL)
+_SENTENCE_END_RE = re.compile(r"[.!?…](?=\s|$)")
+
+
+def _trim_to_last_sentence(text: str) -> str:
+    """Cut a truncated brief back to its last finished sentence."""
+    text = text.strip()
+    ends = list(_SENTENCE_END_RE.finditer(text))
+    return text[: ends[-1].end()].strip() if ends else text
 
 
 # ---------------------------------------------------------------------------
@@ -42,6 +58,7 @@ class Source:
     DIALOGUE = "dialogue"   # Postgres + pgvector, raw conversation pairs
     FACTS = "facts"         # Chroma key_info, long-term facts
     NOTES = "notes"         # workbench + Chroma workbench_archive
+    DOCS = "docs"           # the project's own documentation — how he works
 
 
 @dataclass
@@ -131,7 +148,7 @@ class ResearchAgent:
 
         srv = load_settings()
         self.api_key = api_key or str(srv.get("openrouter_api_key", ""))
-        self.model = model or str(srv.get("research_model", "google/gemini-3.5-flash"))
+        self.model = model or str(srv.get("research_model", "~google/gemini-pro-latest"))
         self.web_engine = web_engine or str(srv.get("research_web_engine", "parallel"))
         self.max_attempts = max_attempts or int(
             srv.get("research_max_attempts", DEFAULT_MAX_ATTEMPTS)
@@ -146,13 +163,13 @@ class ResearchAgent:
         *,
         task: str,
         source: str,
-        account_id: str = "default",
+        account_id: str = ACCOUNT_ID,
         lang: str = "ru",
         db: Any = None,
         **extras: Any,
     ) -> ResearchResult:
         from infrastructure.agents import sources as _sources
-        from infrastructure.settings_store import now_local_str
+        from infrastructure.clock import now_local_str
 
         task = (task or "").strip()
         probe = _sources.PROBES.get(source)
@@ -240,7 +257,7 @@ class ResearchAgent:
         else:
             found = "\n\n".join(str(h.get("text", "")) for h in result.hits)[:4000]
 
-        verdict = await self._complete(
+        verdict, truncated = await self._complete(
             system=ctx.prompt("judge_system"),
             user=ctx.prompt(
                 "judge_user",
@@ -248,9 +265,14 @@ class ResearchAgent:
                 tried=" | ".join(queries),
                 found=found,
             ),
-            max_tokens=200,
+            max_tokens=JUDGE_MAX_TOKENS,
         )
         if not verdict:
+            return None
+        if truncated:
+            # A cut verdict parses fine and means nothing: 'REFINE: "lo' would
+            # send the next probe hunting for "lo". Keep what we have instead.
+            logger.warning("[research] judge verdict truncated, treating as enough: %r", verdict[:80])
             return None
 
         match = _REFINE_RE.search(verdict)
@@ -285,29 +307,44 @@ class ResearchAgent:
         material = "\n\n---\n\n".join(
             str(h.get("text", "")) for r in usable for h in r.hits
         )[:12000]
-        brief = await self._complete(
+        brief, truncated = await self._complete(
             system=ctx.prompt("brief_system"),
             user=ctx.prompt("brief_user", task=task, material=material),
-            max_tokens=900,
+            max_tokens=BRIEF_MAX_TOKENS,
         )
-        return brief or material[:2000]
+        if not brief:
+            return material[:2000]
+        if truncated:
+            logger.warning("[research] brief truncated at %d chars, trimming", len(brief))
+            brief = _trim_to_last_sentence(brief)
+        return brief
 
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
 
-    async def _complete(self, *, system: str, user: str, max_tokens: int) -> str:
+    async def _complete(
+        self, *, system: str, user: str, max_tokens: int
+    ) -> tuple[str, bool]:
+        """Return ``(text, truncated)``.
+
+        ``truncated`` is what the callers actually key on: a searcher model
+        that reasons before answering spends part of ``max_tokens`` on
+        thinking, so a cut reply can come back looking like a short valid one.
+        """
         from infrastructure.llm.client import LLMClient
 
         client = LLMClient(api_key=self.api_key, model=self.model, temperature=0.2)
-        return await client.complete(
+        text, finish_reason = await client.complete(
             [
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
             max_tokens=max_tokens,
             temperature=0.2,
+            return_meta=True,
         )
+        return text, finish_reason == "length"
 
     @staticmethod
     def _dedup_citations(results: list[ProbeResult]) -> list[Citation]:
@@ -331,7 +368,7 @@ async def research(
     task: str,
     source: str,
     api_key: str,
-    account_id: str = "default",
+    account_id: str = ACCOUNT_ID,
     lang: str = "ru",
     db: Any = None,
     max_attempts: int | None = None,

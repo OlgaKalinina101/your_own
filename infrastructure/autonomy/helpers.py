@@ -8,11 +8,13 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 import uuid
 from datetime import datetime
 
-from infrastructure.settings_store import DEFAULT_MODEL, local_to_utc
+from infrastructure.clock import local_to_utc
+from infrastructure.events import publish_pairs_changed
+from infrastructure import language
+from infrastructure.settings_store import DEFAULT_MODEL
 
 logger = logging.getLogger("autonomy.helpers")
 
@@ -37,8 +39,15 @@ def make_llm_client(api_key: str):
 
 
 def detect_lang(text: str) -> str:
-    """Return 'ru' if *text* contains Cyrillic characters, else 'en'."""
-    return "ru" if re.search(r"[А-Яа-яЁё]", text or "") else "en"
+    """Language to write in, with *text* as the evidence.
+
+    Every caller here is choosing a language to *write*, and every one of them
+    can be handed nothing on a fresh instance: a dialogue that has not started,
+    an identity file that does not exist yet, a night with no messages in it.
+    Silence is not evidence of English, so in that case the answer comes from
+    the soul prompt. See :mod:`infrastructure.language`.
+    """
+    return language.detect_or_soul(text)
 
 
 async def save_push_message(*, account_id: str, text: str) -> None:
@@ -57,6 +66,10 @@ async def save_push_message(*, account_id: str, text: str) -> None:
     async with get_db_session() as db:
         await MessageRepository(db).bulk_save([row])
 
+    # The one case no client can find out about on its own: he wrote this, not
+    # a person. Pushy reaches the phone; a desktop sitting open learned nothing.
+    publish_pairs_changed(account_id=account_id, origin="assistant")
+
 
 # ── Autonomy command execution helpers ───────────────────────────────────────
 # Shared by post_analyzer and reflection_engine.
@@ -66,10 +79,15 @@ async def send_push_and_save(
     *,
     account_id: str,
     text: str,
-    lang: str,
     log_prefix: str = "autonomy",
 ) -> None:
-    """Send a push notification and persist the message."""
+    """Send a push notification and persist the message.
+
+    There used to be a ``lang`` parameter here, and on the four helpers below.
+    Every caller computed it and threaded it through; not one of the five ever
+    read it. A parameter like that is worse than useless — it says the language
+    of a message matters to sending it, and callers write code to honour that.
+    """
     from infrastructure.pushy.client import get_client
 
     client = get_client()
@@ -86,7 +104,6 @@ async def schedule_message(
     account_id: str,
     ts_str: str,
     text: str,
-    lang: str,
     source: str,
     log_prefix: str = "autonomy",
 ) -> None:
@@ -128,7 +145,6 @@ async def cancel_message(
     *,
     account_id: str,
     ts_str: str,
-    lang: str,
     log_prefix: str = "autonomy",
 ) -> bool:
     """Cancel a scheduled task by timestamp (user-local). Returns True if found."""
@@ -147,7 +163,6 @@ async def reschedule_message(
     account_id: str,
     old_ts_str: str,
     new_ts_str: str,
-    lang: str,
     log_prefix: str = "autonomy",
 ) -> bool:
     """Reschedule a task from old time to new time (both user-local). Returns True if found."""
@@ -167,7 +182,6 @@ async def rewrite_message(
     account_id: str,
     ts_str: str,
     new_text: str,
-    lang: str,
     log_prefix: str = "autonomy",
 ) -> bool:
     """Rewrite a scheduled task's text (timestamp in user-local). Returns True if found."""

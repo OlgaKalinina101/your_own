@@ -171,18 +171,52 @@ ipcMain.handle("get-soul", async () => {
   }
 });
 
+// ── Backend location and its auth token ──────────────────────────────────────
+
+// In a packaged app the backend ships alongside; in development it is the repo
+// this file lives in. Either way we know the directory, which is the whole
+// reason the token never has to travel over the network.
+function backendDir() {
+  return isDev
+    ? path.join(__dirname, "..", "..")
+    : path.join(process.resourcesPath, "backend");
+}
+
+function authTokenPath() {
+  return path.join(backendDir(), "data", "auth_token.txt");
+}
+
+// The backend writes its token to data/auth_token.txt on first run, and this
+// process starts that backend. Reading the file is how the desktop app
+// auto-configures itself.
+//
+// It used to ask the backend over HTTP (GET /api/settings/local-token), which
+// handed the token to any caller whose socket looked local. Every remote client
+// looks local behind a reverse proxy — including the Next.js rewrite this app
+// uses for tunnels — so that endpoint gave the key to the whole API to anyone
+// who could open the tunnel URL. It is gone; browsers paste the token in
+// Settings instead.
+ipcMain.handle("get-backend-auth-token", async () => {
+  try {
+    const p = authTokenPath();
+    if (!fs.existsSync(p)) return null;
+    return fs.readFileSync(p, "utf-8").trim() || null;
+  } catch {
+    return null;
+  }
+});
+
 // ── Launch FastAPI backend ────────────────────────────────────────────────────
 
 function startBackend() {
   if (isDev) return;
 
-  const backendDir = path.join(process.resourcesPath, "backend");
   const python = process.platform === "win32" ? "python" : "python3";
 
   backendProcess = spawn(
     python,
     ["-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", String(BACKEND_PORT)],
-    { cwd: backendDir, stdio: "ignore", detached: false }
+    { cwd: backendDir(), stdio: "ignore", detached: false }
   );
 
   backendProcess.on("error", (err) => {

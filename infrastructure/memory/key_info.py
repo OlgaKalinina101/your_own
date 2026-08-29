@@ -69,7 +69,6 @@ async def extract_and_store(
 
     Returns dict with fact/category/impressive on success, None on failure.
     """
-    from infrastructure.memory.chroma_pipeline import get_chroma_pipeline
 
     if not recent_pairs:
         return None

@@ -1,24 +1,35 @@
-"""File-based settings store.
+"""Settings the person using this decides while it runs.
 
-Settings live in ``data/settings.json``, soul prompt in ``data/soul.md``.
-Both are read/written by the REST API and consumed by the chat endpoint
-so that clients never need to send secrets with every request.
+Stored in ``data/settings.json``, soul prompt in ``data/soul.md``. Both are
+read and written through the REST API and consumed by the chat endpoint, so a
+client never has to send secrets with every request. A change here is in force
+on the next request; nothing needs restarting.
+
+The other half is :mod:`settings` — deployment-time configuration from
+``.env``: where the database is, which embedding model, and the bounds this
+module's values are clamped to. Its docstring explains the split, including why
+``history_pairs`` and ``memory_cutoff_days`` legitimately appear in both.
+
+``user_timezone`` lives here, but everything that *uses* it lives in
+:mod:`infrastructure.clock` — this module stores the setting, the clock owns
+what it means.
 """
 from __future__ import annotations
 
 import json
-from datetime import datetime
-from pathlib import Path
+import logging
 from threading import Lock
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-_DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+from infrastructure.paths import DATA_DIR
+from infrastructure.state_file import atomic_write_text, read_json
+
+logger = logging.getLogger("settings_store")
+
+_DATA_DIR = DATA_DIR
 _SETTINGS_FILE = _DATA_DIR / "settings.json"
 _SOUL_FILE = _DATA_DIR / "soul.md"
 
-DEFAULT_MODEL = "anthropic/claude-opus-4.6"
-
-TIME_FMT = "%Y-%m-%d %H:%M"
+DEFAULT_MODEL = "~anthropic/claude-fable-latest"
 
 _DEFAULTS: dict[str, object] = {
     "openrouter_api_key": "",
@@ -40,58 +51,14 @@ _DEFAULTS: dict[str, object] = {
     # Skills that are active in the chat pipeline (None = all enabled)
     "enabled_skills": None,
     # Model used for body image generation (image-to-image with anchor reference)
-    "body_image_model": "sourceful/riverflow-v2-fast",
+    "body_image_model": "sourceful/riverflow-v2.5-fast",
     # ResearchAgent — the single orchestrator behind every search
-    "research_model": "google/gemini-3.5-flash",
+    "research_model": "~google/gemini-pro-latest",
     "research_web_engine": "parallel",   # parallel (cheap) | exa (richer)
     "research_max_attempts": 3,
 }
 
 _lock = Lock()
-
-
-def get_user_tz() -> ZoneInfo:
-    """Return the configured user timezone, falling back to UTC on error."""
-    tz_name = load_settings().get("user_timezone", "Asia/Yerevan")
-    try:
-        return ZoneInfo(str(tz_name))
-    except (ZoneInfoNotFoundError, Exception):
-        return ZoneInfo("UTC")
-
-
-def now_local() -> datetime:
-    """Return current time in the user's local timezone."""
-    return datetime.now(get_user_tz())
-
-
-def tz_label() -> str:
-    """Return a human-readable timezone label, e.g. ``Asia/Yerevan, UTC+4``."""
-    tz = get_user_tz()
-    offset = datetime.now(tz).utcoffset()
-    total_seconds = int(offset.total_seconds()) if offset else 0
-    sign = "+" if total_seconds >= 0 else "-"
-    hours, remainder = divmod(abs(total_seconds), 3600)
-    minutes = remainder // 60
-    utc_part = f"UTC{sign}{hours}" if minutes == 0 else f"UTC{sign}{hours}:{minutes:02d}"
-    return f"{tz}, {utc_part}"
-
-
-def now_local_str() -> str:
-    """Return current local time formatted as ``YYYY-MM-DD HH:MM (TZ)``."""
-    dt = now_local()
-    tz_name = str(get_user_tz())
-    return f"{dt.strftime(TIME_FMT)} ({tz_name})"
-
-
-def local_to_utc(naive_dt: datetime) -> datetime:
-    """Interpret a naive datetime as user-local time and convert to UTC.
-
-    Used when parsing SCHEDULE_MESSAGE timestamps that the model writes
-    in local time (because we show it local time in the prompt).
-    """
-    from datetime import timezone
-    local_dt = naive_dt.replace(tzinfo=get_user_tz())
-    return local_dt.astimezone(timezone.utc)
 
 
 def _ensure_dir() -> None:
@@ -101,25 +68,31 @@ def _ensure_dir() -> None:
 # ── Settings (JSON) ──────────────────────────────────────────────────────────
 
 def load_settings() -> dict:
+    """Return stored settings merged over the defaults.
+
+    A file that does not parse is loud and is set aside, not swallowed. It used
+    to fall through to ``_DEFAULTS`` in silence, which read as "no OpenRouter
+    key configured": the chat got 401s, the reflection worker logged
+    ``no api_key, skipping`` and went quiet for good, and the next save from the
+    UI wrote the empty key back over the file. Losing a key is survivable;
+    losing it without a word is not.
+    """
     _ensure_dir()
-    if _SETTINGS_FILE.exists():
-        try:
-            with open(_SETTINGS_FILE, "r", encoding="utf-8") as f:
-                stored = json.load(f)
-            return {**_DEFAULTS, **stored}
-        except (json.JSONDecodeError, IOError):
-            pass
-    return dict(_DEFAULTS)
+    stored = read_json(_SETTINGS_FILE, default={}, log=logger)
+    return {**_DEFAULTS, **stored} if stored else dict(_DEFAULTS)
 
 
 def save_settings(patch: dict) -> dict:
     """Merge *patch* into current settings and persist."""
     _ensure_dir()
-    current = load_settings()
-    current.update(patch)
     with _lock:
-        with open(_SETTINGS_FILE, "w", encoding="utf-8") as f:
-            json.dump(current, f, indent=2, ensure_ascii=False)
+        # Read inside the lock: this is a read-modify-write, and two callers
+        # interleaving here lose one of the patches.
+        current = load_settings()
+        current.update(patch)
+        atomic_write_text(
+            _SETTINGS_FILE, json.dumps(current, indent=2, ensure_ascii=False)
+        )
     return current
 
 
@@ -134,4 +107,4 @@ def load_soul() -> str:
 
 def save_soul(text: str) -> None:
     _ensure_dir()
-    _SOUL_FILE.write_text(text, encoding="utf-8")
+    atomic_write_text(_SOUL_FILE, text)

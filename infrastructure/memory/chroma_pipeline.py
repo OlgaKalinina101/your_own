@@ -12,11 +12,15 @@ supports both Russian (pymorphy3 + RuWordNet) and English (NLTK WordNet).
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
+
+from infrastructure.clock import now_utc
+from infrastructure.paths import resolve
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +30,46 @@ _chroma_client = None
 _chroma_collection = None
 
 
+# Records which embedding model produced the vectors in this store. A sidecar
+# file rather than collection metadata: Chroma's `modify` replaces the metadata
+# wholesale and drops `hnsw:space` with it, and stamping only newly created
+# collections would leave every existing store unverifiable forever.
+_EMBEDDING_STAMP = ".embedding_model"
+
+
+def _verify_embedding_space(store_dir) -> None:
+    """Say something when the embedding model changed under an existing store.
+
+    Every vector here was written by one model. Another model of the same 384
+    dimensions writes into a *different space*: the stored vectors do not become
+    invalid, they become noise. A query still returns its five nearest
+    neighbours — just the wrong five, plausibly formatted, with no error
+    anywhere. ``EMBEDDING_MODEL_NAME`` is one line in settings.py, so this is a
+    single-character edit away at all times.
+    """
+    from infrastructure.memory.embedder import MODEL_NAME
+    from infrastructure.state_file import atomic_write_text
+
+    stamp = store_dir / _EMBEDDING_STAMP
+    try:
+        if not stamp.exists():
+            # First run against this store. Whatever is configured now is what
+            # built it — true for a fresh store, and the best available guess
+            # for one that predates this check.
+            atomic_write_text(stamp, MODEL_NAME)
+            return
+        recorded = stamp.read_text(encoding="utf-8").strip()
+        if recorded != MODEL_NAME:
+            logger.error(
+                "[chroma] this store was built with %r; the running model is %r. "
+                "Same dimensions, different space — everything already stored is "
+                "noise to it. Re-index, or put the old model back.",
+                recorded, MODEL_NAME,
+            )
+    except OSError as exc:
+        logger.warning("[chroma] could not check the embedding stamp: %s", exc)
+
+
 def _get_client():
     global _chroma_client
     if _chroma_client is not None:
@@ -33,8 +77,10 @@ def _get_client():
     try:
         import chromadb
         from settings import settings
-        _chroma_client = chromadb.PersistentClient(path=settings.VECTOR_STORE_DIR)
-        logger.info("[chroma] client initialised at %s", settings.VECTOR_STORE_DIR)
+        store_dir = resolve(settings.VECTOR_STORE_DIR)
+        _chroma_client = chromadb.PersistentClient(path=str(store_dir))
+        logger.info("[chroma] client initialised at %s", store_dir)
+        _verify_embedding_space(store_dir)
     except Exception as exc:
         logger.warning("[chroma] client init failed: %s", exc)
         _chroma_client = None
@@ -87,6 +133,23 @@ def _get_archive_collection():
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _as_instant(value: str | None) -> datetime | None:
+    """Parse a stored ISO timestamp into a UTC-aware datetime, or None.
+
+    Stored metadata is written with ``isoformat()`` on a UTC-aware value, but
+    older rows are naive. Both are instants in UTC; what must not happen is
+    comparing one kind with the other — that raises TypeError, and the handler
+    that used to catch it turned an entire scoring rule off in silence.
+    """
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except (ValueError, TypeError):
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
 
 def _safe_metadata(**kwargs) -> dict:
     """Strip None values — ChromaDB rejects None in metadata."""
@@ -201,13 +264,33 @@ class ChromaMemoryPipeline:
 
     # ── Archive (workbench notes) ──────────────────────────────────────────────
 
+    @staticmethod
+    def archive_entry_id(account_id: str, text: str, timestamp: str) -> str:
+        """A stable id for one rotated note, derived from the note itself.
+
+        Rotation is two steps — write to Chroma, then drop the entries from
+        workbench.md — with no transaction across them. A crash in between used
+        to mean the same notes were archived again on the next run, under fresh
+        random ids, and the duplicates stayed in the archive for good with
+        nothing to reconcile them. Deriving the id from the content makes the
+        second write land on the first one instead.
+        """
+        digest = hashlib.sha1(
+            f"{account_id}|{timestamp}|{text}".encode("utf-8")
+        ).hexdigest()
+        return f"wb-{digest}"
+
     def add_archive_entry(
         self,
         account_id: str,
         text: str,
         timestamp: str,
     ) -> str:
-        """Store a rotated workbench note in the archive collection."""
+        """Store a rotated workbench note in the archive collection.
+
+        Idempotent: archiving the same note twice overwrites one row rather
+        than adding a second.
+        """
         from infrastructure.memory.embedder import embed_one
         col = _get_archive_collection()
         if col is None:
@@ -219,13 +302,13 @@ class ChromaMemoryPipeline:
             logger.warning("[chroma] add_archive_entry skipped — embedding unavailable")
             return str(uuid.uuid4())
 
-        doc_id = str(uuid.uuid4())
+        doc_id = self.archive_entry_id(account_id, text, timestamp)
         metadata = _safe_metadata(
             account_id=account_id,
             source="workbench",
             created_at=timestamp,
         )
-        col.add(
+        col.upsert(
             documents=[text],
             embeddings=[embedding],
             metadatas=[metadata],
@@ -406,7 +489,7 @@ class ChromaMemoryPipeline:
         return results
 
     def _apply_recency_boost(self, results: dict) -> dict:
-        now = datetime.now()
+        now = now_utc()
         for r in results.values():
             # Inspiration is handled by _apply_inspiration_penalty, skip here.
             if r.get("metadata", {}).get("category") in self.INSPIRATION_CATEGORIES:
@@ -420,13 +503,13 @@ class ChromaMemoryPipeline:
             date_str = r.get("metadata", {}).get("last_used") or r.get("metadata", {}).get("created_at")
             if not date_str:
                 continue
-            try:
-                mem_dt = datetime.fromisoformat(date_str.replace("+00:00", "").replace("Z", "")).replace(tzinfo=None)
-                days_ago = (now - mem_dt).days
-                if days_ago > 60:
-                    r["score"] += min(0.1, (days_ago - 60) * 0.001)
-            except Exception:
-                pass
+            mem_dt = _as_instant(date_str)
+            if mem_dt is None:
+                logger.warning("[chroma] unreadable timestamp %r, no recency boost", date_str)
+                continue
+            days_ago = (now - mem_dt).days
+            if days_ago > 60:
+                r["score"] += min(0.1, (days_ago - 60) * 0.001)
         return results
 
     # ── Inspiration category penalty ───────────────────────────────────────────
@@ -451,7 +534,7 @@ class ChromaMemoryPipeline:
         Penalise recently-used or over-used "Вдохновение" anchors so different
         anchors surface on each conversation instead of the same few repeating.
         """
-        now = datetime.now()
+        now = now_utc()
         cooldown = timedelta(days=self.INSPIRATION_COOLDOWN_DAYS)
 
         for r in results.values():
@@ -462,22 +545,15 @@ class ChromaMemoryPipeline:
             # these are style anchors, not facts; repetition always degrades quality.
 
             # 1. Recency penalty — used within the last COOLDOWN days
-            last_used_str = meta.get("last_used")
-            if last_used_str:
-                try:
-                    lu = datetime.fromisoformat(
-                        last_used_str.replace("+00:00", "").replace("Z", "")
-                    ).replace(tzinfo=None)
-                    if (now - lu) < cooldown:
-                        r["score"] += self.INSPIRATION_RECENCY_PENALTY
-                        logger.debug(
-                            "[chroma] inspiration recency penalty +%.2f id=%s text=%s",
-                            self.INSPIRATION_RECENCY_PENALTY,
-                            r.get("id", "?"),
-                            r["text"][:60],
-                        )
-                except Exception:
-                    pass
+            lu = _as_instant(meta.get("last_used"))
+            if lu is not None and (now - lu) < cooldown:
+                r["score"] += self.INSPIRATION_RECENCY_PENALTY
+                logger.debug(
+                    "[chroma] inspiration recency penalty +%.2f id=%s text=%s",
+                    self.INSPIRATION_RECENCY_PENALTY,
+                    r.get("id", "?"),
+                    r["text"][:60],
+                )
 
             # 2. Frequency penalty — grows with use, capped
             try:

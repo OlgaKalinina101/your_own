@@ -8,6 +8,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "setup": "node ../scripts/setup.js",
     "backend:dev": "node ../scripts/start-backend.js",
     "electron:dev": "node ../scripts/setup.js && concurrently -n NEXT,BACKEND,ELECTRON -c cyan,yellow,magenta \"cross-env NODE_OPTIONS=--max-old-space-size=4096 next dev\" \"node ../scripts/start-backend.js\" \"wait-on tcp:3000 && cross-env NODE_ENV=development electron .\"",
@@ -40,6 +42,7 @@
     "postcss": "^8",
     "tailwindcss": "^3.4.1",
     "typescript": "^5",
+    "vitest": "^4.1.11",
     "wait-on": "^8.0.3"
   }
 }

@@ -3,7 +3,12 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
-import { getAuthToken, setAuthToken, apiFetch, getApiBase } from "@/lib/api";
+import {
+  getAuthToken,
+  setAuthToken,
+  getApiBase,
+  readTokenFromDesktopShell,
+} from "@/lib/api";
 const BACKEND_POLL_INTERVAL = 600;   // ms between backend availability checks
 const BACKEND_TIMEOUT = 30_000;      // ms before giving up waiting for backend
 
@@ -13,10 +18,6 @@ const STARTUP_STEPS = [
   "Loading RuWordNet",
   "Loading English lemmatiser (NLTK WordNet)",
 ];
-
-function isElectron(): boolean {
-  return typeof window !== "undefined" && "yourOwn" in window;
-}
 
 type Phase =
   | "title"         // showing animated title + slogan
@@ -134,21 +135,13 @@ export default function LoadingScreen() {
     if (phase !== "done") return;
 
     const redirect = async () => {
-      // Auto-acquire token from local backend if we don't have one yet
+      // The desktop shell has the token on disk and hands it over in-process.
+      // A plain browser gets nothing here and lands in Settings to paste it —
+      // deliberately, since the endpoint that used to serve it gave it to every
+      // caller behind a proxy.
       if (!getAuthToken()) {
-        try {
-          const res = await fetch(`${getApiBase()}/api/settings/local-token`, {
-            headers: { "ngrok-skip-browser-warning": "true" },
-          });
-          if (res.ok) {
-            const data = await res.json();
-            if (data.token) {
-              setAuthToken(data.token);
-            }
-          }
-        } catch {
-          // backend unreachable — will go to settings
-        }
+        const shellToken = await readTokenFromDesktopShell();
+        if (shellToken) setAuthToken(shellToken);
       }
 
       let hasKey = false;

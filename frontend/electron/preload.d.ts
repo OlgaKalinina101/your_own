@@ -17,6 +17,8 @@ declare global {
       getHistoryPairs:     ()              => Promise<string | null>;
       saveMemoryCutoffDays: (val: string)   => Promise<{ ok: boolean; error?: string }>;
       getMemoryCutoffDays:  ()              => Promise<string | null>;
+      /** Reads data/auth_token.txt off disk — the desktop app's only way in. */
+      getBackendAuthToken:  ()              => Promise<string | null>;
     };
   }
 }

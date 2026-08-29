@@ -2,515 +2,141 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { useChatSession, Message, ChromaFact } from "@/context/ChatSessionContext";
 import MarkdownMessage from "@/components/chat/MarkdownMessage";
 
-import { apiGet, apiFetch } from "@/lib/api";
-const HISTORY_BATCH_SIZE = 25;
-const MAX_CHAT_IMAGES = 8;
+import { MAX_CHAT_IMAGES, imageFilesFromClipboard } from "@/lib/chatAttachments";
+import { mediaUrl, useMediaSignature } from "@/lib/media";
+import type { Message } from "@/lib/types";
+import { useChatController } from "@/lib/useChatController";
 
-// Vision-capable models (can accept image attachments)
-const VISION_MODELS = new Set([
-  "anthropic/claude-opus-4.6",
-  "openai/gpt-5.1",
-  "openai/gpt-5.4",
-]);
+/** How close to the bottom counts as "following along". */
+const FOLLOW_THRESHOLD_PX = 120;
+/** How far up before the jump-to-bottom button is worth showing. */
+const SCROLL_BUTTON_THRESHOLD_PX = 180;
+/** How close to the top triggers loading the previous page. */
+const LOAD_OLDER_THRESHOLD_PX = 120;
 
-
-function makeMessageId(prefix: string) {
-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-    return `${prefix}-${crypto.randomUUID()}`;
-  }
-  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-}
-
-interface HistoryPair {
-  pair_id: string;
-  created_at?: string | null;
-  pair_created_at?: string | null;
-  user_text: string;
-  assistant_text: string;
-}
-
-interface HistoryResponse {
-  pairs: HistoryPair[];
-  next_before?: string | null;
-  has_more: boolean;
-}
-
-function pairToMessages(pair: HistoryPair): Message[] {
-  const createdAt = pair.pair_created_at ?? pair.created_at ?? undefined;
-  const output: Message[] = [];
-  if (pair.user_text) {
-    output.push({
-      id: `${pair.pair_id}-user`,
-      role: "user",
-      content: pair.user_text,
-      pairId: pair.pair_id,
-      createdAt,
-    });
-  }
-  if (pair.assistant_text) {
-    output.push({
-      id: `${pair.pair_id}-assistant`,
-      role: "assistant",
-      content: pair.assistant_text,
-      pairId: pair.pair_id,
-      createdAt,
-    });
-  }
-  return output;
-}
-
-async function getServerModel(): Promise<string> {
-  try {
-    const data = await apiGet<Record<string, unknown>>("/api/settings/raw");
-    return (data.model as string) || "anthropic/claude-opus-4.6";
-  } catch {
-    return "anthropic/claude-opus-4.6";
-  }
+function resolveAttachments(message: Message): string[] {
+  const raw = message.imageUrls ?? (message.imageUrl ? [message.imageUrl] : []);
+  return raw.map(mediaUrl).filter(Boolean);
 }
 
 export default function ChatPage() {
   const router = useRouter();
 
-  const { messages, setMessages }   = useChatSession();
-  const [input, setInput]           = useState("");
-  const [streaming, setStreaming]   = useState(false);
-  const [webSearch, setWebSearch]   = useState(false);
-  const [images, setImages]         = useState<File[]>([]);
-  const [imagePreviews, setImagePreviews] = useState<string[]>([]);
-  const [model, setModel]           = useState("anthropic/claude-opus-4.6");
-  const [canAttach, setCanAttach]   = useState(true);
-  const [expandedMemories, setExpandedMemories] = useState<Record<string, boolean>>({});
-  const [historyCursor, setHistoryCursor] = useState<string | null>(null);
-  const [hasMoreHistory, setHasMoreHistory] = useState(true);
-  const [loadingHistory, setLoadingHistory] = useState(false);
-  const [historyReady, setHistoryReady] = useState(false);
-  const [showScrollDown, setShowScrollDown] = useState(false);
-
-  const bottomRef    = useRef<HTMLDivElement>(null);
-  const inputRef     = useRef<HTMLTextAreaElement>(null);
+  const bottomRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const abortRef     = useRef<AbortController | null>(null);
   const messagePaneRef = useRef<HTMLDivElement>(null);
-  const isPrependingRef = useRef(false);
 
-  // SSE text chunk buffer — accumulated between rAF flushes
-  const chunkBufRef = useRef("");
-  const rafRef      = useRef<number | null>(null);
+  const [showScrollDown, setShowScrollDown] = useState(false);
+  const [expandedMemories, setExpandedMemories] = useState<Record<string, boolean>>({});
+
+  // Attachments restored from history are authenticated backend paths, and
+  // resolveAttachments() cannot sign them until this resolves. Subscribing here
+  // re-renders the list once it does.
+  useMediaSignature();
+
+  // Prepending older messages moves everything down; without restoring the
+  // offset the view jumps to a different part of the conversation.
+  const prependAnchorRef = useRef<{ height: number; top: number } | null>(null);
+  // Tells the auto-scroll effect below to sit still for one render.
+  const isPrependingRef = useRef(false);
 
   const scrollToBottom = useCallback((behavior: ScrollBehavior = "smooth") => {
     bottomRef.current?.scrollIntoView({ behavior });
   }, []);
 
-  // Only auto-scroll during streaming if user is already near the bottom
   const scrollIfNearBottom = useCallback(() => {
     const el = messagePaneRef.current;
     if (!el) return;
     const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    if (distFromBottom < 120) {
+    if (distFromBottom < FOLLOW_THRESHOLD_PX) {
       bottomRef.current?.scrollIntoView({ behavior: "auto" });
     }
   }, []);
 
-  const loadHistory = async (before?: string | null, prepend = false) => {
-    if (loadingHistory) return;
-    if (prepend && (!hasMoreHistory || !before)) return;
-
-    const container = messagePaneRef.current;
-    const previousHeight = container?.scrollHeight ?? 0;
-    const previousTop = container?.scrollTop ?? 0;
-
-    setLoadingHistory(true);
-    try {
-      const params = new URLSearchParams({
-        account_id: "default",
-        limit_pairs: String(HISTORY_BATCH_SIZE),
-      });
-      if (before) params.set("before", before);
-
-      const response = await apiFetch(`/api/chat/history?${params.toString()}`);
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-
-      const payload = await response.json() as HistoryResponse;
-      const loadedMessages = payload.pairs.flatMap(pairToMessages);
-
-      if (prepend) {
-        isPrependingRef.current = true;
-        setMessages((prev) => [...loadedMessages, ...prev]);
-      } else {
-        setMessages((prev) => (prev.length === 0 ? loadedMessages : prev));
-      }
-
-      setHistoryCursor(payload.next_before ?? null);
-      setHasMoreHistory(Boolean(payload.has_more));
-      setHistoryReady(true);
-
+  const {
+    messages,
+    input,
+    streaming,
+    webSearch,
+    images,
+    imagePreviews,
+    model,
+    canAttach,
+    loadingHistory,
+    historyReady,
+    setInput,
+    setWebSearch,
+    addImages,
+    removeImageAt,
+    loadOlder,
+    send,
+    stop,
+  } = useChatController({
+    onStreamFlush: scrollIfNearBottom,
+    onBeforePrepend: () => {
+      const el = messagePaneRef.current;
+      prependAnchorRef.current = el
+        ? { height: el.scrollHeight, top: el.scrollTop }
+        : null;
+      isPrependingRef.current = true;
+    },
+    onHistoryLoaded: (prepended) => {
       requestAnimationFrame(() => {
-        const nextContainer = messagePaneRef.current;
-        if (!nextContainer) return;
-        if (prepend) {
-          const delta = nextContainer.scrollHeight - previousHeight;
-          nextContainer.scrollTop = previousTop + delta;
+        const el = messagePaneRef.current;
+        if (!el) return;
+        if (prepended) {
+          const anchor = prependAnchorRef.current;
+          if (anchor) el.scrollTop = anchor.top + (el.scrollHeight - anchor.height);
+          prependAnchorRef.current = null;
         } else {
           scrollToBottom("auto");
         }
       });
-    } catch {
-      setHistoryReady(true);
-    } finally {
-      setLoadingHistory(false);
-    }
-  };
-
-  // Load model and persisted chat history on mount
-  useEffect(() => {
-    getServerModel().then((m) => {
-      setModel(m);
-      setCanAttach(VISION_MODELS.has(m));
-    });
-    void loadHistory(null, false);
-  }, []);
+    },
+    onSendSettled: () => inputRef.current?.focus(),
+  });
 
   useEffect(() => {
     if (isPrependingRef.current) {
       isPrependingRef.current = false;
       return;
     }
-    // During active streaming, scrolling is handled per-chunk in scrollIfNearBottom.
-    // Only auto-scroll for non-streaming state changes (new user message, history load).
+    // While streaming, following the text is handled per-chunk by
+    // scrollIfNearBottom; this is for the structural changes.
     if (!streaming && !showScrollDown) {
       scrollToBottom(historyReady ? "smooth" : "auto");
     }
   }, [messages, showScrollDown, historyReady, streaming, scrollToBottom]);
 
-  const readPreview = (file: File) => new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result ?? ""));
-    reader.onerror = () => reject(new Error("Failed to read image"));
-    reader.readAsDataURL(file);
-  });
-
-  const addImages = async (selected: File[]) => {
-    if (selected.length === 0) return;
-    const remainingSlots = Math.max(0, MAX_CHAT_IMAGES - images.length);
-    const filesToAdd = selected.slice(0, remainingSlots);
-    if (filesToAdd.length === 0) {
-      return;
-    }
-
-    try {
-      const previews = await Promise.all(filesToAdd.map(readPreview));
-      setImages((prev) => [...prev, ...filesToAdd]);
-      setImagePreviews((prev) => [...prev, ...previews]);
-    } catch {
-      // Ignore preview generation failures for now.
-    }
-  };
+  // ── DOM events, kept here because the controller does not touch the DOM ───
 
   const handleImageSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const selected = Array.from(e.target.files ?? []);
     try {
       await addImages(selected);
     } finally {
+      // So picking the same file twice in a row still fires a change event.
       if (fileInputRef.current) fileInputRef.current.value = "";
     }
   };
 
   const handlePaste = async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
-    if (!canAttach) {
-      return;
-    }
-
-    const imageFiles = Array.from(e.clipboardData.items)
-      .filter((item) => item.type.startsWith("image/"))
-      .map((item) => item.getAsFile())
-      .filter((file): file is File => Boolean(file));
-
-    if (imageFiles.length === 0) {
-      return;
-    }
-
+    if (!canAttach) return;
+    const imageFiles = imageFilesFromClipboard(e.clipboardData.items);
+    if (imageFiles.length === 0) return;
     e.preventDefault();
     await addImages(imageFiles);
   };
 
-  const removeImageAt = (index: number) => {
-    setImages((prev) => prev.filter((_, currentIndex) => currentIndex !== index));
-    setImagePreviews((prev) => prev.filter((_, currentIndex) => currentIndex !== index));
-    if (fileInputRef.current) fileInputRef.current.value = "";
+  const handleSend = () => {
+    void send();
   };
 
-  const clearImages = () => {
-    setImages([]);
-    setImagePreviews([]);
-    if (fileInputRef.current) fileInputRef.current.value = "";
-  };
-
-  const handleSend = async () => {
-    const text = input.trim();
-    if (!text && images.length === 0) return;
-    if (streaming) return;
-
-    // Settings are now server-side — no need to send them per request
-
-    // Optimistically add user message
-    const userMsg: Message = {
-      id: makeMessageId("user"),
-      role: "user",
-      content: text,
-      imageUrl: imagePreviews[0] ?? undefined,
-      imageUrls: imagePreviews.length > 0 ? imagePreviews : undefined,
-    };
-    const nextMessages = [...messages, userMsg];
-    setMessages(nextMessages);
-    setInput("");
-    clearImages();
-    setStreaming(true);
-
-    // Placeholder for assistant response
-    setMessages((prev) => [...prev, {
-      id: makeMessageId("assistant"),
-      role: "assistant",
-      content: "",
-    }]);
-
-    try {
-      const body = new FormData();
-      body.append("messages", JSON.stringify(
-        nextMessages.map((m) => ({ role: m.role, content: m.content }))
-      ));
-      body.append("web_search", String(webSearch));
-      body.append("account_id", "default");
-
-      for (const image of images) {
-        body.append("images", image);
-      }
-
-      abortRef.current = new AbortController();
-
-      const response = await apiFetch(`/api/chat`, {
-        method: "POST",
-        body,
-        signal: abortRef.current.signal,
-      });
-
-      if (!response.ok || !response.body) throw new Error(`HTTP ${response.status}`);
-
-      // Flush buffered text into message state, then trigger a scroll check
-      const flushChunkBuf = () => {
-        rafRef.current = null;
-        const text = chunkBufRef.current;
-        if (!text) return;
-        chunkBufRef.current = "";
-        setMessages((prev) => {
-          const updated = [...prev];
-          const last = updated[updated.length - 1];
-          updated[updated.length - 1] = { ...last, role: "assistant", content: last.content + text };
-          return updated;
-        });
-        scrollIfNearBottom();
-      };
-
-      // Schedule a rAF flush; coalesces many tiny chunks into one render frame
-      const scheduleFlush = () => {
-        if (rafRef.current === null) {
-          rafRef.current = requestAnimationFrame(flushChunkBuf);
-        }
-      };
-
-      // Flush any pending buffer before a structural state change (rewrite, image…)
-      const flushNow = () => {
-        if (rafRef.current !== null) {
-          cancelAnimationFrame(rafRef.current);
-          rafRef.current = null;
-        }
-        flushChunkBuf();
-      };
-
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let sseBuffer = "";
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        sseBuffer += decoder.decode(value, { stream: true });
-
-        // SSE events are separated by double newline "\n\n"
-        const events = sseBuffer.split("\n\n");
-        // Keep the last incomplete event in the buffer
-        sseBuffer = events.pop() ?? "";
-
-        for (const event of events) {
-          const eventType = event
-            .split("\n")
-            .find((l) => l.startsWith("event: "))
-            ?.slice(7)
-            .trim();
-
-          // Collect all data: lines within the event and join with \n
-          const dataLines = event
-            .split("\n")
-            .filter((l) => l.startsWith("data: "))
-            .map((l) => l.slice(6));
-
-          if (dataLines.length === 0) continue;
-
-          const chunk = dataLines.join("\n");
-          if (chunk === "[DONE]") break;
-
-          if (eventType === "memory") {
-            try {
-              const payload = JSON.parse(chunk) as { chroma_facts?: ChromaFact[] };
-              flushNow();
-              setMessages((prev) => {
-                const updated = [...prev];
-                const last = updated[updated.length - 1];
-                updated[updated.length - 1] = {
-                  ...last,
-                  role: "assistant",
-                  chromaFacts: payload.chroma_facts ?? [],
-                };
-                return updated;
-              });
-            } catch {
-              // ignore malformed metadata event
-            }
-            continue;
-          }
-
-          if (eventType === "rewrite") {
-            try {
-              const payload = JSON.parse(chunk);
-              const newText = payload.text ?? "";
-              flushNow();
-              setMessages((prev) => {
-                const updated = [...prev];
-                const last = updated[updated.length - 1];
-                updated[updated.length - 1] = {
-                  ...last,
-                  role: "assistant",
-                  content: newText,
-                };
-                return updated;
-              });
-            } catch {
-              // ignore malformed rewrite
-            }
-            continue;
-          }
-
-          if (
-            eventType === "skill" ||
-            eventType === "search_start" ||
-            eventType === "search_results" ||
-            eventType === "web_start" ||
-            eventType === "web_results" ||
-            eventType === "web_done"
-          ) {
-            continue;
-          }
-
-          if (eventType === "image_start") {
-            try {
-              const { prompt: imgPrompt } = JSON.parse(chunk) as { prompt: string };
-              const shimmerCmd = `[GENERATE_IMAGE: ${imgPrompt}]`;
-              flushNow();
-              setMessages((prev) => {
-                const updated = [...prev];
-                const last = updated[updated.length - 1];
-                updated[updated.length - 1] = {
-                  ...last,
-                  role: "assistant",
-                  content: last.content.trimEnd() + "\n" + shimmerCmd,
-                };
-                return updated;
-              });
-            } catch {
-              // ignore
-            }
-            continue;
-          }
-
-          if (eventType === "image_cancel") {
-            flushNow();
-            setMessages((prev) => {
-              const updated = [...prev];
-              const last = updated[updated.length - 1];
-              updated[updated.length - 1] = {
-                ...last,
-                content: last.content.replace(/\[GENERATE_IMAGE:[^\]]*\]/g, "").trimEnd(),
-              };
-              return updated;
-            });
-            continue;
-          }
-
-          if (eventType === "image_ready") {
-            try {
-              const { path, model, prompt } = JSON.parse(chunk) as {
-                path: string;
-                model: string;
-                prompt: string;
-              };
-              const marker = `[GENERATED_IMAGE: ${path} | ${model} | ${prompt}]`;
-              flushNow();
-              setMessages((prev) => {
-                const updated = [...prev];
-                const last = updated[updated.length - 1];
-                if (last.content.includes(`[GENERATED_IMAGE: ${path}`)) {
-                  return updated;
-                }
-                const cleaned = last.content.replace(
-                  /\[GENERATE_IMAGE:[^\]]*\]/g,
-                  "",
-                );
-                updated[updated.length - 1] = {
-                  ...last,
-                  role: "assistant",
-                  content: cleaned.trimEnd() + "\n" + marker,
-                };
-                return updated;
-              });
-            } catch {
-              // ignore malformed image_ready event
-            }
-            continue;
-          }
-
-          // Plain text chunk — accumulate and schedule a single rAF flush
-          chunkBufRef.current += chunk;
-          scheduleFlush();
-        }
-      }
-
-      // Flush any remaining buffered text at end of stream
-      flushNow();
-    } catch (err: unknown) {
-      if (err instanceof Error && err.name === "AbortError") return;
-      setMessages((prev) => {
-        const updated = [...prev];
-        const last = updated[updated.length - 1];
-        updated[updated.length - 1] = {
-          ...last,
-          role: "assistant",
-          content: "[connection error — is the backend running?]",
-        };
-        return updated;
-      });
-    } finally {
-      // Cancel any pending rAF flush
-      if (rafRef.current !== null) {
-        cancelAnimationFrame(rafRef.current);
-        rafRef.current = null;
-      }
-      chunkBufRef.current = "";
-      setStreaming(false);
-      abortRef.current = null;
-      inputRef.current?.focus();
-    }
+  const handleStop = () => {
+    stop();
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -520,28 +146,19 @@ export default function ChatPage() {
     }
   };
 
-  const handleStop = () => {
-    abortRef.current?.abort();
-    setStreaming(false);
-  };
-
   const toggleMemory = (index: string) => {
-    setExpandedMemories((prev) => ({
-      ...prev,
-      [index]: !prev[index],
-    }));
+    setExpandedMemories((prev) => ({ ...prev, [index]: !prev[index] }));
   };
 
   const handleMessagesScroll = () => {
     const container = messagePaneRef.current;
     if (!container) return;
 
-    const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
-    setShowScrollDown(distanceFromBottom > 180);
+    const distanceFromBottom =
+      container.scrollHeight - container.scrollTop - container.clientHeight;
+    setShowScrollDown(distanceFromBottom > SCROLL_BUTTON_THRESHOLD_PX);
 
-    if (container.scrollTop < 120 && hasMoreHistory && !loadingHistory && historyReady) {
-      void loadHistory(historyCursor, true);
-    }
+    if (container.scrollTop < LOAD_OLDER_THRESHOLD_PX) loadOlder();
   };
 
   return (
@@ -616,9 +233,12 @@ export default function ChatPage() {
               key={msg.id}
               className={`flex flex-col gap-2 ${msg.role === "user" ? "items-end" : "items-start"}`}
             >
-              {(msg.imageUrls ?? (msg.imageUrl ? [msg.imageUrl] : [])).length > 0 && (
+              {/* Live previews are data: URLs and pass through untouched; images
+                  restored from history are backend paths and need a signature,
+                  so an entry can be empty for a beat and is skipped. */}
+              {resolveAttachments(msg).length > 0 && (
                 <div className="flex max-w-[80%] gap-3 overflow-x-auto pb-1">
-                  {(msg.imageUrls ?? (msg.imageUrl ? [msg.imageUrl] : [])).map((imageUrl, imageIndex) => (
+                  {resolveAttachments(msg).map((imageUrl, imageIndex) => (
                     // eslint-disable-next-line @next/next/no-img-element
                     <img
                       key={`${msg.id}-image-${imageIndex}`}

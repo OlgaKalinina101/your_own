@@ -20,6 +20,7 @@ import {
 import type { NativeSyntheticEvent, TextLayoutEventData } from "react-native";
 import { useRouter } from "expo-router";
 import { getBackendUrl, loadWorkbenchEntries, loadIdentity, loadInspirationFacts } from "@/lib/api";
+import { buildChatImageSource } from "@/lib/chatImages";
 
 const NGROK_HEADER = { "ngrok-skip-browser-warning": "true" };
 const SCREEN_W = Dimensions.get("window").width;
@@ -409,7 +410,7 @@ function WbView() {
       <View style={sty.avatarArea}>
         {avatarUri ? (
           <Image
-            source={{ uri: avatarUri, headers: NGROK_HEADER }}
+            source={buildChatImageSource(avatarUri, "") ?? { uri: avatarUri, headers: NGROK_HEADER }}
             style={{ width: avatarW, height: avatarH }}
             resizeMode="cover"
           />

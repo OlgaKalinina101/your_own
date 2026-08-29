@@ -190,7 +190,16 @@ class MessageRepository:
         account_id: str,
         limit_pairs: int,
         before: Optional[datetime] = None,
+        after: Optional[datetime] = None,
     ) -> tuple[list[dict], Optional[datetime], bool]:
+        """One page of the conversation, newest first internally, oldest first out.
+
+        ``before`` pages backwards through history — what an infinite scroll
+        upwards needs. ``after`` asks the opposite question, "what appeared since
+        I last looked", which is what a client returning to a conversation that
+        two other writers may have added to actually wants. Without it the only
+        way to notice a new message was to refetch the newest page and diff it.
+        """
         history_filter = or_(
             Message.source == "import",
             and_(
@@ -209,6 +218,8 @@ class MessageRepository:
         )
         if before is not None:
             pair_stmt = pair_stmt.having(func.max(Message.created_at) < before)
+        if after is not None:
+            pair_stmt = pair_stmt.having(func.max(Message.created_at) > after)
 
         pair_rows = (
             await self._session.execute(

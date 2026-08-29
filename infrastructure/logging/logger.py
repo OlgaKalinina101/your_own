@@ -25,7 +25,10 @@ def setup_logger(name: str, level: int = logging.INFO) -> logging.Logger:
     handler.setFormatter(
         logging.Formatter(
             fmt="%(asctime)s [%(name)s] %(levelname)s — %(message)s",
-            datefmt="%H:%M:%S",
+            # With the date: a timestamp of "03:14:22" is enough while you watch
+            # the console and useless the next morning, which is when a gap in
+            # the heartbeat or a failed waking actually gets looked at.
+            datefmt="%Y-%m-%d %H:%M:%S",
         )
     )
     logger.addHandler(handler)

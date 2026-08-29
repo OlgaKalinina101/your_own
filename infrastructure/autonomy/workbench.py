@@ -13,10 +13,14 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from threading import Lock
 
+from infrastructure.autonomy.commands import LEAKABLE_COMMANDS
+from infrastructure.paths import AUTONOMY_DIR
+from infrastructure.state_file import atomic_write_text
+
 logger = logging.getLogger("autonomy.workbench")
 
 WORKBENCH_MAX_AGE_HOURS = 48
-_DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "autonomy"
+_DATA_DIR = AUTONOMY_DIR
 _lock = Lock()
 
 _TITLE = "# Рабочий стол\n"
@@ -24,19 +28,12 @@ _TITLE = "# Рабочий стол\n"
 _OLD_HDR = re.compile(r"^###\s+(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})\s*(?:\(.*\))?\s*$")
 _NEW_HDR = re.compile(r"^\[(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})\s*(?:UTC)?\]\s*$")
 
-_CMD_NAMES = (
-    "SEARCH_FACTS", "SEARCH_MEMORIES", "SEARCH_NOTES", "SEARCH_DIALOGUE", "WEB_SEARCH",
-    "WRITE_NOTE", "WRITE_IDENTITY", "SEND_MESSAGE", "SCHEDULE_MESSAGE",
-    "CANCEL_MESSAGE", "RESCHEDULE_MESSAGE", "REWRITE_MESSAGE",
-    "EXTEND", "SLEEP", "RECALL", "WRITE", "HISTORY",
-    "SAVED_FACT", "GENERATED_IMAGE",
-)
 _LEAKED_CMD_RE = re.compile(
-    r"^\[(?:" + "|".join(_CMD_NAMES) + r")[\s:|\]]",
+    r"^\[(?:" + "|".join(LEAKABLE_COMMANDS) + r")[\s:|\]]",
     re.IGNORECASE,
 )
 _UNCLOSED_CMD_RE = re.compile(
-    r"\[(?:" + "|".join(_CMD_NAMES) + r"):[^\]]{0,500}$",
+    r"\[(?:" + "|".join(LEAKABLE_COMMANDS) + r"):[^\]]{0,500}$",
     re.IGNORECASE,
 )
 
@@ -113,7 +110,7 @@ def parse_entries(content: str) -> list[tuple[str, str]]:
 
 def append(account_id: str, text: str) -> None:
     """Append a timestamped note to the workbench."""
-    from infrastructure.settings_store import now_local_str
+    from infrastructure.clock import now_local_str
     clean = _sanitize_note(text)
     if not clean:
         logger.debug("[workbench:%s] sanitized note is empty, skipping", account_id)
@@ -122,7 +119,9 @@ def append(account_id: str, text: str) -> None:
     path = _path(account_id)
     with _lock:
         if not path.exists() or path.stat().st_size == 0:
-            path.write_text(_TITLE, encoding="utf-8")
+            atomic_write_text(path, _TITLE)
+        # Append stays an append: it never rewrites what is already there,
+        # so a crash mid-write costs the new note, not the file.
         with open(path, "a", encoding="utf-8") as f:
             f.write(f"\n\n### {ts}\n{clean}\n")
     logger.debug("[workbench:%s] appended %d chars", account_id, len(clean))
@@ -176,9 +175,9 @@ def get_stale_entries(account_id: str) -> list[tuple[str, str]]:
     if not content:
         return []
 
-    from infrastructure.settings_store import now_local, get_user_tz, TIME_FMT
+    from infrastructure.clock import TIME_FMT, now_local, user_tz
     cutoff = now_local() - timedelta(hours=WORKBENCH_MAX_AGE_HOURS)
-    tz = get_user_tz()
+    tz = user_tz()
     stale: list[tuple[str, str]] = []
 
     for ts_str, body in parse_entries(content):
@@ -198,9 +197,9 @@ def remove_stale(account_id: str) -> None:
     if not content:
         return
 
-    from infrastructure.settings_store import now_local, get_user_tz, TIME_FMT
+    from infrastructure.clock import TIME_FMT, now_local, user_tz
     cutoff = now_local() - timedelta(hours=WORKBENCH_MAX_AGE_HOURS)
-    tz = get_user_tz()
+    tz = user_tz()
     entries = parse_entries(content)
 
     kept: list[tuple[str, str]] = []
@@ -219,7 +218,7 @@ def remove_stale(account_id: str) -> None:
             parts = [_TITLE]
             for ts_str, body in kept:
                 parts.append(f"\n\n### {ts_str}\n{body}\n")
-            path.write_text("".join(parts), encoding="utf-8")
+            atomic_write_text(path, "".join(parts))
         else:
-            path.write_text(_TITLE, encoding="utf-8")
+            atomic_write_text(path, _TITLE)
     logger.info("[workbench:%s] removed stale entries, kept %d blocks", account_id, len(kept))

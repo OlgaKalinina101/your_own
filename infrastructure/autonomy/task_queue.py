@@ -159,7 +159,14 @@ async def rewrite_task(
             pd = json.loads(t.payload) if t.payload else {}
             pd["message"] = new_text
             t.payload = json.dumps(pd, ensure_ascii=False)
-        except Exception:
+        except Exception as exc:
+            # Rebuilt from scratch, which loses whatever else the payload held
+            # (its `source`, for one). Better than refusing the rewrite — but
+            # not something to do without saying so.
+            logger.warning(
+                "[task_queue] payload of task %s was unreadable, rebuilt from the "
+                "new text alone: %s", t.id, exc,
+            )
             t.payload = json.dumps({"message": new_text}, ensure_ascii=False)
     if tasks:
         await db.commit()
@@ -194,7 +201,11 @@ async def update_task_payload_message(db: AsyncSession, task_id: str, new_text: 
         pd = _json.loads(task.payload) if task.payload else {}
         pd["message"] = new_text
         task.payload = _json.dumps(pd, ensure_ascii=False)
-    except Exception:
+    except Exception as exc:
+        logger.warning(
+            "[task_queue] payload of task %s was unreadable, rebuilt from the new "
+            "text alone: %s", task.id, exc,
+        )
         task.payload = _json.dumps({"message": new_text}, ensure_ascii=False)
     await db.commit()
 

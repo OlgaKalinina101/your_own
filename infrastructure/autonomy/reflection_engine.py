@@ -17,6 +17,7 @@ Commands:
   [SEARCH_DIALOGUE: YYYY-MM-DD]  — date-based dialogue lookup
   [SEARCH_DIALOGUE: YYYY-MM-DD..YYYY-MM-DD]
   [SEARCH_DIALOGUE: query]       — semantic search in dialogue history
+  [SEARCH_DOCS: query]          — the project's own documentation
   [WEB_SEARCH: query]
   [WRITE_NOTE: text]
   [WRITE_IDENTITY: section | text]
@@ -33,31 +34,43 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 import re
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from infrastructure.clock import format_local, now_utc
 from pathlib import Path
 
-from sqlalchemy import select, text
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from infrastructure.autonomy import identity_memory as identity
 from infrastructure.autonomy import workbench as wb
+from infrastructure.autonomy import context
+from infrastructure.autonomy import commands
+from infrastructure.autonomy.cmd_parser import (
+    CancelMessage,
+    ParsedCommand,
+    PinThread,
+    RescheduleMessage,
+    RewriteMessage,
+    ScheduleMessage,
+    SendMessage,
+    UnpinThread,
+    UpdateThread,
+)
+from infrastructure.autonomy.commands import REFLECTION_COMMANDS
+from infrastructure.autonomy.vitals import Vitals
 from infrastructure.agents import Source, research
 from infrastructure.database.engine import get_db_session
 from infrastructure.llm.prompt_loader import get_prompt
+from infrastructure.paths import AUTONOMY_DIR
+from infrastructure.state_file import atomic_write_text
 
 from infrastructure.autonomy.helpers import (
     cancel_all_messages,
-    cancel_message,
     detect_lang,
     get_ai_name,
     make_llm_client,
-    reschedule_message,
-    rewrite_message,
-    save_push_message,
-    schedule_message,
-    send_push_and_save,
 )
 from infrastructure.logging.logger import setup_logger
 logger = setup_logger("autonomy.reflection")
@@ -70,19 +83,37 @@ EXTEND_ASK_BEFORE = 2
 MAX_EXTEND_PER_ASK = 5
 MAX_EXTEND_ASKS = 3
 
+_CMD_ALTERNATION = "|".join(REFLECTION_COMMANDS)
+
+# Arguments are routinely multi-line — a WRITE_NOTE or a SEND_MESSAGE carries
+# paragraphs — so the argument cannot simply stop at a newline. What it must
+# never do is run past the start of the *next* command: with a plain lazy
+# ``.*?`` an unclosed command (a reply cut off mid-token, say) reaches forward
+# to the next ``]`` and swallows whatever command sat in between. The lookahead
+# below stops the argument at any command opener, so a broken command is
+# dropped on its own instead of eating its neighbour.
+_ARG_STOPPER = r"(?:\[(?:" + _CMD_ALTERNATION + r"):|\[SLEEP\]|\[VITALS\]|\[CANCEL[_ ]ALL[_ ]SCHEDULED\])"
+
 _CMD_RE = re.compile(
-    r"\[(?P<cmd>SEARCH_FACTS|SEARCH_MEMORIES|SEARCH_NOTES|SEARCH_DIALOGUE|WEB_SEARCH"
-    r"|WRITE_NOTE|WRITE_IDENTITY|SEND_MESSAGE|SCHEDULE_MESSAGE"
-    r"|CANCEL_MESSAGE|RESCHEDULE_MESSAGE|REWRITE_MESSAGE"
-    r"|PIN_THREAD|UNPIN_THREAD|UPDATE_THREAD"
-    r"|EXTEND|SLEEP|RECALL|WRITE|HISTORY):\s*(?P<arg>.*?)\]",
+    r"\[(?P<cmd>" + _CMD_ALTERNATION + r"):\s*"
+    r"(?P<arg>(?:(?!" + _ARG_STOPPER + r").)*?)\]",
     re.IGNORECASE | re.DOTALL,
 )
+
+# A reply that ran out of tokens mid-command leaves an opener with no closing
+# bracket. The command never runs, so it is worth a line in the log rather
+# than silence.
+_UNCLOSED_CMD_RE = re.compile(
+    r"\[(?P<cmd>" + _CMD_ALTERNATION + r"):(?P<tail>[^\]]*)$",
+    re.IGNORECASE | re.DOTALL,
+)
+
 _SLEEP_RE = re.compile(r"\[SLEEP\]", re.IGNORECASE)
+_VITALS_RE = re.compile(r"\[VITALS\]", re.IGNORECASE)
 _CANCEL_ALL_RE = re.compile(r"\[CANCEL[_ ]ALL[_ ]SCHEDULED\]", re.IGNORECASE)
 _EXTEND_RE = re.compile(r"\[EXTEND:\s*(\d+)\]", re.IGNORECASE)
 
-_SEARCH_CMDS = {"SEARCH_FACTS", "SEARCH_NOTES", "SEARCH_DIALOGUE", "WEB_SEARCH"}
+_SEARCH_CMDS = {"SEARCH_FACTS", "SEARCH_NOTES", "SEARCH_DIALOGUE", "SEARCH_DOCS", "WEB_SEARCH"}
 _WRITE_CMDS = {"WRITE_NOTE", "WRITE_IDENTITY", "SEND_MESSAGE", "SCHEDULE_MESSAGE"}
 
 # Back-compat: SEARCH_MEMORIES used to mean Chroma facts here and Postgres
@@ -95,32 +126,71 @@ _ALIASES = {
     "HISTORY": "SEARCH_DIALOGUE",
 }
 
-_DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "autonomy"
-_REFLECTION_TS_FILE = _DATA_DIR / "last_reflection.txt"
+_DATA_DIR = AUTONOMY_DIR
+
+# Where this timestamp lived before it was per-account. workbench.md,
+# identity.md, threads.md and vitals.json all sit under {account}/; this one sat
+# beside them, so a second account would have shared the first one's cooldown —
+# a reflection for one would count as a reflection for the other.
+_LEGACY_REFLECTION_TS_FILE = _DATA_DIR / "last_reflection.txt"
 
 
 # ── Timestamp helpers ─────────────────────────────────────────────────────────
 
-def _get_last_reflection_ts() -> datetime | None:
-    if _REFLECTION_TS_FILE.exists():
+def _reflection_ts_file(account_id: str) -> Path:
+    """Path to this account's last-reflection stamp, migrating the old one once.
+
+    Moving rather than ignoring: a fresh file reads as "never reflected", which
+    would fire a reflection immediately on the first tick after the upgrade.
+    """
+    directory = _DATA_DIR / account_id
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / "last_reflection.txt"
+    if not path.exists() and _LEGACY_REFLECTION_TS_FILE.exists():
         try:
-            s = _REFLECTION_TS_FILE.read_text().strip()
-            return datetime.fromisoformat(s)
-        except ValueError:
-            pass
-    return None
+            _LEGACY_REFLECTION_TS_FILE.replace(path)
+            logger.info(
+                "[reflection:%s] moved last_reflection.txt into the account directory",
+                account_id,
+            )
+        except OSError as exc:
+            logger.warning("[reflection] could not migrate last_reflection.txt: %s", exc)
+    return path
 
 
-def _set_last_reflection_ts() -> None:
-    _DATA_DIR.mkdir(parents=True, exist_ok=True)
-    _REFLECTION_TS_FILE.write_text(datetime.now(timezone.utc).isoformat())
+def _get_last_reflection_ts(account_id: str) -> datetime | None:
+    path = _reflection_ts_file(account_id)
+    if not path.exists():
+        return None
+    try:
+        return datetime.fromisoformat(path.read_text(encoding="utf-8").strip())
+    except (ValueError, OSError):
+        return None
 
 
-# fable-5 writes verbose Russian; a reflection step carries a journal note plus
-# any [SCHEDULE_MESSAGE] commands, so keep the ceiling generous to avoid cut-offs.
-async def _complete(api_key: str, messages: list[dict], max_tokens: int = 2200) -> str:
+def _set_last_reflection_ts(account_id: str) -> None:
+    atomic_write_text(
+        _reflection_ts_file(account_id), datetime.now(timezone.utc).isoformat()
+    )
+
+
+# Reasoning models bill their thinking against max_tokens, and on the Claude Fable family
+# thinking cannot be turned off. A step's visible output runs ~1000-3400 chars,
+# but the budget has to cover the reasoning in front of it — at 2200 the whole
+# allowance went to thinking and the reply came back empty. Anthropic's own
+# guidance for a non-streaming request is ~16000.
+STEP_MAX_TOKENS = 16000
+
+
+async def _complete(
+    api_key: str, messages: list[dict], max_tokens: int = STEP_MAX_TOKENS
+) -> tuple[str, bool]:
+    """Return ``(text, truncated)`` for one reflection step."""
     client = make_llm_client(api_key)
-    return await client.complete(messages, max_tokens=max_tokens, temperature=0.7)
+    text, finish_reason = await client.complete(
+        messages, max_tokens=max_tokens, temperature=0.7, return_meta=True
+    )
+    return text, finish_reason == "length"
 
 
 # ── Command handlers ─────────────────────────────────────────────────────
@@ -129,12 +199,85 @@ async def _complete(api_key: str, messages: list[dict], max_tokens: int = 2200) 
 # Reflection no longer talks to Chroma, Postgres or the workbench directly.
 _SEARCH_SOURCES = {
     "SEARCH_DIALOGUE": Source.DIALOGUE,
+    "SEARCH_DOCS": Source.DOCS,
     "SEARCH_FACTS": Source.FACTS,
     "SEARCH_NOTES": Source.NOTES,
     "WEB_SEARCH": Source.WEB,
 }
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}")
+
+
+def _record_failure(account_id: str, reason: str, lang: str = "ru") -> None:
+    """Record a failed waking and leave a trace he will actually see.
+
+    Three surfaces, on purpose. The log is for us. Vitals schedules the retry
+    and feeds the deltas block at his next waking. The workbench note is the
+    durable one: it sits in his own journal, so the gap is a named absence
+    rather than a silent hole between two entries — and it survives into the
+    notes archive after rotation.
+    """
+    vitals = Vitals(account_id)
+    count = vitals.record_reflection_failure(reason)
+
+    if count > 1:
+        return  # one note per episode, not one per retry
+
+    from infrastructure.autonomy.vitals import _reason_ru
+    from infrastructure.clock import now_local_str
+
+    if lang == "ru":
+        note = (
+            f"[система] Пробуждение {now_local_str()} не состоялось: {_reason_ru(reason)}. "
+            "Между этой записью и предыдущей — пропуск."
+        )
+    else:
+        note = (
+            f"[system] The waking at {now_local_str()} did not happen: {reason}. "
+            "Between this entry and the previous one there is a gap."
+        )
+    try:
+        wb.append(account_id, note)
+    except Exception as exc:
+        logger.warning("[reflection:%s] could not record the gap: %s", account_id, exc)
+
+
+async def _read_vitals(account_id: str, db: AsyncSession, lang: str) -> str:
+    """Render the instrument panel for [VITALS].
+
+    Recorded state comes from the Vitals file; the counts are read live. Facts
+    only — the panel never tells him what the numbers mean.
+    """
+    from infrastructure.autonomy import threads as _threads
+
+    live: dict[str, dict] = {}
+    try:
+        row = await db.execute(text(
+            "select count(*), max(created_at) from messages where account_id = :a"
+        ), {"a": account_id})
+        total, last_at = row.one()
+        from infrastructure.clock import user_tz
+
+        memory = {
+            "сообщений в базе" if lang == "ru" else "messages stored": total,
+            "последнее" if lang == "ru" else "latest": (
+                last_at.astimezone(user_tz()).strftime("%Y-%m-%d %H:%M") if last_at else "—"
+            ),
+        }
+        memory["заметок на столе" if lang == "ru" else "notes on the desk"] = len(
+            wb.parse_entries(wb.read(account_id))
+        )
+        memory["нитей на доске" if lang == "ru" else "threads on the board"] = len(
+            _threads.list_threads(account_id)
+        )
+        memory["балок в каноне" if lang == "ru" else "beams in the canon"] = len(
+            identity.canon_entries(account_id)
+        )
+        live["Память" if lang == "ru" else "Memory"] = memory
+    except Exception as exc:
+        logger.warning("[reflection] vitals live counts failed: %s", exc)
+
+    return Vitals(account_id).render_full(lang=lang, live=live)
 
 
 async def _run_search(
@@ -208,83 +351,66 @@ async def _handle_command(
             logger.warning("[reflection] WRITE_IDENTITY bad format: %r", arg)
         return None
 
-    elif cmd == "SEND_MESSAGE":
-        msg_text = arg.strip()
-        _l = detect_lang(msg_text)
-        await send_push_and_save(account_id=account_id, text=msg_text, lang=_l, log_prefix="reflection")
+    parsed = _as_command(cmd, arg)
+    if parsed is None:
         return None
+    return await commands.execute(
+        parsed,
+        account_id=account_id,
+        lang=lang,
+        log_prefix="reflection",
+        source="reflection",
+    )
 
-    elif cmd == "SCHEDULE_MESSAGE":
-        if "|" in arg:
-            ts_str, message = arg.split("|", 1)
-            try:
-                _l = detect_lang(message)
-                await schedule_message(
-                    account_id=account_id, ts_str=ts_str, text=message,
-                    lang=_l, source="reflection", log_prefix="reflection",
-                )
-            except ValueError:
-                logger.warning("[reflection] bad SCHEDULE_MESSAGE ts: %r", ts_str)
-        return None
 
-    elif cmd == "CANCEL_MESSAGE":
-        ts_str = arg.strip()
-        try:
-            found = await cancel_message(account_id=account_id, ts_str=ts_str, lang="ru", log_prefix="reflection")
-            if not found:
-                return f"Сообщение на {ts_str} не найдено (уже отправлено или не существует)."
-        except ValueError:
-            logger.warning("[reflection] bad CANCEL_MESSAGE ts: %r", ts_str)
-        return None
+def _as_command(cmd: str, arg: str) -> ParsedCommand | None:
+    """Turn reflection's two strings into the shared typed command.
 
-    elif cmd == "RESCHEDULE_MESSAGE":
-        if "->" in arg:
-            old_ts_str, new_ts_str = arg.split("->", 1)
-            try:
-                found = await reschedule_message(
-                    account_id=account_id, old_ts_str=old_ts_str,
-                    new_ts_str=new_ts_str, lang="ru", log_prefix="reflection",
-                )
-                if not found:
-                    return f"Сообщение на {old_ts_str.strip()} не найдено (уже отправлено или не существует)."
-            except ValueError:
-                logger.warning("[reflection] bad RESCHEDULE_MESSAGE: %r", arg)
-        return None
+    Reflection reads commands out of free text with a regex, so it holds a name
+    and one raw argument; post-analysis is handed typed objects by the parser.
+    The actions behind them are the same, so the argument is split here, once,
+    and both sides meet in :func:`infrastructure.autonomy.commands.execute`.
 
-    elif cmd == "REWRITE_MESSAGE":
-        if "|" in arg:
-            ts_str, new_text = arg.split("|", 1)
-            try:
-                found = await rewrite_message(
-                    account_id=account_id, ts_str=ts_str,
-                    new_text=new_text, lang="ru", log_prefix="reflection",
-                )
-                if not found:
-                    return f"Сообщение на {ts_str.strip()} не найдено (уже отправлено или не существует)."
-            except ValueError:
-                logger.warning("[reflection] bad REWRITE_MESSAGE: %r", arg)
-        return None
+    ``None`` means the argument was not in a shape this command can use — a
+    ``SCHEDULE_MESSAGE`` with no ``|`` carries no message to schedule. That has
+    always been silent, and it stays silent: nothing happened, so there is
+    nothing to tell him.
+    """
+    if cmd == "SEND_MESSAGE":
+        return SendMessage(text=arg.strip())
 
-    elif cmd == "PIN_THREAD":
-        from infrastructure.autonomy import threads
-        threads.pin(account_id, arg.strip())
-        return None
+    if cmd == "SCHEDULE_MESSAGE":
+        if "|" not in arg:
+            return None
+        ts_str, message = arg.split("|", 1)
+        return ScheduleMessage(ts_str=ts_str, text=message)
 
-    elif cmd == "UNPIN_THREAD":
-        from infrastructure.autonomy import threads
-        found = threads.unpin(account_id, arg.strip())
-        if not found:
-            return f"Нить {arg.strip()} не найдена на доске."
-        return None
+    if cmd == "CANCEL_MESSAGE":
+        return CancelMessage(ts_str=arg.strip())
 
-    elif cmd == "UPDATE_THREAD":
-        if "|" in arg:
-            from infrastructure.autonomy import threads
-            tid, new_text = arg.split("|", 1)
-            found = threads.update(account_id, tid.strip(), new_text.strip())
-            if not found:
-                return f"Нить {tid.strip()} не найдена на доске."
-        return None
+    if cmd == "RESCHEDULE_MESSAGE":
+        if "->" not in arg:
+            return None
+        old_ts_str, new_ts_str = arg.split("->", 1)
+        return RescheduleMessage(old_ts_str=old_ts_str, new_ts_str=new_ts_str)
+
+    if cmd == "REWRITE_MESSAGE":
+        if "|" not in arg:
+            return None
+        ts_str, new_text = arg.split("|", 1)
+        return RewriteMessage(ts_str=ts_str, new_text=new_text)
+
+    if cmd == "PIN_THREAD":
+        return PinThread(text=arg.strip())
+
+    if cmd == "UNPIN_THREAD":
+        return UnpinThread(thread_id=arg.strip())
+
+    if cmd == "UPDATE_THREAD":
+        if "|" not in arg:
+            return None
+        tid, new_text = arg.split("|", 1)
+        return UpdateThread(thread_id=tid, new_text=new_text)
 
     return None
 
@@ -297,32 +423,30 @@ def _build_awakening_system(
     *,
     ai_name: str,
     lang: str,
-    identity_content: str,
-    workbench_content: str,
-    open_threads: str,
     recent_dialogue: str,
-    current_time: str,
     hours_since_last: str,
     pending_tasks_block: str,
     cooldown_h: int,
     interval_h: int,
-    timezone_label: str,
+    **state: str,
 ) -> str:
-    wc = workbench_content or ("(пусто)" if lang == "ru" else "(empty)")
+    """Assemble the awakening prompt.
+
+    ``state`` is whatever :func:`infrastructure.autonomy.context.build` hands
+    over for :data:`~infrastructure.autonomy.context.Consumer.REFLECTION` —
+    identity, workbench, open threads, vitals, time, timezone. Which of those
+    arrive is decided in the registry, not here.
+    """
     return get_prompt(
         f"{_PROMPTS_DIR}/reflection_awakening.md",
         lang=lang,
         ai_name=ai_name,
-        identity_content=identity_content,
-        workbench_content=wc,
-        open_threads=open_threads,
         recent_dialogue=recent_dialogue,
-        current_time=current_time,
         hours_since_last=hours_since_last,
         pending_tasks_block=pending_tasks_block,
         cooldown_h=cooldown_h,
         interval_h=interval_h,
-        timezone_label=timezone_label,
+        **state,
     )
 
 
@@ -360,10 +484,10 @@ def _build_extend_offer(lang: str, step: int, max_steps: int, max_extend: int) -
 def _build_pending_tasks_block(lang: str, tasks: list) -> str:
     if not tasks:
         return ""
-    from infrastructure.settings_store import get_user_tz
+    from infrastructure.clock import user_tz
     from infrastructure.database.models.autonomy_task import TaskStatus
     now_utc = datetime.now(timezone.utc)
-    user_tz = get_user_tz()
+    user_tz = user_tz()
     lines = []
     for t in tasks:
         try:
@@ -409,9 +533,206 @@ def _build_pending_tasks_block(lang: str, tasks: list) -> str:
 # ── Main run loop ─────────────────────────────────────────────────────────────
 
 async def run(account_id: str, api_key: str) -> None:
+    """Run one full reflection cycle, recording the outcome either way.
+
+    Every exit path has to leave a mark: a crash that only reached the worker's
+    log is indistinguishable from a quiet night, and that is what let one go
+    missing unnoticed.
+    """
+    try:
+        await _run_cycle(account_id, api_key)
+    except asyncio.CancelledError:
+        # A shutdown landing in the middle of a cycle. The timestamp at the top
+        # of _run_cycle already says "reflected", so without a mark here the
+        # interrupted night is indistinguishable from one that simply had
+        # nothing to say — and the retry Vitals schedules is what gives it
+        # another go after the restart. Recorded, then re-raised: cancellation
+        # is not ours to swallow.
+        logger.warning("[reflection:%s] cycle cancelled mid-flight", account_id)
+        _record_failure(account_id, "interrupted")
+        raise
+    except Exception as exc:
+        logger.exception("[reflection:%s] cycle failed: %s", account_id, exc)
+        _record_failure(account_id, "exception")
+        raise
+
+
+@dataclass
+class _StepOutcome:
+    """What one step of thinking actually did.
+
+    The two fields decide the follow-up prompt, and they are not the same
+    thing: *results* means he asked something and got an answer, so the next
+    turn shows him that answer; *wrote* means he changed something, so the next
+    turn just acknowledges it. Neither means the step was empty.
+    """
+
+    results: list[str] = field(default_factory=list)
+    wrote: bool = False
+
+
+def _free_text_of(response: str) -> str:
+    """The reply with every command stripped out — the part that is thinking."""
+    text = _CMD_RE.sub("", response)
+    for pattern in (_SLEEP_RE, _EXTEND_RE, _CANCEL_ALL_RE):
+        text = pattern.sub("", text)
+    return text.strip()
+
+
+# Below this a "thought" is a fragment left over from stripping commands, not
+# something worth keeping on the desk.
+MIN_NOTE_CHARS = 30
+
+
+async def _execute_response(
+    response: str, *, account_id: str, api_key: str, db: AsyncSession, lang: str
+) -> _StepOutcome:
+    """Run everything he asked for in one reply, and file what he thought.
+
+    Every command is attempted even if an earlier one failed, and a failure is
+    handed back to him as text rather than swallowed: he is the one who decides
+    what to do about it on the next step.
+    """
+    outcome = _StepOutcome()
+
+    if _CANCEL_ALL_RE.search(response):
+        try:
+            count = await cancel_all_messages(account_id=account_id, log_prefix="reflection")
+            outcome.wrote = True
+            logger.info("[reflection:%s] CANCEL_ALL_SCHEDULED: %d cancelled", account_id, count)
+        except Exception as exc:
+            logger.warning("[reflection] CANCEL_ALL_SCHEDULED error: %s", exc)
+
+    if _VITALS_RE.search(response):
+        try:
+            outcome.results.append(f"[VITALS] → {await _read_vitals(account_id, db, lang)}")
+            logger.info("[reflection:%s] VITALS read", account_id)
+        except Exception as exc:
+            logger.warning("[reflection] VITALS error: %s", exc)
+
+    for match in _CMD_RE.finditer(response):
+        name, arg = match.group("cmd"), match.group("arg")
+        if name.upper() in ("SLEEP", "EXTEND"):
+            continue
+        resolved = _ALIASES.get(name.upper(), name.upper())
+        try:
+            result = await _handle_command(name, arg, account_id, api_key, db, lang)
+            if result is not None:
+                outcome.results.append(f"[{resolved}: {arg[:40]}] → {result}")
+            else:
+                outcome.wrote = True
+        except Exception as exc:
+            logger.warning("[reflection] command %s error: %s", name, exc)
+            outcome.results.append(f"[{resolved}] error: {exc}")
+
+    # wb.append sanitises leaked or truncated commands on its own.
+    thought = _free_text_of(response)
+    if len(thought) > MIN_NOTE_CHARS:
+        wb.append(account_id, thought)
+        outcome.wrote = True
+
+    return outcome
+
+
+@dataclass
+class _Awakening:
+    """Everything he is shown at the moment of waking, and the language of it."""
+
+    lang: str
+    system: str
+    timezone_label: str   # the continuation prompts still need it, step by step
+
+
+def _format_dialogue(pairs: list[dict]) -> str:
+    """The last few exchanges, in the order they happened, with local times.
+
+    Through the clock, not strftime: a row's timestamp is an instant, and
+    printing it raw shows UTC. There were three hand-rolled versions of this in
+    the codebase, each with its own wrong fallback behind a bare except.
+    """
+    lines = []
+    for pair in pairs:
+        created_at = pair.get("created_at")
+        ts = f"[{format_local(created_at, '%H:%M')}] " if created_at else ""
+        lines.append(
+            f"{ts}User: {pair.get('user_text', '')}\n"
+            f"{ts}Assistant: {pair.get('assistant_text', '')}"
+        )
+    return "\n\n".join(lines)
+
+
+async def _gather_awakening(
+    db,
+    account_id: str,
+    *,
+    ai_name: str,
+    cooldown_h: int,
+    interval_h: int,
+) -> _Awakening:
+    """Assemble what he wakes up knowing.
+
+    The language is decided first and everything else follows it, because a
+    quiet night has no dialogue to detect from and the fallback then comes from
+    the soul prompt — see :mod:`infrastructure.language`. Before that fix this
+    whole block came out in English on a Russian instance whenever a day passed
+    without messages.
+    """
+    from infrastructure.database.repositories.message_repo import MessageRepository
+
+    repo = MessageRepository(db)
+
+    try:
+        recent_pairs = await repo.get_recent_canonical_pairs(account_id, limit_pairs=3)
+        recent_dialogue = _format_dialogue(recent_pairs) if recent_pairs else ""
+    except Exception as exc:
+        logger.warning("[reflection] recent pairs error: %s", exc)
+        recent_dialogue = ""
+
+    lang = detect_lang(recent_dialogue)
+    if not recent_dialogue:
+        recent_dialogue = "(нет недавнего диалога)" if lang == "ru" else "(no recent dialogue)"
+
+    last_user_at = await repo.get_last_user_message_at(account_id)
+    if last_user_at:
+        delta_h = (now_utc() - last_user_at).total_seconds() / 3600
+        hours_since_last = f"{delta_h:.1f} ч" if lang == "ru" else f"{delta_h:.1f} h"
+    else:
+        hours_since_last = "неизвестно" if lang == "ru" else "unknown"
+
+    # Everything from the last day, sent and pending both: he needs to see what
+    # he already said before deciding to say it again.
+    from infrastructure.autonomy.task_queue import get_recent_tasks
+    recent_tasks = await get_recent_tasks(db, account_id, hours=24)
+
+    state = context.build(
+        context.Consumer.REFLECTION,
+        context.Request(account_id=account_id, lang=lang),
+    )
+    # The deltas are shown once. Marking them seen stays here rather than in the
+    # renderer: only this side knows the prompt was actually built.
+    if state.get("vitals"):
+        Vitals(account_id).mark_events_seen()
+
+    return _Awakening(
+        lang=lang,
+        timezone_label=state["timezone_label"],
+        system=_build_awakening_system(
+            ai_name=ai_name,
+            lang=lang,
+            recent_dialogue=recent_dialogue,
+            hours_since_last=hours_since_last,
+            pending_tasks_block=_build_pending_tasks_block(lang, recent_tasks),
+            cooldown_h=cooldown_h,
+            interval_h=interval_h,
+            **state,
+        ),
+    )
+
+
+async def _run_cycle(account_id: str, api_key: str) -> None:
     """Run one full reflection cycle."""
     logger.info("[reflection:%s] starting reflection", account_id)
-    _set_last_reflection_ts()
+    _set_last_reflection_ts(account_id)
 
     from infrastructure.settings_store import load_settings
     settings = load_settings()
@@ -420,76 +741,12 @@ async def run(account_id: str, api_key: str) -> None:
     ai_name = get_ai_name()
 
     async with get_db_session() as db:
-        from infrastructure.database.repositories.message_repo import MessageRepository
-        repo = MessageRepository(db)
-
-        identity_content = identity.read(account_id)
-        workbench_content = wb.read(account_id)
-        from infrastructure.autonomy import threads as _threads
-
-        # Last 3 dialogue pairs
-        try:
-            from infrastructure.settings_store import get_user_tz
-            _user_tz = get_user_tz()
-            recent_pairs = await repo.get_recent_canonical_pairs(account_id, limit_pairs=3)
-
-            def _fmt_pair(p: dict) -> str:
-                ts = ""
-                created_at = p.get("created_at")
-                if created_at:
-                    try:
-                        local_dt = created_at.astimezone(_user_tz) if created_at.tzinfo else created_at
-                        ts = f"[{local_dt.strftime('%H:%M')}] "
-                    except Exception:
-                        pass
-                return f"{ts}User: {p.get('user_text','')}\n{ts}Assistant: {p.get('assistant_text','')}"
-
-            recent_dialogue = "\n\n".join(
-                _fmt_pair(p) for p in recent_pairs
-            ) if recent_pairs else ""
-        except Exception as exc:
-            logger.warning("[reflection] recent pairs error: %s", exc)
-            recent_dialogue = ""
-
-        lang = detect_lang(recent_dialogue)
-        if not recent_dialogue:
-            recent_dialogue = "(нет недавнего диалога)" if lang == "ru" else "(no recent dialogue)"
-
-        # Hours since last user message
-        last_user_at = await repo.get_last_user_message_at(account_id)
-        now_utc = datetime.now(timezone.utc)
-        if last_user_at:
-            delta_h = (now_utc - last_user_at).total_seconds() / 3600
-            hours_since_last = f"{delta_h:.1f} ч" if lang == "ru" else f"{delta_h:.1f} h"
-        else:
-            hours_since_last = "неизвестно" if lang == "ru" else "unknown"
-
-        # All tasks from last 24h (with status labels so AI sees what's sent/pending)
-        from infrastructure.autonomy.task_queue import get_recent_tasks
-        recent_tasks = await get_recent_tasks(db, account_id, hours=24)
-        pending_tasks_block = _build_pending_tasks_block(lang, recent_tasks)
-
-        from infrastructure.settings_store import now_local_str, tz_label
-        now_str = now_local_str()
-
-        open_threads = _threads.render_block(
-            account_id, lang, empty_label=("(пусто)" if lang == "ru" else "(empty)"),
+        waking = await _gather_awakening(
+            db, account_id,
+            ai_name=ai_name, cooldown_h=cooldown_h, interval_h=interval_h,
         )
-
-        awakening_system = _build_awakening_system(
-            ai_name=ai_name,
-            lang=lang,
-            identity_content=identity_content,
-            workbench_content=workbench_content,
-            open_threads=open_threads,
-            recent_dialogue=recent_dialogue,
-            current_time=now_str,
-            hours_since_last=hours_since_last,
-            pending_tasks_block=pending_tasks_block,
-            cooldown_h=cooldown_h,
-            interval_h=interval_h,
-            timezone_label=tz_label(),
-        )
+        lang = waking.lang
+        awakening_system = waking.system
 
         # Seed with a minimal user turn so providers that require at least one
         # user message (e.g. DeepSeek) don't reject the first request.
@@ -511,17 +768,54 @@ async def run(account_id: str, api_key: str) -> None:
                     "content": _build_extend_offer(lang, step, max_steps, MAX_EXTEND_PER_ASK),
                 })
 
-            response = await _complete(api_key, [
+            response, truncated = await _complete(api_key, [
                 {"role": "system", "content": awakening_system},
                 *messages,
             ])
 
+            if truncated and not (response or "").strip():
+                # The budget went entirely to reasoning. That is a failure, not
+                # a decision to stay quiet, and it must not read as "nothing to
+                # say" in the log. The timestamp was already written at the top
+                # of run(), so the next attempt comes on the normal schedule.
+                logger.error(
+                    "[reflection:%s] step %d produced no text and hit max_tokens (%d) — "
+                    "the whole budget went to reasoning. Reflection aborted.",
+                    account_id, step, STEP_MAX_TOKENS,
+                )
+                _record_failure(account_id, "empty_response_truncated", lang)
+                return
+
+            if truncated:
+                logger.warning(
+                    "[reflection:%s] step %d hit max_tokens (%d) — the tail is clipped",
+                    account_id, step, STEP_MAX_TOKENS,
+                )
+
             if not response or not response.strip():
+                if step == 1:
+                    # Nothing at all on the very first step is a failed waking,
+                    # not a considered silence — he never got as far as thinking.
+                    logger.error(
+                        "[reflection:%s] step 1 returned nothing. Reflection aborted.",
+                        account_id,
+                    )
+                    _record_failure(account_id, "empty_response", lang)
+                    return
                 logger.info("[reflection:%s] empty at step %d, sleeping", account_id, step)
                 break
 
             messages.append({"role": "assistant", "content": response})
             logger.info("[reflection:%s] step %d/%d: %s", account_id, step, max_steps, response[:120])
+
+            # A command with no closing bracket never reaches _handle_command.
+            # Losing it silently is how thread updates went missing, so say so.
+            cut = _UNCLOSED_CMD_RE.search(response)
+            if cut:
+                logger.warning(
+                    "[reflection:%s] step %d: reply cut mid-command [%s] — it did NOT run: %r",
+                    account_id, step, cut.group("cmd").upper(), cut.group(0)[:160],
+                )
 
             is_sleep = bool(_SLEEP_RE.search(response))
 
@@ -533,43 +827,9 @@ async def run(account_id: str, api_key: str) -> None:
                 extend_asks_used += 1
                 logger.info("[reflection:%s] [EXTEND: %d] new max=%d", account_id, n, max_steps)
 
-            # Execute all commands
-            search_results: list[str] = []
-            had_writes = False
-
-            if _CANCEL_ALL_RE.search(response):
-                try:
-                    count = await cancel_all_messages(account_id=account_id, log_prefix="reflection")
-                    had_writes = True
-                    logger.info("[reflection:%s] CANCEL_ALL_SCHEDULED: %d cancelled", account_id, count)
-                except Exception as exc:
-                    logger.warning("[reflection] CANCEL_ALL_SCHEDULED error: %s", exc)
-
-            for m in _CMD_RE.finditer(response):
-                cmd_name = m.group("cmd")
-                arg = m.group("arg")
-                if cmd_name.upper() in ("SLEEP", "EXTEND"):
-                    continue
-                resolved = _ALIASES.get(cmd_name.upper(), cmd_name.upper())
-                try:
-                    result = await _handle_command(cmd_name, arg, account_id, api_key, db, lang)
-                    if result is not None:
-                        search_results.append(f"[{resolved}: {arg[:40]}] → {result}")
-                    else:
-                        had_writes = True
-                except Exception as exc:
-                    logger.warning("[reflection] command %s error: %s", cmd_name, exc)
-                    search_results.append(f"[{resolved}] error: {exc}")
-
-            # Save free-text reasoning to workbench (commands are stripped;
-            # wb.append runs _sanitize_note for leaked/truncated commands).
-            stripped = _CMD_RE.sub("", response).strip()
-            stripped = _SLEEP_RE.sub("", stripped).strip()
-            stripped = _EXTEND_RE.sub("", stripped).strip()
-            stripped = _CANCEL_ALL_RE.sub("", stripped).strip()
-            if stripped and len(stripped) > 30:
-                wb.append(account_id, stripped)
-                had_writes = True
+            outcome = await _execute_response(
+                response, account_id=account_id, api_key=api_key, db=db, lang=lang
+            )
 
             if is_sleep:
                 logger.info("[reflection:%s] [SLEEP] at step %d", account_id, step)
@@ -577,21 +837,22 @@ async def run(account_id: str, api_key: str) -> None:
 
             # Build follow-up prompt based on what happened
             new_steps_left = max_steps - step
-            if search_results:
+            if outcome.results:
                 messages.append({
                     "role": "user",
                     "content": _build_continuation(
-                        ai_name, lang, new_steps_left, "\n".join(search_results),
-                        timezone_label=tz_label(),
+                        ai_name, lang, new_steps_left, "\n".join(outcome.results),
+                        timezone_label=waking.timezone_label,
                     ),
                 })
-            elif had_writes:
+            elif outcome.wrote:
                 messages.append({
                     "role": "user",
-                    "content": _build_after_action(ai_name, lang, new_steps_left, timezone_label=tz_label()),
+                    "content": _build_after_action(ai_name, lang, new_steps_left, timezone_label=waking.timezone_label),
                 })
 
         logger.info("[reflection:%s] reflection done in %d steps", account_id, step)
+        Vitals(account_id).record_reflection_success(steps=step)
 
 
 # ── Should-run check ──────────────────────────────────────────────────────────
@@ -610,10 +871,16 @@ def should_run(account_id: str, last_message_at: datetime | None) -> bool:
 
     now = datetime.now(timezone.utc)
 
+    # A waking that failed does not cost the whole interval: Vitals schedules a
+    # retry, and it wins over the normal conditions.
+    if Vitals(account_id).retry_due():
+        logger.info("[reflection:%s] retry due after a failed waking", account_id)
+        return True
+
     if last_message_at is None:
         return False
 
-    last_ref = _get_last_reflection_ts()
+    last_ref = _get_last_reflection_ts(account_id)
 
     if last_ref is None or last_message_at > last_ref:
         # There is a new message since the last reflection (or no reflection yet).

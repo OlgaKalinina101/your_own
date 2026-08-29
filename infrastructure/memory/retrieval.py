@@ -9,6 +9,7 @@ from sqlalchemy import Text, cast, select, text
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from infrastructure.clock import now_utc
 from infrastructure.database.models.message import Message
 from infrastructure.database.repositories.message_repo import MessageRepository
 from infrastructure.memory.embedder import embed_one
@@ -30,6 +31,8 @@ EXACT_BOOST = 0.15
 SUBSET_BOOST = 0.10
 MIN_COSINE_SIM = 0.35
 MIN_TOTAL_SCORE = 0.40
+# Sorting key for a row with no timestamp; older than anything real.
+_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
 
 @dataclass
@@ -74,11 +77,13 @@ def humanize_timestamp(created_at_value: datetime | str | None, language: Langua
         else:
             created_at = created_at_value
 
-        if created_at.tzinfo is not None:
-            created_at = created_at.replace(tzinfo=None)
+        # Both sides as instants. Stripping the tzinfo and comparing against a
+        # naive datetime.now() measured the age against the *system* clock,
+        # which is not the clock anything else in here uses.
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=timezone.utc)
 
-        now = datetime.now()
-        delta = now - created_at
+        delta = now_utc() - created_at
         days = max(0, delta.days)
 
         if language == "en":
@@ -177,6 +182,206 @@ def _exact_boost(
     return boost
 
 
+@dataclass
+class _Query:
+    """One question, in every form the search needs it in."""
+
+    text: str
+    lang: Language
+    tokens: set[str]        # pipeline lemmas, with synonyms expanded
+    fast_tokens: set[str]   # surface forms, as the sentence actually wrote them
+    normalised: str
+    vector: list[float] | None
+
+    @property
+    def index_tokens(self) -> set[str]:
+        """Every form worth looking for in ``focus_point``.
+
+        The index is written by ``extract_focus_fast`` over each stored
+        sentence, so it holds whatever form that sentence used: measured on the
+        live corpus, "говорить" sits in 85 chunks and "говорили" in 13,
+        "чувствовать" in 53 and "чувствовала" in 41. The two extractors run on
+        the question produce *disjoint* sets — zero overlap on every question
+        measured — so using either one alone looks at half the index and calls
+        the other half absent.
+        """
+        return self.tokens | self.fast_tokens
+
+
+def _read_query(query_text: str) -> _Query:
+    lang = detect_language(query_text)
+    return _Query(
+        text=query_text,
+        lang=lang,
+        tokens=set(FocusPointPipeline(language=lang, expand_synonyms=True).extract(query_text)),
+        fast_tokens=set(extract_focus_fast(query_text)),
+        normalised=_normalise(query_text),
+        vector=embed_one(query_text),
+    )
+
+
+@dataclass
+class _Scored:
+    """A chunk that survived scoring, and what its score was made of."""
+
+    total: float
+    cosine: float
+    kw_boost: float
+    exact_boost: float
+    msg: Message
+
+
+async def _candidates_by_vector(
+    session: AsyncSession,
+    account_id: str,
+    query: _Query,
+    age_filter: datetime | None,
+) -> tuple[Sequence[Message], dict]:
+    """Nearest chunks by embedding, with their cosine similarities."""
+    vec_str = "[" + ",".join(f"{value:.8f}" for value in query.vector) + "]"
+    age_clause = "AND created_at < :age_cutoff" if age_filter is not None else ""
+    knn_sql = text(
+        f"""
+        SELECT message_id,
+               1 - (embedding <=> cast(:vec AS vector)) AS cosine_sim
+        FROM messages
+        WHERE account_id = :acct
+          AND embedding IS NOT NULL
+          AND message_kind = 'chunk'
+          {age_clause}
+        ORDER BY embedding <=> cast(:vec AS vector)
+        LIMIT :lim
+        """
+    )
+    params: dict = {"vec": vec_str, "acct": account_id, "lim": KNN_LIMIT}
+    if age_filter is not None:
+        params["age_cutoff"] = age_filter
+
+    knn_rows = (await session.execute(knn_sql, params)).all()
+    sim_map = {row.message_id: float(row.cosine_sim) for row in knn_rows}
+    if not sim_map:
+        return [], {}
+
+    rows = (
+        await session.execute(
+            select(Message)
+            .where(Message.message_id.in_(list(sim_map.keys())))
+            .where(Message.message_kind == "chunk")
+        )
+    ).scalars().all()
+    return rows, sim_map
+
+
+async def _candidates_by_keywords(
+    session: AsyncSession,
+    account_id: str,
+    query: _Query,
+    age_filter: datetime | None,
+) -> Sequence[Message]:
+    """Chunks whose stored focus points overlap the question's.
+
+    Reached only when there is no embedding to search with — the model failed to
+    load, or encoding raised. That is a real state on a fresh machine, which is
+    why this path exists at all.
+    """
+    kw_list = list(query.index_tokens)
+    if not kw_list:
+        return []
+
+    stmt = (
+        select(Message)
+        .where(Message.account_id == account_id)
+        .where(Message.message_kind == "chunk")
+        .where(Message.focus_point.op("&&")(cast(kw_list, ARRAY(Text))))
+    )
+    if age_filter is not None:
+        stmt = stmt.where(Message.created_at < age_filter)
+    return (await session.execute(stmt.limit(KNN_LIMIT))).scalars().all()
+
+
+def _rank_by_similarity(
+    rows: Sequence[Message],
+    sim_map: dict,
+    query: _Query,
+    exclude: set[str],
+) -> list[_Scored]:
+    """Cosine carries the score; matching words and exact phrasing add to it."""
+    scored: list[_Scored] = []
+    for msg in rows:
+        if str(msg.pair_id) in exclude:
+            continue
+        cosine = sim_map.get(msg.message_id, 0.0)
+        if cosine < MIN_COSINE_SIM:
+            continue
+        sent_tokens = set(msg.focus_point or [])
+        # The count-based boost looks for every form, because the index holds
+        # both. The subset test below deliberately does not: it asks whether the
+        # whole question is contained in this chunk, and against the union that
+        # would mean every word appearing in *both* its forms at once — a
+        # condition nothing satisfies. Measured: widening it there cost two of
+        # thirty pairs exactly 0.1, the SUBSET_BOOST they used to earn.
+        kw_boost = _keyword_boost(query.index_tokens, sent_tokens)
+        exact_boost = _exact_boost(
+            query.normalised, _normalise(msg.text), query.fast_tokens, sent_tokens
+        )
+        total = min(1.0, cosine + kw_boost + exact_boost)
+        if total < MIN_TOTAL_SCORE:
+            continue
+        scored.append(_Scored(total, cosine, kw_boost, exact_boost, msg))
+    return scored
+
+
+def _rank_by_keywords(
+    rows: Sequence[Message], query: _Query, exclude: set[str]
+) -> list[_Scored]:
+    """Rank on word overlap alone, because there is no vector to rank with.
+
+    This branch used to return nothing at all, for two independent reasons. The
+    cosine defaulted to ``0.0`` and the next line dropped everything below
+    ``MIN_COSINE_SIM`` — every candidate, always. And the candidates were
+    selected on one extractor's tokens and scored on the other's, which are
+    disjoint: 92 candidates for one question, every one of them 0.0.
+
+    There is no score threshold here on purpose. A first attempt used coverage —
+    the share of the question present in the chunk — and measurement disowned
+    it: questions carry one or two concepts, so against the union of both
+    vocabularies almost every candidate lands at 0.25–0.33, and against the
+    concept count almost every candidate passes. A threshold that either admits
+    everything or nothing is not a threshold. What is left is honest ordering:
+    more of the question matched wins, and among equals the newer memory wins.
+    Selection already guarantees at least one match.
+    """
+    words = query.index_tokens
+    if not words:
+        return []
+
+    scored: list[_Scored] = []
+    for msg in rows:
+        if str(msg.pair_id) in exclude:
+            continue
+        matched = words & set(msg.focus_point or [])
+        if not matched:
+            continue
+        share = len(matched) / len(words)
+        scored.append(_Scored(share, 0.0, share, 0.0, msg))
+
+    # Ties are broad — with a two-word question most candidates share a value —
+    # so recency decides. It is the only other thing this path knows, and the
+    # alternative is whatever order the database happened to return.
+    scored.sort(key=lambda item: (item.total, item.msg.created_at or _EPOCH), reverse=True)
+    return scored
+
+
+def _best_per_pair(scored: list[_Scored]) -> list[_Scored]:
+    """One entry per exchange: the chunk that matched best speaks for its pair."""
+    best: dict[str, _Scored] = {}
+    for item in sorted(scored, key=lambda entry: entry.total, reverse=True):
+        pair_key = str(item.msg.pair_id)
+        if pair_key not in best:
+            best[pair_key] = item
+    return sorted(best.values(), key=lambda entry: entry.total, reverse=True)
+
+
 async def retrieve_relevant_pairs(
     session: AsyncSession,
     account_id: str,
@@ -185,130 +390,75 @@ async def retrieve_relevant_pairs(
     exclude_pair_ids: Iterable[str] | None = None,
     min_age_days: int = 0,
 ) -> list[RetrievedPair]:
-    exclude_set = {str(pair_id) for pair_id in (exclude_pair_ids or [])}
-    repo = MessageRepository(session)
+    """Moments from their history that bear on *query_text*.
 
-    lang = detect_language(query_text)
-    query_tokens = set(FocusPointPipeline(language=lang, expand_synonyms=True).extract(query_text))
-    fast_tokens = set(extract_focus_fast(query_text))
-    norm_query = _normalise(query_text)
-    query_vec = embed_one(query_text)
+    Matching happens on chunks, because a chunk is small enough to be about one
+    thing. What comes back is whole exchanges: the chunk only decides *which*
+    moment, and he is then shown all of it.
+    """
+    exclude = {str(pair_id) for pair_id in (exclude_pair_ids or [])}
+    query = _read_query(query_text)
 
-    age_clause = ""
     age_filter = None
     if min_age_days > 0:
         from datetime import timedelta
-        age_clause = "AND created_at < :age_cutoff"
-        age_filter = datetime.now(timezone.utc) - timedelta(days=min_age_days)
+        age_filter = now_utc() - timedelta(days=min_age_days)
 
-    candidate_rows: Sequence[Message]
-    sim_map: dict = {}
-
-    if query_vec is not None:
-        vec_str = "[" + ",".join(f"{value:.8f}" for value in query_vec) + "]"
-        knn_sql = text(
-            f"""
-            SELECT message_id,
-                   1 - (embedding <=> cast(:vec AS vector)) AS cosine_sim
-            FROM messages
-            WHERE account_id = :acct
-              AND embedding IS NOT NULL
-              AND message_kind = 'chunk'
-              {age_clause}
-            ORDER BY embedding <=> cast(:vec AS vector)
-            LIMIT :lim
-            """
-        )
-        knn_params: dict = {"vec": vec_str, "acct": account_id, "lim": KNN_LIMIT}
-        if age_filter is not None:
-            knn_params["age_cutoff"] = age_filter
-        knn_rows = (
-            await session.execute(knn_sql, knn_params)
-        ).all()
-        sim_map = {row.message_id: float(row.cosine_sim) for row in knn_rows}
-        candidate_ids = list(sim_map.keys())
-        if candidate_ids:
-            candidate_rows = (
-                await session.execute(
-                    select(Message)
-                    .where(Message.message_id.in_(candidate_ids))
-                    .where(Message.message_kind == "chunk")
-                )
-            ).scalars().all()
-        else:
-            candidate_rows = []
+    if query.vector is not None:
+        rows, sim_map = await _candidates_by_vector(session, account_id, query, age_filter)
+        scored = _rank_by_similarity(rows, sim_map, query, exclude)
     else:
-        kw_list = list(query_tokens) or list(fast_tokens)
-        if not kw_list:
-            return []
-        kw_array = cast(kw_list, ARRAY(Text))
-        stmt = (
-            select(Message)
-            .where(Message.account_id == account_id)
-            .where(Message.message_kind == "chunk")
-            .where(Message.focus_point.op("&&")(kw_array))
+        _logger.warning(
+            "[retrieval] no embedding for the question — falling back to keyword "
+            "overlap; results are coarser than usual"
         )
-        if age_filter is not None:
-            stmt = stmt.where(Message.created_at < age_filter)
-        candidate_rows = (
-            await session.execute(stmt.limit(KNN_LIMIT))
-        ).scalars().all()
+        rows = await _candidates_by_keywords(session, account_id, query, age_filter)
+        scored = _rank_by_keywords(rows, query, exclude)
 
-    scored: list[tuple[float, float, float, float, Message]] = []
-    for msg in candidate_rows:
-        if str(msg.pair_id) in exclude_set:
-            continue
-        cosine = sim_map.get(msg.message_id, 0.0)
-        if cosine < MIN_COSINE_SIM:
-            continue
-        sent_tokens = set(msg.focus_point or [])
-        kw_boost = _keyword_boost(fast_tokens, sent_tokens)
-        exact_boost = _exact_boost(norm_query, _normalise(msg.text), fast_tokens, sent_tokens)
-        total = min(1.0, cosine + kw_boost + exact_boost)
-        if total < MIN_TOTAL_SCORE:
-            continue
-        scored.append((total, cosine, kw_boost, exact_boost, msg))
-
-    scored.sort(key=lambda item: item[0], reverse=True)
-
-    best_per_pair: dict[str, tuple[float, float, float, float, Message]] = {}
-    for total, cosine, kw_boost, exact_boost, msg in scored:
-        pair_key = str(msg.pair_id)
-        existing = best_per_pair.get(pair_key)
-        if existing is None or total > existing[0]:
-            best_per_pair[pair_key] = (total, cosine, kw_boost, exact_boost, msg)
-
-    top_pairs = sorted(best_per_pair.values(), key=lambda item: item[0], reverse=True)[:top_n]
+    top_pairs = _best_per_pair(scored)[:top_n]
     if not top_pairs:
-        _logger.info("[retrieval] no pairs passed threshold (cosine>=%.2f total>=%.2f)", MIN_COSINE_SIM, MIN_TOTAL_SCORE)
+        _logger.info(
+            "[retrieval] no pairs passed threshold (cosine>=%.2f total>=%.2f) among %d candidates",
+            MIN_COSINE_SIM, MIN_TOTAL_SCORE, len(rows),
+        )
         return []
 
+    return await _render(session, account_id, top_pairs, query)
+
+
+async def _render(
+    session: AsyncSession,
+    account_id: str,
+    top_pairs: list[_Scored],
+    query: _Query,
+) -> list[RetrievedPair]:
+    """Turn the winning chunks back into the exchanges they came from."""
+    repo = MessageRepository(session)
     render_rows = await repo.get_pairs_render_data(
-        account_id,
-        [entry[4].pair_id for entry in top_pairs],
+        account_id, [entry.msg.pair_id for entry in top_pairs]
     )
     render_map = {str(item["pair_id"]): item for item in render_rows}
 
     results: list[RetrievedPair] = []
-    for total, cosine, kw_boost, exact_boost, best_msg in top_pairs:
-        render = render_map.get(str(best_msg.pair_id))
+    for entry in top_pairs:
+        render = render_map.get(str(entry.msg.pair_id))
         if not render:
             continue
         _logger.info(
             "[retrieval] pair score=%.3f cosine=%.3f kw=%.3f exact=%.3f text=%s",
-            total, cosine, kw_boost, exact_boost,
-            (best_msg.text or "")[:80],
+            entry.total, entry.cosine, entry.kw_boost, entry.exact_boost,
+            (entry.msg.text or "")[:80],
         )
         results.append(
             RetrievedPair(
-                pair_id=str(best_msg.pair_id),
-                score=round(total, 4),
-                cosine=round(cosine, 4),
-                kw_boost=round(kw_boost, 4),
-                exact_boost=round(exact_boost, 4),
-                best_sentence=best_msg.text,
-                best_role=best_msg.role,
-                focus_matched=sorted(set(best_msg.focus_point or []) & fast_tokens),
+                pair_id=str(entry.msg.pair_id),
+                score=round(entry.total, 4),
+                cosine=round(entry.cosine, 4),
+                kw_boost=round(entry.kw_boost, 4),
+                exact_boost=round(entry.exact_boost, 4),
+                best_sentence=entry.msg.text,
+                best_role=entry.msg.role,
+                focus_matched=sorted(set(entry.msg.focus_point or []) & query.index_tokens),
                 created_at=render["created_at"],
                 user_text=render["user_text"],
                 assistant_text=render["assistant_text"],

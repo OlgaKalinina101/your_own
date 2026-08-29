@@ -1,41 +1,12 @@
 "use client";
 
-import { createContext, useContext, useRef, useState, ReactNode } from "react";
+import { createContext, useContext, useState, ReactNode } from "react";
 
-export interface Message {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
-  imageUrl?: string;
-  imageUrls?: string[];
-  recalledMemories?: RecalledMemory[];
-  chromaFacts?: ChromaFact[];
-  pairId?: string;
-  createdAt?: string;
-}
+import type { ChromaFact, Message } from "@/lib/types";
 
-export interface RecalledMemory {
-  pair_id: string;
-  score: number;
-  cosine: number;
-  kw_boost: number;
-  exact_boost: number;
-  best_sentence: string;
-  best_role: "user" | "assistant";
-  focus_matched: string[];
-  created_at?: string | null;
-  relative_time_label?: string;
-  user_text: string;
-  assistant_text: string;
-}
-
-export interface ChromaFact {
-  id: string;
-  text: string;
-  category: string;
-  impressive: number;
-  time_label: string;
-}
+// Re-exported so existing imports keep working; the definitions live in
+// lib/types.ts, next to the rest of the backend's shapes.
+export type { ChromaFact, Message };
 
 interface ChatSessionContextValue {
   messages: Message[];

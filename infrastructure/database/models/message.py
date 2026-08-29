@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
 
 from sqlalchemy import Column, DateTime, Integer, String, Text
 from sqlalchemy.dialects.postgresql import ARRAY, UUID
@@ -23,7 +22,10 @@ class Message(Base):
     created_at = Column(
         DateTime(timezone=True),
         nullable=False,
-        default=lambda: __import__("datetime", fromlist=["datetime"]).datetime.now(),
+        # An instant, not a wall clock: the column is timestamptz.
+        default=lambda: __import__(
+            "infrastructure.clock", fromlist=["now_utc"]
+        ).now_utc(),
         index=True,
     )
 

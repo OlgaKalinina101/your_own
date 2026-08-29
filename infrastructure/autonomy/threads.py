@@ -27,9 +27,12 @@ from datetime import datetime
 from pathlib import Path
 from threading import Lock
 
+from infrastructure.paths import AUTONOMY_DIR
+from infrastructure.state_file import atomic_write_text
+
 logger = logging.getLogger("autonomy.threads")
 
-_DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "autonomy"
+_DATA_DIR = AUTONOMY_DIR
 _lock = Lock()
 
 _TITLE = "# Доска открытых нитей\n"
@@ -84,7 +87,7 @@ def _write(account_id: str, threads: list[Thread]) -> None:
     body = "\n".join(parts).rstrip() + "\n"
     path = _path(account_id)
     with _lock:
-        path.write_text(body, encoding="utf-8")
+        atomic_write_text(path, body)
 
 
 def pin(account_id: str, text: str) -> str | None:
@@ -93,7 +96,7 @@ def pin(account_id: str, text: str) -> str | None:
     De-duplicates on normalised text — if an identical thread already hangs,
     the existing id is returned instead of adding a copy.
     """
-    from infrastructure.settings_store import now_local, TIME_FMT
+    from infrastructure.clock import TIME_FMT, now_local
 
     clean = (text or "").strip()
     if not clean:
@@ -173,10 +176,10 @@ def update(account_id: str, thread_id: str, new_text: str) -> bool:
 
 def _age_label(ts_str: str, lang: str) -> str:
     """Render a thread's touch-date as 'с DD.MM.YYYY' plus its age in days."""
-    from infrastructure.settings_store import now_local, get_user_tz, TIME_FMT
+    from infrastructure.clock import TIME_FMT, now_local, user_tz
 
     try:
-        ts = datetime.strptime(ts_str, TIME_FMT).replace(tzinfo=get_user_tz())
+        ts = datetime.strptime(ts_str, TIME_FMT).replace(tzinfo=user_tz())
     except ValueError:
         return ""
 

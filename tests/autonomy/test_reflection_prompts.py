@@ -33,8 +33,6 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
-import pytest
-from infrastructure.llm.prompt_loader import get_prompt
 from infrastructure.autonomy.reflection_engine import (
     _build_continuation,
     _build_after_action,
@@ -197,7 +195,7 @@ class TestPendingTasksBlock:
         # a mock-like object since we don't have a real DB here.
         from unittest.mock import MagicMock
         from datetime import datetime, timezone
-        from infrastructure.database.models.autonomy_task import TaskStatus, TriggerType
+        from infrastructure.database.models.autonomy_task import TaskStatus
         import json
 
         task = MagicMock()
@@ -258,13 +256,14 @@ class TestLoopSequence:
         system = _build_awakening_system(
             ai_name="Victor",
             lang="ru",
-            identity_content="Я — Victor.",
-            workbench_content="[2026-03-17] Тишина.",
+            identity="Я — Victor.",
+            workbench="[2026-03-17] Тишина.",
             open_threads="(пусто)",
             recent_dialogue="User: Привет\nAssistant: Привет!",
             current_time="2026-03-18 08:00",
             hours_since_last="4.0 ч",
             pending_tasks_block="",
+            vitals="",
             cooldown_h=4,
             interval_h=12,
             timezone_label="Asia/Yerevan",

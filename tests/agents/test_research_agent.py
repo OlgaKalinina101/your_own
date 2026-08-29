@@ -80,15 +80,20 @@ def register_probe():
         sources.PROBES.pop(key, None)
 
 
-def make_agent(verdicts: list[str], max_attempts: int = 3) -> tuple[ResearchAgent, list[str]]:
-    """Agent whose LLM steps replay *verdicts* and record their prompts."""
+def make_agent(verdicts: list, max_attempts: int = 3) -> tuple[ResearchAgent, list[str]]:
+    """Agent whose LLM steps replay *verdicts* and record their prompts.
+
+    A verdict is either a string, or ``(text, truncated)`` to replay a reply
+    that ran out of tokens.
+    """
     agent = ResearchAgent(api_key="test-key", model="test/model", max_attempts=max_attempts)
     seen: list[str] = []
     replay = list(verdicts)
 
-    async def fake_complete(*, system: str, user: str, max_tokens: int) -> str:
+    async def fake_complete(*, system: str, user: str, max_tokens: int) -> tuple[str, bool]:
         seen.append(user)
-        return replay.pop(0) if replay else "ENOUGH"
+        nxt = replay.pop(0) if replay else "ENOUGH"
+        return nxt if isinstance(nxt, tuple) else (nxt, False)
 
     agent._complete = fake_complete  # type: ignore[method-assign]
     return agent, seen
@@ -172,6 +177,36 @@ class TestLoop:
         assert result.attempts == 1
         assert result.exhausted is False
 
+    @pytest.mark.asyncio
+    async def test_truncated_verdict_is_discarded(self, register_probe):
+        """A cut verdict parses fine and means nothing.
+
+        Searcher models reason before answering and the thinking is billed
+        against max_tokens, so 'REFINE: "lo' is a real reply shape — and
+        acting on it sends the next probe hunting for "lo".
+        """
+        probe = FakeProbe([hit(), hit()])
+        register_probe(probe)
+        agent, _ = make_agent([('REFINE: "lo', True)])
+
+        result = await agent.research(task="a real question", source=TEST_SOURCE)
+
+        assert probe.queries == ["a real question"]   # never went hunting for "lo"
+        assert result.attempts == 1
+        assert result.exhausted is False
+
+    @pytest.mark.asyncio
+    async def test_an_untruncated_refine_still_works(self, register_probe):
+        """The truncation guard must not swallow good verdicts."""
+        probe = FakeProbe([miss(), hit()])
+        register_probe(probe)
+        agent, _ = make_agent([("REFINE: another angle", False), "ENOUGH"])
+
+        result = await agent.research(task="q", source=TEST_SOURCE)
+
+        assert probe.queries == ["q", "another angle"]
+        assert result.attempts == 2
+
 
 # ── Brief ─────────────────────────────────────────────────────────────────────
 
@@ -225,6 +260,28 @@ class TestBrief:
         result = await agent.research(task="q", source=TEST_SOURCE)
 
         assert "raw material" in result.brief
+
+    @pytest.mark.asyncio
+    async def test_truncated_brief_is_cut_back_to_a_finished_sentence(self, register_probe):
+        register_probe(FakeProbe([hit("material")]))
+        agent, _ = make_agent([
+            "ENOUGH",
+            ("Первое предложение целое. Второе оборвалось на полус", True),
+        ])
+
+        result = await agent.research(task="q", source=TEST_SOURCE)
+
+        assert result.brief == "Первое предложение целое."
+
+    @pytest.mark.asyncio
+    async def test_truncated_brief_with_no_finished_sentence_is_kept(self, register_probe):
+        """Half a sentence still beats handing back the raw material."""
+        register_probe(FakeProbe([hit("material")]))
+        agent, _ = make_agent(["ENOUGH", ("оборвалось сразу", True)])
+
+        result = await agent.research(task="q", source=TEST_SOURCE)
+
+        assert result.brief == "оборвалось сразу"
 
 
 # ── Citations ─────────────────────────────────────────────────────────────────

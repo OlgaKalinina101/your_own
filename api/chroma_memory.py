@@ -6,6 +6,7 @@ GET  /api/chroma/categories     — list all distinct categories for an account
 """
 from __future__ import annotations
 
+from infrastructure.account import ACCOUNT_ID
 import logging
 from typing import Optional
 
@@ -73,7 +74,7 @@ def _row_to_fact(doc_id: str, document: str, meta: dict) -> FactOut:
 
 @router.get("/facts", response_model=list[FactOut])
 async def list_facts(
-    account_id: str = Query("default"),
+    account_id: str = Query(ACCOUNT_ID),
     category: Optional[str] = Query(None),
     sort: str = Query("created_at"),   # created_at | impressive | frequency
 ):
@@ -110,7 +111,7 @@ async def list_facts(
 
 
 @router.get("/categories")
-async def list_categories(account_id: str = Query("default")):
+async def list_categories(account_id: str = Query(ACCOUNT_ID)):
     col = _collection()
     if col is None:
         return {"categories": []}
@@ -127,7 +128,7 @@ async def list_categories(account_id: str = Query("default")):
 
 
 @router.delete("/facts/{fact_id}", status_code=204)
-async def delete_fact(fact_id: str, account_id: str = Query("default")):
+async def delete_fact(fact_id: str, account_id: str = Query(ACCOUNT_ID)):
     col = _collection()
     if col is None:
         raise HTTPException(status_code=503, detail="Chroma unavailable")
@@ -148,7 +149,7 @@ async def delete_fact(fact_id: str, account_id: str = Query("default")):
 
 
 @router.patch("/facts/{fact_id}", response_model=FactOut)
-async def update_fact(fact_id: str, body: FactPatch, account_id: str = Query("default")):
+async def update_fact(fact_id: str, body: FactPatch, account_id: str = Query(ACCOUNT_ID)):
     col = _collection()
     if col is None:
         raise HTTPException(status_code=503, detail="Chroma unavailable")

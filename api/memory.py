@@ -18,12 +18,12 @@ This mirrors the Kotlin SemanticSearchUtil design:
 """
 from __future__ import annotations
 
+from infrastructure.account import ACCOUNT_ID
 import asyncio
 import json
 import logging
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from typing import Literal
 
 from fastapi import APIRouter, Depends, File, Form, UploadFile
 from fastapi.responses import StreamingResponse
@@ -97,7 +97,7 @@ def _fill_embeddings(rows: list[Message]) -> None:
 @router.post("/import")
 async def import_chatgpt(
     file: UploadFile = File(...),
-    account_id: str = Form("default"),
+    account_id: str = Form(ACCOUNT_ID),
     text_language: str = Form("ru"),
     db: AsyncSession = Depends(get_db),
 ):
@@ -171,7 +171,7 @@ async def import_chatgpt(
 
 @router.get("/stats")
 async def memory_stats(
-    account_id: str = "default",
+    account_id: str = ACCOUNT_ID,
     db: AsyncSession = Depends(get_db),
 ):
     repo = MessageRepository(db)

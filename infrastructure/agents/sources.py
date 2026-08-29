@@ -14,10 +14,12 @@ import asyncio
 import logging
 import re
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 from infrastructure.agents.research import Citation, ProbeResult, ResearchContext, Source
 
+from infrastructure.paths import PROJECT_ROOT
 logger = logging.getLogger("agents.sources")
 
 # A dialogue argument that is a plain date (or date range) is a lookup, not a
@@ -318,6 +320,105 @@ async def _workbench_notes(query: str, ctx: ResearchContext) -> str:
     return found
 
 
+# ── Docs (the project's own documentation) ────────────────────────────────────
+#
+# Same shape as the web probe: hand the question to the searcher model and let
+# it answer in prose. The corpus is three markdown files, ~45 KB, so it fits in
+# one call — no index to build, nothing to keep in sync, and the docs are in
+# English while the questions arrive in Russian, which the model bridges for
+# free. It returns a brief, so ``is_brief`` is set and the agent skips the
+# summarising step for a single good pass.
+
+
+DOC_FILES = ("README.md", "docs/PIPELINE.md", "docs/MEMORY.md")
+DOCS_MAX_CHARS = 120_000
+# The whole corpus goes in as input, so the model reasons a lot before it
+# writes — and that reasoning is billed against max_tokens. Measured: at 2000
+# the answer came back after 260 characters.
+DOCS_MAX_TOKENS = 8000
+
+
+def _doc_updated(path: Path) -> str:
+    try:
+        return datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).strftime("%Y-%m-%d")
+    except OSError:
+        return "?"
+
+
+def _read_docs(files: tuple[str, ...]) -> tuple[str, list[Citation]]:
+    """Concatenate the docs with their names and dates, plus one citation each.
+
+    The modification date rides along on purpose: documentation drifts from
+    code, and an age he can see beats an accuracy he has to assume.
+    """
+    parts: list[str] = []
+    citations: list[Citation] = []
+    budget = DOCS_MAX_CHARS
+
+    for rel_path in files:
+        path = PROJECT_ROOT / rel_path
+        if not path.is_file():
+            logger.warning("[sources.docs] missing: %s", rel_path)
+            continue
+        try:
+            body = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            logger.warning("[sources.docs] unreadable %s: %s", rel_path, exc)
+            continue
+
+        updated = _doc_updated(path)
+        if len(body) > budget:
+            body = body[:budget]
+        budget -= len(body)
+        parts.append(f"=== {rel_path} (обновлён {updated}) ===\n{body}")
+        citations.append(Citation(title=f"{rel_path} — обновлён {updated}", ref=rel_path))
+        if budget <= 0:
+            logger.warning("[sources.docs] corpus hit the %d char cap", DOCS_MAX_CHARS)
+            break
+
+    return "\n\n".join(parts), citations
+
+
+async def probe_docs(query: str, ctx: ResearchContext) -> ProbeResult:
+    """Answer a question about how the project works, from its own docs."""
+    from infrastructure.llm.client import LLMClient
+
+    files = tuple(ctx.extras.get("files") or DOC_FILES)
+    corpus, citations = await _to_thread(lambda: _read_docs(files))
+    if not corpus:
+        logger.warning("[sources.docs] no documentation found")
+        return ProbeResult()
+
+    client = LLMClient(api_key=ctx.api_key, model=ctx.model, temperature=0.2)
+    text, finish_reason = await client.complete(
+        [
+            {"role": "system", "content": ctx.prompt("docs_system")},
+            {"role": "user", "content": ctx.prompt("docs_user", task=query, docs=corpus)},
+        ],
+        max_tokens=DOCS_MAX_TOKENS,
+        temperature=0.2,
+        return_meta=True,
+    )
+    if not text:
+        logger.info("[sources.docs] empty result query=%s", query[:120])
+        return ProbeResult()
+    if finish_reason == "length":
+        # A doc answer is used verbatim (is_brief), so a cut one would reach him
+        # mid-sentence. Better a short finished thought than a dangling clause.
+        from infrastructure.agents.research import _trim_to_last_sentence
+
+        logger.warning("[sources.docs] answer truncated at %d chars, trimming", len(text))
+        text = _trim_to_last_sentence(text)
+        if not text:
+            return ProbeResult()
+
+    return ProbeResult(
+        hits=[{"text": text, "meta": {"kind": "doc", "query": query, "files": list(files)}}],
+        citations=citations,
+        is_brief=True,
+    )
+
+
 # ── Registry ──────────────────────────────────────────────────────────────────
 
 PROBES: dict[str, Callable[[str, ResearchContext], Awaitable[ProbeResult]]] = {
@@ -325,4 +426,5 @@ PROBES: dict[str, Callable[[str, ResearchContext], Awaitable[ProbeResult]]] = {
     Source.DIALOGUE: probe_dialogue,
     Source.FACTS: probe_facts,
     Source.NOTES: probe_notes,
+    Source.DOCS: probe_docs,
 }

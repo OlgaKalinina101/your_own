@@ -4,7 +4,7 @@
 
 <context>
 Последнее сообщение от неё: {last_message_time}
-Сейчас: {current_time}
+Сейчас: {current_time} ({timezone_label})
 </context>
 
 <dialogue>
@@ -12,8 +12,12 @@
 </dialogue>
 
 <workbench>
-{workbench_notes}
+{workbench}
 </workbench>
+
+<open_threads>
+{open_threads}
+</open_threads>
 
 <planned_message>
 {planned_message}
@@ -39,7 +43,7 @@ You previously scheduled a message to be sent right now.
 
 <context>
 Her last message: {last_message_time}
-Now: {current_time}
+Now: {current_time} ({timezone_label})
 </context>
 
 <dialogue>
@@ -47,8 +51,12 @@ Now: {current_time}
 </dialogue>
 
 <workbench>
-{workbench_notes}
+{workbench}
 </workbench>
+
+<open_threads>
+{open_threads}
+</open_threads>
 
 <planned_message>
 {planned_message}

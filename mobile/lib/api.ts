@@ -23,15 +23,34 @@ export async function setBackendUrl(url: string): Promise<void> {
   await AsyncStorage.setItem(KEY_BACKEND_URL, url.trim().replace(/\/$/, ""));
 }
 
+// Mirrors the stored token so it can be read synchronously.
+//
+// `<Image source={{uri, headers}}>` in React Native *can* carry an
+// Authorization header — a web `<img>` cannot, which is why the desktop signs
+// media URLs instead (see `frontend/lib/media.ts`). The two clients differ here
+// on purpose: this is the better mechanism, and it is available only here.
+//
+// Warmed by the first getAuthToken() of the session, which every screen does
+// long before it renders an image.
+let cachedAuthToken: string | null = null;
+
+/** The token if it has been read at least once this session, else null. */
+export function peekAuthToken(): string | null {
+  return cachedAuthToken;
+}
+
 export async function getAuthToken(): Promise<string | null> {
-  return AsyncStorage.getItem(KEY_AUTH_TOKEN);
+  cachedAuthToken = await AsyncStorage.getItem(KEY_AUTH_TOKEN);
+  return cachedAuthToken;
 }
 
 export async function setAuthToken(token: string): Promise<void> {
-  await AsyncStorage.setItem(KEY_AUTH_TOKEN, token.trim());
+  cachedAuthToken = token.trim();
+  await AsyncStorage.setItem(KEY_AUTH_TOKEN, cachedAuthToken);
 }
 
 export async function clearAuth(): Promise<void> {
+  cachedAuthToken = null;
   await AsyncStorage.multiRemove([KEY_BACKEND_URL, KEY_AUTH_TOKEN]);
 }
 
