@@ -45,9 +45,16 @@ export function mergeMessages(current: Message[], incoming: Message[]): Message[
     if (!server) return message;
     used.add(k);
     // Server truth wins on content, but a local-only field the server does not
-    // send (the recalled-facts panel arrives over the stream, not in history)
-    // would be lost by a plain replace.
-    return { ...message, ...server, chromaFacts: server.chromaFacts ?? message.chromaFacts };
+    // send would be lost by a plain replace. Two of them: the recalled-facts
+    // panel arrives over the stream rather than in history, and `interrupted`
+    // records why a reply stopped — a fact only the client that watched it stop
+    // has. The server has the clipped text and no idea it is clipped.
+    return {
+      ...message,
+      ...server,
+      chromaFacts: server.chromaFacts ?? message.chromaFacts,
+      interrupted: server.interrupted ?? message.interrupted,
+    };
   });
 
   // Anything the server has that this client has never seen goes at the end;

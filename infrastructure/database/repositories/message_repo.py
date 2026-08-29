@@ -33,7 +33,47 @@ class MessageRepository:
         """
         if not msgs:
             return
+        await self._insert(msgs)
+        await self._session.commit()
 
+    async def bulk_save_if_pair_exists(self, msgs: list[Message], pair_id: str) -> bool:
+        """Insert *msgs*, but only while the pair is still there. True if written.
+
+        For the one writer that runs detached from its request: ``_save_partial``
+        in ``api/chat.py`` persists what the reader already saw after the client
+        hung up, and it opens its own session to do it. Meanwhile
+        ``DELETE /api/chat/pair/{pair_id}`` may be deleting that very pair. Two
+        sessions, no ordering — and if the delete landed first, the partial was
+        written *afterwards* and stayed as a half-reply with no question in front
+        of it, in the transcript and in the vector memory both.
+
+        ``FOR UPDATE`` is the whole guarantee, not decoration. A plain existence
+        check would still lose: under READ COMMITTED the delete can commit
+        between the SELECT and the INSERT. Taking the row lock makes both orders
+        come out right —
+
+        * the delete committed first: the lock finds no rows, nothing is
+          written;
+        * this ran first: the delete blocks on the lock until this transaction
+          commits, and then removes the pair *including* the rows just inserted.
+        """
+        if not msgs:
+            return False
+
+        alive = await self._session.execute(
+            text("SELECT 1 FROM messages WHERE pair_id = :pair_id LIMIT 1 FOR UPDATE"),
+            {"pair_id": pair_id},
+        )
+        if alive.first() is None:
+            await self._session.rollback()
+            return False
+
+        await self._insert(msgs)
+        await self._session.commit()
+        return True
+
+    async def _insert(self, msgs: list[Message]) -> None:
+        """The insert itself, without deciding when to commit."""
         _INSERT = (
             "INSERT INTO messages ("
             "  message_id, pair_id, account_id, conversation_id,"
@@ -76,8 +116,6 @@ class MessageRepository:
                     "embedding":       emb_str,
                 },
             )
-
-        await self._session.commit()
 
     async def delete_pair(self, pair_id: str) -> int:
         """Delete all rows belonging to a pair_id. Returns number of deleted rows."""

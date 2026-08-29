@@ -28,8 +28,9 @@ import {
   setBackendUrl,
   testConnection,
 } from "@/lib/api";
+import { describeApiError } from "@/lib/apiError";
 import type { Settings } from "@/lib/types";
-import { getStoredDeviceToken, setupPushNotifications } from "@/lib/push";
+import { getStoredDeviceToken, registerForPush, revokeDeviceToken } from "@/lib/push";
 import { DEFAULT_SOUND_VOLUME, loadSoundVolume, saveSoundVolume, soundEngine } from "@/lib/soundEngine";
 
 function Row({ label, value, onChangeText, secure = false, placeholder = "", editable = true }: {
@@ -65,6 +66,7 @@ export default function SettingsScreen() {
   const [serverUrl, setServerUrl] = useState("");
   const [authToken, setAuthTokenVal] = useState("");
   const [connected, setConnected] = useState<boolean | null>(null);
+  const [connectionError, setConnectionError] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
 
   // AI
@@ -91,6 +93,7 @@ export default function SettingsScreen() {
       if (s.pushy_api_key) setPushyApiKey(s.pushy_api_key);
       if (s.pushy_device_token) setDeviceToken(s.pushy_device_token);
       setConnected(true);
+      setConnectionError(null);
 
       // Sync local device token to backend if it wasn't saved yet
       const localToken = await getStoredDeviceToken();
@@ -100,6 +103,10 @@ export default function SettingsScreen() {
     } catch (err) {
       console.warn("[settings] loadSettings error:", err);
       setConnected(false);
+      // "disconnected" alone is the least useful true statement available: a
+      // wrong token, a sleeping laptop and a wrong address all produce it, and
+      // they are fixed on different lines of this very screen.
+      setConnectionError(describeApiError(err));
     }
   };
 
@@ -138,12 +145,20 @@ export default function SettingsScreen() {
       return;
     }
 
+    // Say goodbye before forgetting the address. Once setBackendUrl has run
+    // there is no way left to tell the old server to stop pushing to this
+    // phone, and it would go on doing it forever.
+    const previousUrl = await getBackendUrl();
+    if (previousUrl && previousUrl !== serverUrl.trim()) {
+      await revokeDeviceToken().catch(() => {});
+    }
+
     await setBackendUrl(serverUrl.trim());
     await setAuthToken(authToken.trim());
     await fetchRemoteSettings();
 
-    // Re-register push token now that auth is available
-    setupPushNotifications().catch(() => {});
+    // Now there is a backend worth handing the device token to.
+    void registerForPush(serverUrl.trim());
 
     Alert.alert("Connected", "Backend connection saved.");
   };
@@ -175,6 +190,7 @@ export default function SettingsScreen() {
         text: "Disconnect",
         style: "destructive",
         onPress: async () => {
+          await revokeDeviceToken().catch(() => {});
           await clearAuth();
           router.replace("/");
         },
@@ -190,9 +206,14 @@ export default function SettingsScreen() {
           {/* Connection */}
           <Text style={sty.section}>Server Connection</Text>
           {connected !== null && (
-            <Text style={[sty.badge, connected ? sty.badgeOk : sty.badgeFail]}>
-              {connected ? "connected" : "disconnected"}
-            </Text>
+            <>
+              <Text style={[sty.badge, connected ? sty.badgeOk : sty.badgeFail]}>
+                {connected ? "connected" : "disconnected"}
+              </Text>
+              {!connected && connectionError ? (
+                <Text style={sty.badgeReason}>{connectionError}</Text>
+              ) : null}
+            </>
           )}
           <Row label="Server URL" value={serverUrl} onChangeText={setServerUrl} placeholder="http://192.168.x.x:8000" />
           <Row label="Auth Token" value={authToken} onChangeText={setAuthTokenVal} secure placeholder="paste auth token" />
@@ -287,6 +308,13 @@ const sty = StyleSheet.create({
     letterSpacing: 3,
     textTransform: "uppercase",
     marginBottom: 12,
+  },
+  badgeReason: {
+    color: "rgba(255,255,255,0.4)",
+    fontSize: 12,
+    fontWeight: "300",
+    marginBottom: 14,
+    marginTop: -6,
   },
   badgeOk: { color: "rgba(80,200,100,0.8)" },
   badgeFail: { color: "rgba(220,80,80,0.8)" },

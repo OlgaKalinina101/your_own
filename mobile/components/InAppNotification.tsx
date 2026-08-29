@@ -15,6 +15,7 @@ import {
 } from "react-native";
 import Markdown from "react-native-markdown-display";
 import { router } from "expo-router";
+import { onMarkdownLinkPress } from "@/lib/links";
 import { onPush, offPush } from "@/lib/push";
 
 const DISMISS_MS = 6000;
@@ -101,7 +102,7 @@ export default function InAppNotification() {
       >
         {title ? <Text style={s.title} numberOfLines={1}>{title}</Text> : null}
         <View style={s.bodyWrap}>
-          <Markdown style={mdStyles}>{body}</Markdown>
+          <Markdown style={mdStyles} onLinkPress={onMarkdownLinkPress}>{body}</Markdown>
         </View>
       </TouchableOpacity>
     </Animated.View>

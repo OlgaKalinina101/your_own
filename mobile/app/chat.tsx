@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { ActivityIndicator, Animated, BackHandler, FlatList, Platform, StyleSheet, Text, View, type ScrollViewProps } from "react-native";
-import { Stack, useRouter } from "expo-router";
+import { ActivityIndicator, Animated, BackHandler, FlatList, Platform, Pressable, StyleSheet, Text, View, type ScrollViewProps } from "react-native";
+import { Stack, useFocusEffect, useRouter } from "expo-router";
 import { HeaderBackButton } from "@react-navigation/elements";
 import {
   KeyboardChatScrollView,
@@ -45,13 +45,16 @@ export default function ChatScreen() {
     canAttach,
     canSend,
     errorNotice,
+    historyError,
     initialLoaded,
     input,
     loadingHistory,
     reversedMessages,
     streaming,
     workbenchText,
+    refreshSettings,
     refreshWorkbench,
+    reloadHistory,
     setInput,
     pickImages,
     removeAttachment,
@@ -78,6 +81,11 @@ export default function ChatScreen() {
     return () => sub.remove();
   }, [goBack]);
 
+  // Re-ask for the model and the name whenever this screen is being looked at.
+  // Settings sits on top of it in the stack rather than replacing it, so coming
+  // back from changing the model remounts nothing.
+  useFocusEffect(refreshSettings);
+
   // Refresh workbench text each time the bar is opened
   useEffect(() => {
     if (workbenchOpen) refreshWorkbench();
@@ -100,12 +108,18 @@ export default function ChatScreen() {
     [],
   );
 
-  const renderItem = ({ item, index }: { item: Message; index: number }) => (
-    <ChatMessageBubble
-      msg={item}
-      isStreamingLast={streaming && index === 0}
-      backendUrl={backendUrl}
-    />
+  // Memoised so the bubbles' own React.memo can do its job: a new function
+  // here every render is a new prop on every row, and the list re-rendered in
+  // full on each frame of a stream.
+  const renderItem = useCallback(
+    ({ item, index }: { item: Message; index: number }) => (
+      <ChatMessageBubble
+        msg={item}
+        isStreamingLast={streaming && index === 0}
+        backendUrl={backendUrl}
+      />
+    ),
+    [streaming, backendUrl],
   );
 
   if (!initialLoaded) {
@@ -144,7 +158,19 @@ export default function ChatScreen() {
         ListFooterComponent={loadingHistory ? <ActivityIndicator color="#fff" style={{ marginTop: 12 }} /> : null}
         ListEmptyComponent={
           <View style={styles.emptyWrap}>
-            <Text style={styles.emptyText}>start typing</Text>
+            {historyError ? (
+              /* An unreachable backend used to render as "start typing", which
+                 is the one thing it does not mean. For a phone whose server is
+                 a laptop that sleeps, this is the common case, not the edge. */
+              <>
+                <Text style={styles.emptyText}>{historyError}</Text>
+                <Pressable onPress={reloadHistory} hitSlop={12} style={styles.retryBtn}>
+                  <Text style={styles.retryText}>try again</Text>
+                </Pressable>
+              </>
+            ) : (
+              <Text style={styles.emptyText}>start typing</Text>
+            )}
           </View>
         }
         keyboardShouldPersistTaps="handled"
@@ -182,6 +208,13 @@ const styles = StyleSheet.create({
     color: "rgba(255,255,255,0.3)",
     textAlign: "center",
     fontSize: 12,
+    letterSpacing: 4,
+    textTransform: "uppercase",
+  },
+  retryBtn: { marginTop: 18, borderWidth: 1, borderColor: "rgba(255,255,255,0.2)", paddingHorizontal: 18, paddingVertical: 8 },
+  retryText: {
+    color: "rgba(255,255,255,0.55)",
+    fontSize: 9,
     letterSpacing: 4,
     textTransform: "uppercase",
   },

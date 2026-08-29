@@ -394,6 +394,173 @@ class Vitals:
 
 
 # ---------------------------------------------------------------------------
+# Live probes
+#
+# Measured at the moment he asks, not stored. Each one answers a question he
+# cannot answer from the inside, and each reports "could not check" rather than
+# staying silent: an absent line reads as "fine", and that is the failure this
+# module exists to prevent.
+# ---------------------------------------------------------------------------
+
+
+def probe_disk(lang: str = "ru") -> dict[str, str]:
+    """How much room is left where his own writing goes.
+
+    When this runs out, the atomic writes behind the workbench, the board and
+    identity stop landing — his journal simply stops growing, and nothing in the
+    text he reads would say why.
+    """
+    ru = lang == "ru"
+    try:
+        import shutil
+
+        # The nearest ancestor that exists: on a fresh install the data
+        # directory has not been created yet, and "could not check" would be a
+        # silly answer to "how much room is there".
+        where = _DATA_DIR
+        while not where.exists() and where != where.parent:
+            where = where.parent
+        usage = shutil.disk_usage(where)
+        free_gb = usage.free / 1024 ** 3
+        total_gb = usage.total / 1024 ** 3
+        return {
+            ("свободно на диске" if ru else "disk free"):
+                f"{free_gb:.1f} ГБ из {total_gb:.1f}" if ru
+                else f"{free_gb:.1f} GB of {total_gb:.1f}",
+        }
+    except Exception as exc:
+        logger.warning("[vitals] disk probe failed: %s", exc)
+        return {("диск" if ru else "disk"):
+                ("не удалось проверить" if ru else "could not check")}
+
+
+def probe_embedder(lang: str = "ru") -> dict[str, str]:
+    """Whether his long-term recall is at full strength.
+
+    Without this model, retrieval falls back to matching words instead of
+    meaning. It still answers, which is exactly why it needs saying: he would
+    have no way to tell that he was remembering less well than usual.
+    """
+    ru = lang == "ru"
+    label = "модель памяти" if ru else "memory model"
+    try:
+        from infrastructure.memory.embedder import status
+
+        state, detail = status()
+    except Exception as exc:
+        logger.warning("[vitals] embedder probe failed: %s", exc)
+        return {label: ("не удалось проверить" if ru else "could not check")}
+
+    if state == "loaded":
+        return {label: (f"загружена ({detail})" if ru else f"loaded ({detail})")}
+    if state == "failed":
+        return {label: (f"не загрузилась: {detail}" if ru else f"failed to load: {detail}")}
+    return {label: ("не загружалась в этом процессе" if ru
+                    else "not loaded in this process")}
+
+
+async def probe_key(api_key: str, lang: str = "ru") -> dict[str, str]:
+    """What is left on the key everything he does is paid from.
+
+    The one failure he can see coming. When the credit runs out every part of
+    him stops at once — chat, waking, the analysis after each exchange — and
+    from the inside that is indistinguishable from never waking again.
+
+    Numbers only, and no projection: dividing what is left by what a day costs
+    assumes tomorrow looks like today, which is a guess, and guessing is not
+    this module's job. He can do that arithmetic himself if he wants it.
+    """
+    ru = lang == "ru"
+    label = "ключ" if ru else "key"
+    if not api_key:
+        return {label: ("не настроен" if ru else "not configured")}
+
+    try:
+        from infrastructure.llm.client import fetch_account_state
+
+        state = await fetch_account_state(api_key)
+    except Exception as exc:
+        logger.warning("[vitals] key probe failed: %s", exc)
+        return {label: ("не удалось проверить" if ru else "could not check")}
+
+    return {
+        ("остаток" if ru else "remaining"): f"${state['remaining']:.2f}",
+        ("за сутки" if ru else "past day"): f"${state['daily']:.2f}",
+        ("за неделю" if ru else "past week"): f"${state['weekly']:.2f}",
+        ("за месяц" if ru else "past month"): f"${state['monthly']:.2f}",
+    }
+
+
+_CALL_KINDS = {
+    "stream": ("чат", "chat"),
+    "complete": ("внутренние", "internal"),
+    "research": ("поиск", "search"),
+    "generate_image": ("картинки", "images"),
+}
+
+
+def probe_spending(days: int = 7, lang: str = "ru") -> dict[str, str]:
+    """How much of his own working he has done lately, and what it cost.
+
+    The kinds are as coarse as the corpus is: "chat" is her talking to him,
+    "internal" is everything he does on his own — waking, the analysis after an
+    exchange, deciding whether a push is worth sending. Telling those apart
+    would mean each caller naming itself when it asks, which the client does not
+    ask for yet.
+
+    Cost is read from what the provider reported per call. Rows written before
+    that was recorded carry none, and this says so rather than quietly summing
+    a smaller number.
+    """
+    ru = lang == "ru"
+    try:
+        from infrastructure.llm import call_log
+
+        rows = call_log.recent(days=days)
+    except Exception as exc:
+        logger.warning("[vitals] spending probe failed: %s", exc)
+        return {("расход" if ru else "spending"):
+                ("не удалось проверить" if ru else "could not check")}
+
+    if not rows:
+        return {(f"вызовов за {days} дн." if ru else f"calls in {days}d"): "0"}
+
+    counts: dict[str, int] = {}
+    costs: dict[str, float] = {}
+    priced = 0
+    for row in rows:
+        kind = row.get("call_type") or "?"
+        counts[kind] = counts.get(kind, 0) + 1
+        cost = (row.get("usage") or {}).get("cost")
+        if cost is not None:
+            costs[kind] = costs.get(kind, 0.0) + float(cost)
+            priced += 1
+
+    def _name(kind: str) -> str:
+        pair = _CALL_KINDS.get(kind)
+        return (pair[0] if ru else pair[1]) if pair else kind
+
+    out: dict[str, str] = {
+        (f"вызовов за {days} дн." if ru else f"calls in {days}d"):
+            ", ".join(f"{_name(k)} {n}" for k, n in
+                      sorted(counts.items(), key=lambda kv: -kv[1])),
+    }
+    if priced:
+        out[("из них со стоимостью" if ru else "of those priced")] = (
+            f"{priced} из {len(rows)}" if ru else f"{priced} of {len(rows)}"
+        )
+        out[("стоило" if ru else "cost")] = ", ".join(
+            f"{_name(k)} ${v:.2f}" for k, v in sorted(costs.items(), key=lambda kv: -kv[1])
+        )
+    else:
+        out[("стоимость" if ru else "cost")] = (
+            "ещё не записана ни у одного вызова" if ru
+            else "not recorded on any call yet"
+        )
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Labels
 # ---------------------------------------------------------------------------
 

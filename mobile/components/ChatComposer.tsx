@@ -4,7 +4,15 @@ import { StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-nativ
 import ChatAttachmentStrip from "@/components/ChatAttachmentStrip";
 import type { DraftAttachment } from "@/lib/types";
 
-export default function ChatComposer({
+/**
+ * Memoised because it sits next to a stream.
+ *
+ * Every prop it takes is now stable while a reply arrives — `onSend` stopped
+ * being rebuilt per frame when `messages` left its dependency list — so without
+ * this the TextInput re-rendered dozens of times a second for no reason, and
+ * with it the composer stands still.
+ */
+export default React.memo(function ChatComposer({
   input,
   onChangeInput,
   attachments,
@@ -62,7 +70,7 @@ export default function ChatComposer({
       </View>
     </>
   );
-}
+});
 
 const s = StyleSheet.create({
   row: {

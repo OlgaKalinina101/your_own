@@ -21,6 +21,16 @@ export interface Message {
   chromaFacts?: ChromaFact[];
   createdAt?: string;
   pairId?: string;
+  /**
+   * Why this reply is shorter than it should be.
+   *
+   * Local to this client and deliberately not part of the message text: the
+   * server stores what was said, not why it stopped, and `mergeMessages` gives
+   * the server the last word on content. A marker written into `content` would
+   * be wiped by the next sync — this one survives it, the same way
+   * `chromaFacts` does.
+   */
+  interrupted?: "connection" | "stopped";
 }
 
 export interface ChromaFact {

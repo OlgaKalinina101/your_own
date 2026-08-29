@@ -22,6 +22,20 @@ import {
   setBackendUrl,
   testConnection,
 } from "@/lib/api";
+import { pendingRoute, type RequestableRoute } from "@/lib/pendingRoute";
+
+/**
+ * Where this launch ends up.
+ *
+ * The dashboard unless a notification asked for somewhere else, and this is the
+ * only place that decides: a push tapped on a cold start cannot navigate for
+ * itself, because this screen's `replace` waits on a network round trip and so
+ * always lands last.
+ */
+function launchDestination(): RequestableRoute {
+  pendingRoute.markBootDecided();
+  return pendingRoute.consume() ?? "/dashboard";
+}
 
 export default function ConnectScreen() {
   const router = useRouter();
@@ -43,7 +57,7 @@ export default function ConnectScreen() {
         // Verify both connectivity AND token validity
         const err = await testConnection(storedUrl, storedToken);
         if (err === null) {
-          router.replace("/dashboard");
+          router.replace(launchDestination());
           return;
         }
         // Token invalid or server unreachable — fall through to manual connect
@@ -72,7 +86,7 @@ export default function ConnectScreen() {
       }
       await setBackendUrl(url.trim());
       await setAuthToken(token.trim());
-      router.replace("/dashboard");
+      router.replace(launchDestination());
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {

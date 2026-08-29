@@ -23,19 +23,40 @@ MODEL_NAME = settings.EMBEDDING_MODEL_NAME
 
 _model = None
 
+#: Why the last load attempt failed, or None if none has failed. Without this,
+#: "not loaded" and "cannot be loaded" look identical from the outside, and the
+#: difference is the whole point: the first is idle, the second means his
+#: long-term recall has quietly dropped to keyword matching.
+_load_error: str | None = None
+
 
 def _load_model():
-    global _model
+    global _model, _load_error
     if _model is not None:
         return _model
     try:
         from sentence_transformers import SentenceTransformer
         _model = SentenceTransformer(MODEL_NAME)
+        _load_error = None
         logger.info("[embedder] model loaded: %s (384-dim)", MODEL_NAME)
     except Exception as exc:
         logger.warning("[embedder] SentenceTransformer not available: %s", exc)
         _model = None
+        _load_error = str(exc)
     return _model
+
+
+def status() -> tuple[str, str]:
+    """(state, detail) — what is true about the model right now.
+
+    Deliberately does not load anything: loading takes about a minute the first
+    time, and this is read while he is mid-thought.
+    """
+    if _model is not None:
+        return "loaded", MODEL_NAME
+    if _load_error:
+        return "failed", _load_error
+    return "not_loaded", MODEL_NAME
 
 
 def embed_texts(texts: Sequence[str]) -> list[list[float] | None]:

@@ -144,12 +144,20 @@ class FakeRepo:
     """Records what would have been written; returns an empty history."""
 
     saved: list = []
+    #: Flip to False to stand in for "the pair was deleted mid-save".
+    pair_alive: bool = True
 
     def __init__(self, db=None) -> None:
         pass
 
     async def bulk_save(self, rows) -> None:
         FakeRepo.saved.extend(rows)
+
+    async def bulk_save_if_pair_exists(self, rows, pair_id) -> bool:
+        if not FakeRepo.pair_alive:
+            return False
+        FakeRepo.saved.extend(rows)
+        return True
 
     async def get_recent_canonical_pairs(self, **_kwargs) -> list[dict]:
         return []
@@ -191,6 +199,7 @@ def chat_app(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(chat_mod, "get_chroma_pipeline", _no_chroma)
 
     FakeRepo.saved = []
+    FakeRepo.pair_alive = True
     monkeypatch.setattr(chat_mod, "MessageRepository", FakeRepo)
 
     # _save_partial deliberately opens its own session (the request-scoped one

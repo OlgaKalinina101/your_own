@@ -2,7 +2,7 @@
  * Dashboard — tile grid matching the desktop layout.
  */
 import { useRouter } from "expo-router";
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef } from "react";
 import {
   Animated,
   SafeAreaView,
@@ -13,6 +13,7 @@ import {
   View,
 } from "react-native";
 import { loadSettings } from "@/lib/api";
+import { useResource } from "@/lib/useResource";
 
 // ── Single tile ───────────────────────────────────────────────────────────────
 
@@ -69,13 +70,16 @@ function Tile({
 
 export default function DashboardScreen() {
   const router = useRouter();
-  const [aiName, setAiName] = useState("CHAT");
 
-  useEffect(() => {
-    loadSettings()
-      .then(s => { if (s.ai_name) setAiName(s.ai_name.toUpperCase()); })
-      .catch(() => {});
-  }, []);
+  // The dashboard is navigation, so a sleeping backend must not take it away —
+  // but it also must not pretend. The tiles stay; the name falls back and a
+  // line at the bottom says why. Before this the failure was a bare
+  // `.catch(() => {})` and the tile silently read "CHAT" forever.
+  const { resource, reload } = useResource(loadSettings, []);
+  const aiName =
+    resource.status === "ready" && resource.data.ai_name
+      ? resource.data.ai_name.toUpperCase()
+      : "CHAT";
 
   return (
     <SafeAreaView style={sty.root}>
@@ -125,6 +129,13 @@ export default function DashboardScreen() {
             delay={300}
           />
         </View>
+
+        {resource.status === "error" ? (
+          <TouchableOpacity onPress={reload} style={sty.offlineRow} activeOpacity={0.6}>
+            <Text style={sty.offlineText}>{resource.message}</Text>
+            <Text style={sty.offlineRetry}>tap to retry</Text>
+          </TouchableOpacity>
+        ) : null}
 
       </ScrollView>
     </SafeAreaView>
@@ -185,6 +196,25 @@ const sty = StyleSheet.create({
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.08)",
     backgroundColor: "#000",
+  },
+
+  offlineRow: {
+    marginTop: 16,
+    paddingVertical: 10,
+    alignItems: "center",
+    gap: 6,
+  },
+  offlineText: {
+    color: "rgba(255,255,255,0.4)",
+    fontSize: 12,
+    fontWeight: "300",
+    textAlign: "center",
+  },
+  offlineRetry: {
+    color: "rgba(255,255,255,0.25)",
+    fontSize: 8,
+    letterSpacing: 3,
+    textTransform: "uppercase",
   },
 
   tileLabel: {

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import pathlib
 from datetime import datetime, timezone
 
 
@@ -163,3 +164,47 @@ class TestTestsDoNotTouchTheRealCorpus:
         _append_debug_row(call_type="test", model="m", messages=[], response="r")
         month = datetime.now(timezone.utc).strftime("%Y-%m")
         assert (call_log.DATASET_DIR / f"calls-{month}.jsonl").exists()
+
+
+class TestWhatACallCost:
+    """The corpus had the model and the kind of call but not the money, so
+    "what does a night of thinking cost" had no answer. It does now."""
+
+    def test_the_provider_is_asked_for_the_cost(self):
+        # Cost is not in a response unless the request asks for it, and it is
+        # asked for on every kind of call: chat, his own thinking, search,
+        # images. Four payloads, four asks.
+        source = pathlib.Path("infrastructure/llm/client.py").read_text(encoding="utf-8")
+
+        assert source.count('"usage": {"include": True}') == 4
+
+    def test_what_the_provider_reported_is_written_down(self, tmp_path, monkeypatch):
+        from infrastructure.llm import call_log as log
+        from infrastructure.llm.client import _append_debug_row
+
+        monkeypatch.setattr(log, "DATASET_DIR", tmp_path)
+
+        _append_debug_row(
+            call_type="complete", model="m", messages=[], response="ok",
+            usage={"cost": 0.0123, "prompt_tokens": 18, "completion_tokens": 5,
+                   "is_byok": False, "cost_details": {"noise": 1}},
+        )
+
+        row = json.loads(next(tmp_path.glob("calls-*.jsonl")).read_text(encoding="utf-8"))
+        assert row["usage"] == {
+            "cost": 0.0123, "prompt_tokens": 18, "completion_tokens": 5,
+        }, "the fields worth keeping, and nothing else"
+
+    def test_a_call_with_no_reported_usage_stores_nothing_rather_than_zero(
+        self, tmp_path, monkeypatch
+    ):
+        from infrastructure.llm import call_log as log
+        from infrastructure.llm.client import _append_debug_row
+
+        monkeypatch.setattr(log, "DATASET_DIR", tmp_path)
+
+        _append_debug_row(call_type="complete", model="m", messages=[], response="ok")
+
+        row = json.loads(next(tmp_path.glob("calls-*.jsonl")).read_text(encoding="utf-8"))
+        # A zero would be read later as "this call was free".
+        assert row["usage"] is None

@@ -8,16 +8,10 @@
  *   // In screen body (right below the header):
  *   <WorkbenchBar open={open} text={text} />
  */
-import React, { useEffect, useRef, useState } from "react";
-import {
-  Animated,
-  Easing,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
-} from "react-native";
-import type { NativeSyntheticEvent, TextLayoutEventData } from "react-native";
+import React, { useEffect, useRef } from "react";
+import { Animated, Easing, StyleSheet, Text, TouchableOpacity } from "react-native";
+
+import Marquee from "@/components/Marquee";
 
 // ── Dots toggle button (goes in Stack.Screen headerRight) ─────────────────────
 
@@ -60,13 +54,8 @@ export function WorkbenchBar({
   text: string | null;
 }) {
   const barH = useRef(new Animated.Value(0)).current;
-  const scrollX = useRef(new Animated.Value(0)).current;
-  const animRef = useRef<Animated.CompositeAnimation | null>(null);
 
-  const [containerW, setContainerW] = useState(0);
-  const [textW, setTextW] = useState(0);
-
-  // Slide bar open / close
+  // Slide the bar open / closed
   useEffect(() => {
     Animated.timing(barH, {
       toValue: open ? BAR_H : 0,
@@ -74,65 +63,19 @@ export function WorkbenchBar({
       easing: Easing.out(Easing.quad),
       useNativeDriver: false,
     }).start();
-  }, [open]);
+  }, [open, barH]);
 
-  // Start / stop marquee
-  const displayText = (text && text.trim()) ? text : getEmptyLabel();
-  useEffect(() => {
-    animRef.current?.stop();
-    if (!open || !displayText || containerW === 0 || textW === 0) return;
-
-    scrollX.setValue(containerW);
-    const totalDist = containerW + textW;
-    const duration = (totalDist / SPEED) * 1000;
-
-    animRef.current = Animated.loop(
-      Animated.timing(scrollX, {
-        toValue: -textW,
-        duration,
-        easing: Easing.linear,
-        useNativeDriver: true,
-      }),
-    );
-    animRef.current.start();
-
-    return () => { animRef.current?.stop(); };
-  }, [open, displayText, containerW, textW]);
-
-  const handleTextLayout = (e: NativeSyntheticEvent<TextLayoutEventData>) => {
-    const lines = e.nativeEvent.lines;
-    if (lines && lines.length > 0) {
-      setTextW(Math.ceil(lines[0].width));
-    }
-  };
+  const displayText = text && text.trim() ? text : getEmptyLabel();
 
   return (
     <Animated.View style={[sty.bar, { height: barH }]}>
-      {/* Hidden measurer — uses onTextLayout for actual text pixel width */}
-      <Text
-        style={[sty.tickerText, sty.measurer]}
-        onTextLayout={handleTextLayout}
-      >
-        {displayText}
-      </Text>
-
-      {/* Visible clip container */}
-      <View
+      <Marquee
+        text={displayText}
+        speed={SPEED}
+        active={open}
         style={sty.inner}
-        onLayout={e => setContainerW(e.nativeEvent.layout.width)}
-      >
-        <Animated.Text
-          style={[
-            sty.tickerText,
-            {
-              width: textW > 0 ? textW + 40 : 9999,
-              transform: [{ translateX: scrollX }],
-            },
-          ]}
-        >
-          {displayText}
-        </Animated.Text>
-      </View>
+        textStyle={sty.tickerText}
+      />
     </Animated.View>
   );
 }
@@ -160,8 +103,6 @@ const sty = StyleSheet.create({
   },
   inner: {
     flex: 1,
-    overflow: "hidden",
-    justifyContent: "center",
     paddingHorizontal: 20,
   },
   tickerText: {
@@ -170,12 +111,5 @@ const sty = StyleSheet.create({
     fontWeight: "300",
     fontStyle: "italic",
     letterSpacing: 0.3,
-  },
-  measurer: {
-    position: "absolute",
-    opacity: 0,
-    top: -9999,
-    left: 0,
-    width: 99999,
   },
 });

@@ -255,6 +255,14 @@ export default function ChatPage() {
                 showCursor={msg.role === "assistant" && streaming && i === messages.length - 1}
                 isStreaming={msg.role === "assistant" && streaming && i === messages.length - 1}
               />
+              {msg.interrupted && (
+                /* Why this reply is short. A field rather than text inside the
+                   message, so the next sync with the server does not wipe it —
+                   see lib/mergeMessages.ts. */
+                <span className="text-[0.65rem] tracking-[0.18em] uppercase text-amber-200/40">
+                  {msg.interrupted === "stopped" ? "остановлено" : "оборвано"}
+                </span>
+              )}
               {msg.role === "assistant" && (msg.chromaFacts?.length ?? 0) > 0 && (
                 <>
                   <button

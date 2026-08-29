@@ -149,15 +149,3 @@ export async function apiPost<T = unknown>(
     }),
   );
 }
-
-/**
- * Delete a chat pair by id. Best-effort — nothing depends on it succeeding.
- *
- * The backend saves what the user already saw when a stream breaks
- * (`_save_partial`), so an aborted or failed reply leaves a half-pair behind.
- * The `pair_id` frame is the only handle for removing it, which is why the
- * desktop must stop skipping that frame: the phone has done this all along.
- */
-export async function deleteChatPair(pairId: string): Promise<void> {
-  await apiFetch(`/api/chat/pair/${pairId}`, { method: "DELETE" });
-}

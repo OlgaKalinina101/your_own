@@ -135,45 +135,84 @@ function tokenize(text: string): SoundEvent[] {
 }
 
 // ─── Sound Engine class ───────────────────────────────────────────────────────
+
+/**
+ * Owns its own lifetime, which is the whole change here.
+ *
+ * The chat screen used to call `load()` on mount and `unload()` on unmount, and
+ * the two raced: `unload()` set `loaded = false` only after several awaits, so a
+ * quick leave-and-return let `load()` see `loaded === true` and return
+ * immediately — and then the tail of the old `unload()` wiped the sound objects
+ * it had just decided not to recreate. The keyboard went silent until the app
+ * was restarted, with nothing logged.
+ *
+ * Eight short mp3s do not need a lifecycle. The engine loads once, on first use,
+ * and stays loaded; a screen that is leaving calls `stop()`, which only empties
+ * the queue. There is no state left for two callers to disagree about.
+ */
 export class SoundEngine {
   private soundObjects: Partial<Record<SoundKey, Audio.Sound>> = {};
   private volume: number = DEFAULT_SOUND_VOLUME;
   private loaded = false;
-  private running = false;
+  /** Shared by every concurrent caller, so the assets are decoded once. */
+  private loading: Promise<void> | null = null;
+  /** Someone moved the slider before the assets finished decoding. */
+  private volumeChosen = false;
+  private pumping = false;
 
   private queue: SoundEvent[] = [];
   private nextPlayAt = 0;  // Date.now() ms — earliest time next sound can start
 
-  async load(volume?: number): Promise<void> {
+  /**
+   * Start decoding, so the first keystroke of a reply is not silent.
+   *
+   * Optional in the sense that `feed()` would do it anyway; worth calling when
+   * a screen opens, because decoding takes longer than the gap between the
+   * first two chunks of a stream.
+   */
+  async prime(): Promise<void> {
     if (this.loaded) return;
+    if (!this.loading) this.loading = this._load();
+    return this.loading;
+  }
 
-    await Audio.setAudioModeAsync({
-      playsInSilentModeIOS: true,
-      staysActiveInBackground: false,
-    });
+  private async _load(): Promise<void> {
+    try {
+      await Audio.setAudioModeAsync({
+        playsInSilentModeIOS: true,
+        staysActiveInBackground: false,
+      });
 
-    if (volume !== undefined) this.volume = volume;
+      // Only if nobody has said otherwise meanwhile: decoding takes long
+      // enough for the settings slider to be dragged during it, and the stored
+      // value is by then the older opinion.
+      if (!this.volumeChosen) this.volume = await loadSoundVolume();
 
-    await Promise.all(
-      (Object.entries(SOUND_ASSETS) as Array<[SoundKey, unknown]>).map(async ([key, asset]) => {
-        try {
-          const { sound } = await Audio.Sound.createAsync(asset as number, {
-            volume: this.volume,
-            shouldPlay: false,
-          });
-          this.soundObjects[key] = sound;
-        } catch (e) {
-          console.warn(`[SoundEngine] failed to load ${key}:`, e);
-        }
-      }),
-    );
+      await Promise.all(
+        (Object.entries(SOUND_ASSETS) as Array<[SoundKey, unknown]>).map(async ([key, asset]) => {
+          try {
+            const { sound } = await Audio.Sound.createAsync(asset as number, {
+              volume: this.volume,
+              shouldPlay: false,
+            });
+            this.soundObjects[key] = sound;
+          } catch (e) {
+            console.warn(`[SoundEngine] failed to load ${key}:`, e);
+          }
+        }),
+      );
 
-    this.loaded = true;
-    this.running = true;
-    this._processQueue();
+      this.loaded = true;
+    } catch (e) {
+      // Leave `loading` null so the next feed() can try again rather than
+      // silently never sounding for the life of the process.
+      console.warn("[SoundEngine] load failed:", e);
+      this.loading = null;
+    }
   }
 
   setVolume(v: number): void {
+    this.volumeChosen = true;
     this.volume = Math.max(0, Math.min(1, v));
     for (const snd of Object.values(this.soundObjects)) {
       snd?.setVolumeAsync(this.volume).catch(() => {});
@@ -181,72 +220,68 @@ export class SoundEngine {
   }
 
   feed(text: string): void {
-    if (!this.loaded || this.volume === 0) return;
-    const events = tokenize(text);
-    this.queue.push(...events);
+    if (this.volume === 0) return;
+    void this.prime();
+    this.queue.push(...tokenize(text));
+    void this._pump();
   }
 
   endMessage(): void {
-    if (!this.loaded || this.volume === 0) return;
-    // Drop all pending events — stream is done, no point playing stale queue
+    if (this.volume === 0) return;
+    // Drop everything pending: the stream is over, and a queue that keeps
+    // clicking after the reply has landed is just noise arriving late.
     this.queue = [{ kind: "end", delayMs: NEWLINE_DELAY_MS }];
+    void this._pump();
   }
 
+  /** Go quiet. Leaves the assets decoded — see the note on the class. */
   stop(): void {
-    this.running = false;
     this.queue = [];
   }
 
-  async unload(): Promise<void> {
-    this.stop();
-    await Promise.all(
-      Object.values(this.soundObjects).map((snd) => snd?.unloadAsync().catch(() => {})),
-    );
-    this.soundObjects = {};
-    this.loaded = false;
-  }
+  /**
+   * Drain the queue, then exit.
+   *
+   * The loop this replaces polled an empty queue every 20 ms for the entire life
+   * of the process, background included.
+   */
+  private async _pump(): Promise<void> {
+    if (this.pumping) return;
+    this.pumping = true;
+    try {
+      while (this.queue.length > 0) {
+        const event = this.queue.shift()!;
 
-  private async _processQueue(): Promise<void> {
-    while (this.running) {
-      if (this.queue.length === 0) {
-        await sleep(20);
-        continue;
-      }
+        // Enforce minimum interval between sound starts
+        const wait = this.nextPlayAt - Date.now();
+        if (wait > 0) await sleep(wait);
 
-      const event = this.queue.shift()!;
-
-      // Enforce minimum interval between sound starts
-      const now = Date.now();
-      const wait = this.nextPlayAt - now;
-      if (wait > 0) await sleep(wait);
-
-      // Play sound
-      let soundKey: SoundKey | null = null;
-      if (event.kind === "word") {
-        soundKey = classifyWord(event.word);
-      } else if (event.kind === "space") {
-        soundKey = "space";
-      } else if (event.kind === "punct") {
-        soundKey = "space";
-      } else if (event.kind === "newline" || event.kind === "end") {
-        soundKey = "end";
-      }
-
-      if (soundKey) {
-        const snd = this.soundObjects[soundKey];
-        if (snd) {
-          try {
-            await snd.setPositionAsync(0);
-            await snd.playAsync();
-          } catch {
-            // Sound may have been unloaded — skip silently
-          }
+        let soundKey: SoundKey | null = null;
+        if (event.kind === "word") {
+          soundKey = classifyWord(event.word);
+        } else if (event.kind === "space" || event.kind === "punct") {
+          soundKey = "space";
+        } else if (event.kind === "newline" || event.kind === "end") {
+          soundKey = "end";
         }
-        this.nextPlayAt = Date.now() + MIN_INTERVAL_MS;
-      }
 
-      // Post-event delay (punctuation pauses, word rhythm)
-      await sleep(event.delayMs);
+        if (soundKey) {
+          const snd = this.soundObjects[soundKey];
+          if (snd) {
+            try {
+              await snd.setPositionAsync(0);
+              await snd.playAsync();
+            } catch {
+              // Still decoding, or the player is gone. Skip this one.
+            }
+          }
+          this.nextPlayAt = Date.now() + MIN_INTERVAL_MS;
+        }
+
+        await sleep(event.delayMs);
+      }
+    } finally {
+      this.pumping = false;
     }
   }
 }

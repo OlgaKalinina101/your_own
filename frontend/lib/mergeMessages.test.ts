@@ -78,6 +78,30 @@ describe("mergeMessages", () => {
     expect(mergeMessages(current, incoming)[0].chromaFacts).toEqual(facts);
   });
 
+  it("keeps the reason a reply was cut off", () => {
+    // The server stores the clipped text and has no idea it is clipped, so a
+    // plain replace would quietly turn "the tunnel ate this" into "he answered
+    // in four words". Writing the marker into `content` instead of a field is
+    // the version of this that loses: `content` is exactly what the server wins.
+    const current = [
+      msg({ id: "p1-a", pairId: "p1", role: "assistant", content: "Пол", interrupted: "connection" }),
+    ];
+    const incoming = [
+      msg({ id: "p1-assistant", pairId: "p1", role: "assistant", content: "Пол" }),
+    ];
+    const merged = mergeMessages(current, incoming);
+    expect(merged[0].interrupted).toBe("connection");
+    expect(merged[0].id).toBe("p1-assistant");
+  });
+
+  it("does not invent a reason for a reply that arrived whole", () => {
+    const current = [msg({ id: "p1-a", pairId: "p1", role: "assistant", content: "Полный ответ" })];
+    const incoming = [
+      msg({ id: "p1-assistant", pairId: "p1", role: "assistant", content: "Полный ответ" }),
+    ];
+    expect(mergeMessages(current, incoming)[0].interrupted).toBeUndefined();
+  });
+
   it("matches on role as well as pair, so the two halves do not collide", () => {
     const current = [
       msg({ id: "p1-user", pairId: "p1", role: "user", content: "вопрос" }),

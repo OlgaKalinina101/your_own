@@ -242,7 +242,7 @@ def _record_failure(account_id: str, reason: str, lang: str = "ru") -> None:
         logger.warning("[reflection:%s] could not record the gap: %s", account_id, exc)
 
 
-async def _read_vitals(account_id: str, db: AsyncSession, lang: str) -> str:
+async def _read_vitals(account_id: str, db: AsyncSession, lang: str, api_key: str = "") -> str:
     """Render the instrument panel for [VITALS].
 
     Recorded state comes from the Vitals file; the counts are read live. Facts
@@ -256,12 +256,10 @@ async def _read_vitals(account_id: str, db: AsyncSession, lang: str) -> str:
             "select count(*), max(created_at) from messages where account_id = :a"
         ), {"a": account_id})
         total, last_at = row.one()
-        from infrastructure.clock import user_tz
-
         memory = {
             "сообщений в базе" if lang == "ru" else "messages stored": total,
-            "последнее" if lang == "ru" else "latest": (
-                last_at.astimezone(user_tz()).strftime("%Y-%m-%d %H:%M") if last_at else "—"
+            "последнее" if lang == "ru" else "latest": format_local(
+                last_at, "%Y-%m-%d %H:%M"
             ),
         }
         memory["заметок на столе" if lang == "ru" else "notes on the desk"] = len(
@@ -276,6 +274,20 @@ async def _read_vitals(account_id: str, db: AsyncSession, lang: str) -> str:
         live["Память" if lang == "ru" else "Memory"] = memory
     except Exception as exc:
         logger.warning("[reflection] vitals live counts failed: %s", exc)
+
+    # Three things he cannot see from the inside: what is left on the key that
+    # pays for all of this, whether his long-term recall is at full strength,
+    # and whether there is still room to write his journal.
+    from infrastructure.autonomy.vitals import (
+        probe_disk, probe_embedder, probe_key, probe_spending,
+    )
+
+    money = await probe_key(api_key, lang)
+    money.update(probe_spending(lang=lang))
+    live["Расход" if lang == "ru" else "Spending"] = money
+    live["Машина" if lang == "ru" else "Machine"] = {
+        **probe_embedder(lang), **probe_disk(lang),
+    }
 
     return Vitals(account_id).render_full(lang=lang, live=live)
 
@@ -605,7 +617,9 @@ async def _execute_response(
 
     if _VITALS_RE.search(response):
         try:
-            outcome.results.append(f"[VITALS] → {await _read_vitals(account_id, db, lang)}")
+            outcome.results.append(
+                f"[VITALS] → {await _read_vitals(account_id, db, lang, api_key)}"
+            )
             logger.info("[reflection:%s] VITALS read", account_id)
         except Exception as exc:
             logger.warning("[reflection] VITALS error: %s", exc)

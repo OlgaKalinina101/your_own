@@ -46,6 +46,7 @@ infrastructure/vector_store/*/
 .idea/
 .vscode/
 .cursor/
+.claude
 *.swp
 *.swo
 *~
@@ -58,3 +59,7 @@ desktop.ini
 # Electron build artifacts
 frontend/*.tgz
 frontend/*.zip
+
+docs\BACKEND_REVIEW_2026-08-29.md
+docs\DESKTOP_REVIEW_2026-08-30.md
+docs\MOBILE_REVIEW_2026-08-30.md

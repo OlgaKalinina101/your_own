@@ -20,10 +20,10 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { apiFetch, apiGet, deleteChatPair } from "@/lib/api";
+import { apiFetch, apiGet } from "@/lib/api";
 import { apiErrorFrom, describeApiError } from "@/lib/apiError";
 import { fitWithinCap, readPreview, removeAt } from "@/lib/chatAttachments";
-import { parseChatSseEvent, splitSseBuffer } from "@/lib/chatSse";
+import { consumeChatStream } from "@/lib/chatStream";
 import { latestCursor, mergeMessages } from "@/lib/mergeMessages";
 import { subscribeToChanges } from "@/lib/changeFeed";
 import { useChatSession } from "@/context/ChatSessionContext";
@@ -354,111 +354,111 @@ export function useChatController(hooks: ChatControllerHooks = {}) {
       if (!response.ok) throw await apiErrorFrom(response);
       if (!response.body) throw new Error("The server sent no body");
 
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let sseBuffer = "";
+      // The stream's lifecycle lives in lib/chatStream.ts. Its outcome is the
+      // point of this whole call: `done` means the terminator arrived and the
+      // reply is whole; anything else means it is not — a distinction the loop
+      // that used to be here could not make, so half a reply was stored, shown
+      // and remembered as if it were the answer.
+      const result = await consumeChatStream(response.body.getReader(), (event) => {
+        switch (event.type) {
+          case "text":
+            chunkBufRef.current += event.chunk;
+            scheduleFlush();
+            break;
 
-      reading: while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        sseBuffer += decoder.decode(value, { stream: true });
+          case "pair_id":
+            activePairIdRef.current = event.pairId;
+            // Stamp the optimistic pair so a later sync recognises it as the
+            // same thing the server stored, instead of showing it twice.
+            setMessages((prev) => {
+              const updated = [...prev];
+              for (let i = updated.length - 1, tagged = 0; i >= 0 && tagged < 2; i -= 1) {
+                if (updated[i].pairId) break;
+                updated[i] = { ...updated[i], pairId: event.pairId };
+                tagged += 1;
+              }
+              return updated;
+            });
+            break;
 
-        const { events, remainder } = splitSseBuffer(sseBuffer);
-        sseBuffer = remainder;
+          case "memory":
+            flushNow();
+            replaceLast((last) => ({ ...last, chromaFacts: event.chromaFacts }));
+            break;
 
-        for (const rawEvent of events) {
-          const event = parseChatSseEvent(rawEvent);
-          if (!event) continue;
+          case "rewrite":
+            flushNow();
+            replaceLast((last) => ({ ...last, content: event.text }));
+            break;
 
-          switch (event.type) {
-            case "done":
-              break reading;
+          case "error":
+            flushNow();
+            replaceLast((last) => ({
+              ...last,
+              content:
+                last.content.trimEnd() +
+                (event.message
+                  ? `\n\n[ответ оборван: ${event.message}]`
+                  : "\n\n[ответ оборван]"),
+            }));
+            break;
 
-            case "text":
-              chunkBufRef.current += event.chunk;
-              scheduleFlush();
-              break;
+          case "image_start":
+            flushNow();
+            replaceLast((last) => ({
+              ...last,
+              content: `${last.content.trimEnd()}\n[GENERATE_IMAGE: ${event.prompt}]`,
+            }));
+            break;
 
-            case "pair_id":
-              activePairIdRef.current = event.pairId;
-              // Stamp the optimistic pair so a later sync recognises it as the
-              // same thing the server stored, instead of showing it twice.
-              setMessages((prev) => {
-                const updated = [...prev];
-                for (let i = updated.length - 1, tagged = 0; i >= 0 && tagged < 2; i -= 1) {
-                  if (updated[i].pairId) break;
-                  updated[i] = { ...updated[i], pairId: event.pairId };
-                  tagged += 1;
-                }
-                return updated;
-              });
-              break;
+          case "image_cancel":
+            flushNow();
+            replaceLast((last) => ({
+              ...last,
+              content: last.content.replace(GENERATING_IMAGE_RE, "").trimEnd(),
+            }));
+            break;
 
-            case "memory":
-              flushNow();
-              replaceLast((last) => ({ ...last, chromaFacts: event.chromaFacts }));
-              break;
+          case "image_ready":
+            flushNow();
+            replaceLast((last) => {
+              if (last.content.includes(`[GENERATED_IMAGE: ${event.path}`)) return last;
+              const cleaned = last.content.replace(GENERATING_IMAGE_RE, "").trimEnd();
+              const marker = `[GENERATED_IMAGE: ${event.path} | ${event.model} | ${event.prompt}]`;
+              return { ...last, content: `${cleaned}\n${marker}` };
+            });
+            break;
 
-            case "rewrite":
-              flushNow();
-              replaceLast((last) => ({ ...last, content: event.text }));
-              break;
-
-            case "error":
-              flushNow();
-              replaceLast((last) => ({
-                ...last,
-                content:
-                  last.content.trimEnd() +
-                  (event.message
-                    ? `\n\n[ответ оборван: ${event.message}]`
-                    : "\n\n[ответ оборван]"),
-              }));
-              break;
-
-            case "image_start":
-              flushNow();
-              replaceLast((last) => ({
-                ...last,
-                content: `${last.content.trimEnd()}\n[GENERATE_IMAGE: ${event.prompt}]`,
-              }));
-              break;
-
-            case "image_cancel":
-              flushNow();
-              replaceLast((last) => ({
-                ...last,
-                content: last.content.replace(GENERATING_IMAGE_RE, "").trimEnd(),
-              }));
-              break;
-
-            case "image_ready":
-              flushNow();
-              replaceLast((last) => {
-                if (last.content.includes(`[GENERATED_IMAGE: ${event.path}`)) return last;
-                const cleaned = last.content.replace(GENERATING_IMAGE_RE, "").trimEnd();
-                const marker = `[GENERATED_IMAGE: ${event.path} | ${event.model} | ${event.prompt}]`;
-                return { ...last, content: `${cleaned}\n${marker}` };
-              });
-              break;
-
-            case "skip":
-              // A frame no screen renders yet, or one from a newer server.
-              // Never shown: putting it in the bubble is what used to happen.
-              break;
-          }
+          case "skip":
+            // A frame no screen renders yet, or one from a newer server.
+            // Never shown: putting it in the bubble is what used to happen.
+            break;
         }
-      }
+      });
 
       flushNow();
+
+      if (result.outcome !== "done") {
+        // The reply stopped short. What is on screen is what the backend also
+        // kept: `_save_partial` (api/chat.py) stores the streamed text when the
+        // client hangs up, and the user's own row was written before the stream
+        // even opened. So the honest move is to keep it and say why it is short.
+        //
+        // This used to send DELETE /api/chat/pair here — a race against that
+        // very save, which could land after the delete and leave an orphaned
+        // half-reply that the change feed then put back on screen a moment
+        // later. Not deleting removes the race rather than fixing it.
+        replaceLast((last) => ({
+          ...last,
+          interrupted: result.outcome === "aborted" ? "stopped" : "connection",
+        }));
+      }
     } catch (err: unknown) {
       if (err instanceof Error && err.name === "AbortError") return;
+      // Only reachable before the stream opened: a refused connection, a bad
+      // status, a body that never came. Nothing streamed, so the bubble carries
+      // the reason instead of a reply.
       replaceLast((last) => ({ ...last, content: `[${describeApiError(err)}]` }));
-      // The backend kept whatever the user already saw; without this the
-      // half-pair resurfaces in history and in memory.
-      if (activePairIdRef.current) {
-        void deleteChatPair(activePairIdRef.current).catch(() => {});
-      }
       // Give the message back. It was cleared optimistically on send, and
       // losing what someone typed because the network blinked is not a
       // trade-off — it is just a loss.

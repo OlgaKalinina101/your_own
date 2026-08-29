@@ -126,6 +126,7 @@ def _append_debug_row(
     web_search: bool = False,
     citations: Optional[list] = None,
     error: Optional[str] = None,
+    usage: Optional[dict] = None,
 ) -> None:
     call_log.append({
         "ts": datetime.now(timezone.utc).isoformat(),
@@ -137,7 +138,51 @@ def _append_debug_row(
         "web_search": web_search,
         "citations": citations or None,
         "error": error,
+        # What the call actually cost, straight from the provider. Recorded
+        # because nothing else knows it: the corpus had model and kind but no
+        # money, so "what does a night of thinking cost" was unanswerable.
+        "usage": _billing(usage),
     })
+
+
+def _billing(usage: Optional[dict]) -> Optional[dict]:
+    """The few fields worth keeping out of a large usage object."""
+    if not usage:
+        return None
+    kept = {
+        key: usage[key]
+        for key in ("cost", "prompt_tokens", "completion_tokens", "total_tokens")
+        if usage.get(key) is not None
+    }
+    return kept or None
+
+
+async def fetch_account_state(api_key: str) -> dict:
+    """What OpenRouter says about the key itself: credit and recent spend.
+
+    Not a completion, so it deliberately does not go through ``_open`` and its
+    retry policy — this is read while he is mid-thought, and a slow answer is
+    worse than no answer. It lives here anyway because this module is the one
+    place that knows how to talk to OpenRouter, and a sixth hand-rolled path is
+    exactly what ``tests/test_llm_contract.py`` refuses to allow.
+
+    Raises on any failure. The caller decides what to say about that.
+    """
+    headers = {"Authorization": f"Bearer {api_key}"}
+    timeout = aiohttp.ClientTimeout(total=10)
+    async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
+        async with session.get(f"{OPENROUTER_BASE}/credits") as resp:
+            credits = (await resp.json())["data"]
+        async with session.get(f"{OPENROUTER_BASE}/key") as resp:
+            usage = (await resp.json())["data"]
+
+    return {
+        "remaining": float(credits.get("total_credits", 0))
+        - float(credits.get("total_usage", 0)),
+        "daily": float(usage.get("usage_daily", 0)),
+        "weekly": float(usage.get("usage_weekly", 0)),
+        "monthly": float(usage.get("usage_monthly", 0)),
+    }
 
 
 MIN_COMPLETE_TIMEOUT_S = 60
@@ -417,6 +462,9 @@ class LLMClient:
             "temperature": self.temperature,
             "top_p": self.top_p,
             "stream": True,
+            # Without this the response carries no cost, and the corpus cannot
+            # answer what any of this costs.
+            "usage": {"include": True},
         }
 
         # A long answer legitimately takes minutes, so there is no total budget;
@@ -434,6 +482,7 @@ class LLMClient:
         )
 
         chunks: list[str] = []
+        billing: Optional[dict] = None
         started = False   # once a chunk has reached the caller there is no going back
 
         for attempt in range(1, MAX_ATTEMPTS + 1):
@@ -456,7 +505,11 @@ class LLMClient:
                             continue
                         choices = obj.get("choices") or []
                         if not choices:
-                            # OpenRouter emits non-token SSE payloads too.
+                            # OpenRouter emits non-token SSE payloads too — and
+                            # the last of them carries the cost of the call.
+                            # It is the only place a streamed call reports it.
+                            if obj.get("usage"):
+                                billing = obj["usage"]
                             continue
                         chunk = (choices[0].get("delta") or {}).get("content")
                         if chunk:
@@ -496,6 +549,7 @@ class LLMClient:
                 await asyncio.sleep(_retry_delay(attempt, getattr(exc, "retry_after", None)))
 
         _append_debug_row(
+            usage=billing,
             call_type="stream",
             model=model,
             system=system_prompt,
@@ -531,6 +585,7 @@ class LLMClient:
             "top_p": self.top_p,
             "max_tokens": max_tokens,
             "stream": False,
+            "usage": {"include": True},
         }
 
         def _failed(detail: str):
@@ -570,6 +625,7 @@ class LLMClient:
             call_type="complete", model=self.model, system=system,
             messages=messages, response=response,
             error=("finish_reason=length" if finish_reason == "length" else None),
+            usage=body.get("usage"),
         )
         return (response, finish_reason) if return_meta else response
 
@@ -604,6 +660,7 @@ class LLMClient:
             "max_tokens": max_tokens,
             "tools": tools,
             "stream": False,
+            "usage": {"include": True},
         }
 
         def _failed(detail: str) -> tuple[str, list[dict]]:
@@ -653,6 +710,7 @@ class LLMClient:
         _append_debug_row(
             call_type="research", model=self.model, system=system, messages=messages,
             response=text_out, web_search=True, citations=citations,
+            usage=body.get("usage"),
         )
         return text_out, citations
 
@@ -691,6 +749,7 @@ class LLMClient:
             "messages": messages,
             "modalities": modalities_for(model),
             "stream": False,
+            "usage": {"include": True},
         }
         logger.info("[LLMClient] generate_image model=%s prompt=%s", model, prompt[:120])
 

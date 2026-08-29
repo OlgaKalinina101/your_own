@@ -2,6 +2,8 @@
 
 import { memo, useEffect, useMemo, useState } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
+
+import { safeUrlTransform } from "@/lib/links";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import { useMediaUrl } from "@/lib/media";
@@ -463,7 +465,15 @@ function MarkdownBlock({ text, role }: { text: string; role: "user" | "assistant
   );
 
   return (
-    <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]} components={components}>
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm, remarkBreaks]}
+      components={components}
+      // Ours, not react-markdown's `defaultUrlTransform`. Which schemes a reply
+      // may open is a decision this app should be making and be able to point
+      // at — the library's default is a reasonable one that can change under us,
+      // and the phone had no equivalent at all. See lib/links.ts.
+      urlTransform={safeUrlTransform}
+    >
       {text.trim()}
     </ReactMarkdown>
   );

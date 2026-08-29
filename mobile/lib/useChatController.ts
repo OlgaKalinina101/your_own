@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AppState } from "react-native";
-import * as Clipboard from "expo-clipboard";
 import * as ImagePicker from "expo-image-picker";
 
-import { apiFetch, apiFetchStreaming, deleteChatPair, getBackendUrl, loadSettings, loadWorkbenchLatest } from "@/lib/api";
+import { apiFetch, apiFetchStreaming, getBackendUrl, loadSettings, loadWorkbenchLatest } from "@/lib/api";
+import { apiErrorFrom, describeApiError } from "@/lib/apiError";
 import { subscribeToChanges } from "@/lib/changeFeed";
-import { parseChatSseEvent, splitSseBuffer } from "@/lib/chatSse";
+import { consumeChatStream } from "@/lib/chatStream";
 import { latestCursor, mergeMessages } from "@/lib/mergeMessages";
-import { loadSoundVolume, soundEngine } from "@/lib/soundEngine";
+import { soundEngine } from "@/lib/soundEngine";
 import type { DraftAttachment, HistoryPair, Message } from "@/lib/types";
 
 const HISTORY_BATCH = 25;
@@ -65,6 +65,7 @@ export function useChatController() {
   const [hasMore, setHasMore] = useState(true);
   const [cursor, setCursor] = useState<string | null>(null);
   const [initialLoaded, setInitialLoaded] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
   const [aiName, setAiName] = useState("CHAT");
   const [workbenchText, setWorkbenchText] = useState<string | null>(null);
   const [attachments, setAttachments] = useState<DraftAttachment[]>([]);
@@ -130,7 +131,7 @@ export function useChatController() {
       if (before) params.set("before", before);
 
       const response = await apiFetch(`/api/chat/history?${params}`);
-      if (!response.ok) throw new Error(response.status === 401 ? "auth" : `${response.status}`);
+      if (!response.ok) throw await apiErrorFrom(response);
 
       const baseUrl = (await getBackendUrl()).replace(/\/$/, "");
       const data = await response.json() as {
@@ -146,9 +147,15 @@ export function useChatController() {
       setCursor(data.next_before ?? null);
       setHasMore(Boolean(data.has_more));
       if (!before) setInitialLoaded(true);
+      if (!before) setHistoryError(null);
     } catch (error) {
       console.warn("[chat] loadHistory error:", error);
-      if (!before) setInitialLoaded(true);
+      // Only the first page can be mistaken for an empty conversation; a failed
+      // "load older" leaves what is already on screen alone.
+      if (!before) {
+        setHistoryError(describeApiError(error));
+        setInitialLoaded(true);
+      }
     } finally {
       loadingHistoryRef.current = false;
       setLoadingHistory(false);
@@ -158,6 +165,29 @@ export function useChatController() {
   const refreshWorkbench = useCallback(() => {
     loadWorkbenchLatest()
       .then((result) => setWorkbenchText(result.text ?? null))
+      .catch(() => {});
+  }, []);
+
+  /**
+   * Re-read what the server thinks the model and the name are.
+   *
+   * Read once at mount used to mean: switch to a vision model in Settings, come
+   * back, and the attach button is still missing — the chat screen stays in the
+   * stack while Settings sits on top of it, so nothing remounts and nothing
+   * re-asked. `setCanAttach` is now unconditional, so switching *away* from a
+   * vision model hides the button too.
+   *
+   * Called by whoever knows when the screen is being looked at: `useFocusEffect`
+   * in app/chat.tsx, and the AppState listener below for a return from the
+   * background. Not called here on mount — focus fires on mount, and doing both
+   * is one wasted request every time the chat opens.
+   */
+  const refreshSettings = useCallback(() => {
+    loadSettings()
+      .then((settings) => {
+        if (settings.ai_name) setAiName(settings.ai_name.toUpperCase());
+        setCanAttach(settings.model ? VISION_MODELS.has(settings.model) : false);
+      })
       .catch(() => {});
   }, []);
 
@@ -204,44 +234,45 @@ export function useChatController() {
   // what a push notification cannot deliver to an app already open.
   useEffect(() => {
     const subscription = AppState.addEventListener("change", (state) => {
-      if (state === "active") void syncNew();
+      if (state !== "active") return;
+      void syncNew();
+      refreshSettings();
     });
     const feed = subscribeToChanges(() => void syncNew());
     return () => {
       subscription.remove();
       feed.close();
     };
-  }, [syncNew]);
+  }, [syncNew, refreshSettings]);
 
   useEffect(() => {
     getBackendUrl()
       .then((url) => setBackendUrl(url.replace(/\/$/, "")))
       .catch(() => {});
     void loadHistory(null);
-    loadSettings()
-      .then((settings) => {
-        if (settings.ai_name) setAiName(settings.ai_name.toUpperCase());
-        if (settings.model) setCanAttach(VISION_MODELS.has(settings.model));
-      })
-      .catch(() => {});
     refreshWorkbench();
 
-    // Load sound engine with persisted volume
-    loadSoundVolume()
-      .then((vol) => soundEngine.load(vol))
-      .catch(() => {});
+    // The engine reads its own persisted volume and keeps its assets for the
+    // life of the process. Leaving the screen only silences the queue — it used
+    // to unload the assets, and that raced the next mount's load().
+    void soundEngine.prime();
 
     return () => {
-      soundEngine.unload().catch(() => {});
+      soundEngine.stop();
+      // Deliberately no abort here. The screen unmounting means someone walked
+      // away mid-reply; the request finishing is how the backend saves the whole
+      // thing, and it is waiting in history when they come back. Aborting would
+      // trade a complete reply for a clipped one to save a few seconds of socket.
     };
-  }, [loadHistory]);
+  }, [loadHistory, refreshWorkbench]);
 
   const pickImages = useCallback(async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== "granted") return;
 
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      // `MediaTypeOptions` is @deprecated in the installed version.
+      mediaTypes: ["images"],
       allowsMultipleSelection: true,
       quality: 0.85,
       selectionLimit: MAX_IMAGES - attachments.length,
@@ -324,7 +355,11 @@ export function useChatController() {
 
     try {
       abortRef.current = new AbortController();
-      const payloadMessages = [...messages, userMessage].map((message) => ({
+      // Read through the ref, not the closure. With `messages` in this
+      // callback's dependencies the whole of `sendMessage` was rebuilt on every
+      // animation frame of a stream, and `ChatComposer` — which takes it as a
+      // prop — re-rendered with it, TextInput and all, dozens of times a second.
+      const payloadMessages = [...messagesRef.current, userMessage].map((message) => ({
         role: message.role,
         content: message.content,
       }));
@@ -343,148 +378,147 @@ export function useChatController() {
         signal: abortRef.current.signal,
       });
 
-      if (!response.ok) {
-        throw new Error(response.status === 401 ? "Auth failed — reconnect in Settings" : `HTTP ${response.status}`);
-      }
+      // The server often knows exactly what is wrong — a 503 carries a hint
+      // saying the backend is up and Postgres is not, which is the opposite of
+      // what a bare status suggests.
+      if (!response.ok) throw await apiErrorFrom(response);
       if (!response.body) {
         throw new Error("Streaming body is unavailable");
       }
 
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let sseBuffer = "";
-      let streamDone = false;
-
-      while (!streamDone) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        const chunk = typeof value === "string" ? value : decoder.decode(value, { stream: true });
-        sseBuffer += chunk;
-
-        const { events, remainder } = splitSseBuffer(sseBuffer);
-        sseBuffer = remainder;
-
-        for (const rawEvent of events) {
-          const event = parseChatSseEvent(rawEvent);
-          if (!event) continue;
-
-          if (event.type === "done") {
-            soundEngine.endMessage();
-            streamDone = true;
-            break;
-          }
-
-          if (event.type === "pair_id") {
-            activePairIdRef.current = event.pairId;
-            // Stamp the optimistic pair so a later sync recognises it as the
-            // same thing the server stored, instead of showing it twice.
-            setMessages((prev) => {
-              const updated = [...prev];
-              for (let i = updated.length - 1, tagged = 0; i >= 0 && tagged < 2; i -= 1) {
-                if (updated[i].pairId) break;
-                updated[i] = { ...updated[i], pairId: event.pairId };
-                tagged += 1;
-              }
-              return updated;
-            });
-            continue;
-          }
-
-          if (event.type === "skip") continue;
-
-          // Mirrors frontend/app/chat/page.tsx: the notice goes into the bubble
-          // so the transcript records that the reply was cut off, not just a
-          // toast that disappears. Until now this frame reached the phone as
-          // reply text and printed its JSON.
-          if (event.type === "error") {
-            flushNow();
-            updateMessageById(assistantMessageId, (message) => ({
-              ...message,
-              content:
-                message.content.trimEnd() +
-                (event.message
-                  ? `\n\n[ответ оборван: ${event.message}]`
-                  : "\n\n[ответ оборван]"),
-            }));
-            continue;
-          }
-
-          if (event.type === "rewrite") {
-            flushNow();
-            updateMessageById(assistantMessageId, (message) => ({ ...message, content: event.text }));
-            continue;
-          }
-
-          if (event.type === "memory") {
-            updateMessageById(assistantMessageId, (message) => ({
-              ...message,
-              chromaFacts: event.chromaFacts,
-            }));
-            continue;
-          }
-
-          if (event.type === "image_start") {
-            flushNow();
-            const shimmerCmd = `[GENERATE_IMAGE: ${event.prompt}]`;
-            updateMessageById(assistantMessageId, (message) => ({
-              ...message,
-              content: message.content.trimEnd() + "\n" + shimmerCmd,
-            }));
-            continue;
-          }
-
-          if (event.type === "image_cancel") {
-            flushNow();
-            updateMessageById(assistantMessageId, (message) => ({
-              ...message,
-              content: message.content.replace(/\[GENERATE_IMAGE:[^\]]*\]/g, "").trimEnd(),
-            }));
-            continue;
-          }
-
-          if (event.type === "image_ready") {
-            flushNow();
-            const marker = `[GENERATED_IMAGE: ${event.path} | ${event.model} | ${event.prompt}]`;
-            updateMessageById(assistantMessageId, (message) => {
-              if (message.content.includes(`[GENERATED_IMAGE: ${event.path}`)) return message;
-              const cleaned = message.content.replace(/\[GENERATE_IMAGE:[^\]]*\]/g, "");
-              return { ...message, content: cleaned.trimEnd() + "\n" + marker };
-            });
-            continue;
-          }
-
-          chunkBufRef.current += event.chunk;
-          soundEngine.feed(event.chunk);
-          scheduleFlush();
+      // The stream's lifecycle lives in lib/chatStream.ts. Its outcome is the
+      // point of this whole call: `done` means the terminator arrived and the
+      // reply is whole; anything else means it is not — a distinction the loop
+      // that used to be here could not make, so half a reply was stored, shown
+      // and remembered as if it were the answer.
+      const result = await consumeChatStream(response.body.getReader(), (event) => {
+        if (event.type === "pair_id") {
+          activePairIdRef.current = event.pairId;
+          // Stamp the optimistic pair so a later sync recognises it as the
+          // same thing the server stored, instead of showing it twice.
+          setMessages((prev) => {
+            const updated = [...prev];
+            for (let i = updated.length - 1, tagged = 0; i >= 0 && tagged < 2; i -= 1) {
+              if (updated[i].pairId) break;
+              updated[i] = { ...updated[i], pairId: event.pairId };
+              tagged += 1;
+            }
+            return updated;
+          });
+          return;
         }
-      }
+
+        if (event.type === "skip") return;
+
+        // Mirrors frontend/lib/useChatController.ts: the notice goes into the
+        // bubble so the transcript records that the reply was cut off, not just
+        // a toast that disappears. Until recently this frame reached the phone
+        // as reply text and printed its JSON.
+        if (event.type === "error") {
+          flushNow();
+          updateMessageById(assistantMessageId, (message) => ({
+            ...message,
+            content:
+              message.content.trimEnd() +
+              (event.message
+                ? `\n\n[ответ оборван: ${event.message}]`
+                : "\n\n[ответ оборван]"),
+          }));
+          return;
+        }
+
+        if (event.type === "rewrite") {
+          flushNow();
+          updateMessageById(assistantMessageId, (message) => ({ ...message, content: event.text }));
+          return;
+        }
+
+        if (event.type === "memory") {
+          updateMessageById(assistantMessageId, (message) => ({
+            ...message,
+            chromaFacts: event.chromaFacts,
+          }));
+          return;
+        }
+
+        if (event.type === "image_start") {
+          flushNow();
+          const shimmerCmd = `[GENERATE_IMAGE: ${event.prompt}]`;
+          updateMessageById(assistantMessageId, (message) => ({
+            ...message,
+            content: message.content.trimEnd() + "\n" + shimmerCmd,
+          }));
+          return;
+        }
+
+        if (event.type === "image_cancel") {
+          flushNow();
+          updateMessageById(assistantMessageId, (message) => ({
+            ...message,
+            content: message.content.replace(/\[GENERATE_IMAGE:[^\]]*\]/g, "").trimEnd(),
+          }));
+          return;
+        }
+
+        if (event.type === "image_ready") {
+          flushNow();
+          const marker = `[GENERATED_IMAGE: ${event.path} | ${event.model} | ${event.prompt}]`;
+          updateMessageById(assistantMessageId, (message) => {
+            if (message.content.includes(`[GENERATED_IMAGE: ${event.path}`)) return message;
+            const cleaned = message.content.replace(/\[GENERATE_IMAGE:[^\]]*\]/g, "");
+            return { ...message, content: cleaned.trimEnd() + "\n" + marker };
+          });
+          return;
+        }
+
+        chunkBufRef.current += event.chunk;
+        soundEngine.feed(event.chunk);
+        scheduleFlush();
+      });
 
       flushNow();
+
+      if (result.outcome === "done") {
+        soundEngine.endMessage();
+        return;
+      }
+
+      // The reply stopped short. What is on screen is what the backend also
+      // kept: `_save_partial` (api/chat.py) stores the streamed text when the
+      // client hangs up, and the user's own row was written before the stream
+      // even opened. So the honest move is to keep it and say why it is short.
+      //
+      // The old code deleted both messages and sent DELETE /api/chat/pair — a
+      // race against that very save, which could land after the delete and
+      // leave an orphaned half-reply that reappeared through the change feed a
+      // moment later. Not deleting removes the race rather than fixing it.
+      updateMessageById(assistantMessageId, (message) => ({
+        ...message,
+        interrupted: result.outcome === "aborted" ? "stopped" : "connection",
+      }));
+      if (result.outcome !== "aborted") {
+        setErrorNotice("connection lost — the reply was kept");
+        setTimeout(() => setErrorNotice(null), 4000);
+      }
     } catch (error: unknown) {
+      // Only reachable before the stream opened: a refused connection, a bad
+      // status, a body that never came.
+      //
+      // One rule across both failure paths and both clients: nothing the person
+      // can see is deleted, and the bubble says what happened. This used to
+      // delete both messages and drop the text into the clipboard — the phone's
+      // own invention, and the worse half of it, since the clipboard is a
+      // shared thing to stomp on and the composer is not.
       if (error instanceof Error && error.name === "AbortError") return;
       flushNow();
 
-      // Remove both messages from UI
-      setMessages((prev) =>
-        prev.filter((m) => m.id !== userMessageId && m.id !== assistantMessageId),
-      );
-
-      // Try to delete from backend DB (best-effort, don't await result)
-      // activePairIdRef is set from the first SSE event, so we always have the correct pair
-      const pairId = activePairIdRef.current;
-      if (pairId) {
-        deleteChatPair(pairId).catch(() => {});
-        activePairIdRef.current = null;
-      }
-
-      // Copy user text to clipboard so nothing is lost
-      if (text) {
-        Clipboard.setStringAsync(text).catch(() => {});
-      }
-
-      // Ambient error notice — auto-clears after 4s
-      setErrorNotice("connection error — your message was copied");
-      setTimeout(() => setErrorNotice(null), 4000);
+      updateMessageById(assistantMessageId, (message) => ({
+        ...message,
+        content: `[${describeApiError(error)}]`,
+      }));
+      // Give the message back so retrying is one tap. It was cleared
+      // optimistically on send.
+      if (text) setInput((current) => current || text);
     } finally {
       if (rafRef.current !== null) {
         cancelAnimationFrame(rafRef.current);
@@ -502,7 +536,6 @@ export function useChatController() {
     flushNow,
     hasUploadingAttachments,
     input,
-    messages,
     scheduleFlush,
     streaming,
     updateMessageById,
@@ -512,6 +545,11 @@ export function useChatController() {
     abortRef.current?.abort();
     setStreaming(false);
   }, []);
+
+  /** After a failed first page: try again without leaving the screen. */
+  const reloadHistory = useCallback(() => {
+    void loadHistory(null);
+  }, [loadHistory]);
 
   const loadMore = useCallback(() => {
     if (hasMore && !loadingHistory) {
@@ -527,6 +565,7 @@ export function useChatController() {
     canSend,
     errorNotice,
     hasMore,
+    historyError,
     initialLoaded,
     input,
     loadingHistory,
@@ -534,7 +573,9 @@ export function useChatController() {
     reversedMessages,
     streaming,
     workbenchText,
+    refreshSettings,
     refreshWorkbench,
+    reloadHistory,
     setInput,
     pickImages,
     removeAttachment,

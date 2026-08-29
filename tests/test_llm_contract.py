@@ -276,11 +276,25 @@ class TestThereIsOnlyOneWayOut:
             "Route it through LLMClient so it inherits the retry policy."
         )
 
-    def test_the_client_opens_exactly_one_session(self):
-        """Every path goes through `_open`, which is where the policy lives."""
+    def test_every_model_call_goes_through_one_session(self):
+        """`_open` is where the retry policy lives, and it is the only way out.
+
+        The count is two, not one, and the second is named on purpose.
+        ``fetch_account_state`` reads the key's balance — not a completion, and
+        deliberately without retries: it runs while he is mid-thought, and a
+        slow answer there is worse than no answer. Any *third* session, or a
+        second POST, is the drift this test exists to catch.
+        """
         source = self.CLIENT.read_text(encoding="utf-8-sig")
-        assert source.count("aiohttp.ClientSession(") == 1
-        assert source.count("session.post(") == 1
+        assert source.count("session.post(") == 1, "a model call outside _open"
+        assert source.count("aiohttp.ClientSession(") == 2
+        assert source.count("session.get(") == 2, "GETs belong to the balance read"
+
+        balance = source[source.index("async def fetch_account_state"):]
+        balance = balance[:balance.index(chr(10) + "MIN_COMPLETE_TIMEOUT_S")]
+        assert balance.count("aiohttp.ClientSession(") == 1
+        assert balance.count("session.get(") == 2
+        assert "session.post(" not in balance
 
     def test_the_retry_policy_is_stated_once(self):
         import infrastructure.llm.client as llm_client

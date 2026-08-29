@@ -67,6 +67,14 @@ export default React.memo(function ChatMessageBubble({
         {timeLabel ? (
           <Text style={s.time}>{timeLabel}</Text>
         ) : null}
+        {msg.interrupted ? (
+          // Why this reply is short. A field rather than text inside the
+          // message, so the next sync with the server does not wipe it — see
+          // lib/mergeMessages.ts.
+          <Text style={s.interrupted}>
+            {msg.interrupted === "stopped" ? "остановлено" : "оборвано"}
+          </Text>
+        ) : null}
         {hasContent && !isStreamingLast ? (
           <Pressable
             onPress={handleCopy}
@@ -109,6 +117,12 @@ const s = StyleSheet.create({
     fontSize: 10,
     letterSpacing: 0.5,
     fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+  },
+  interrupted: {
+    color: "rgba(210,150,90,0.5)",
+    fontSize: 10,
+    letterSpacing: 1.5,
+    textTransform: "uppercase",
   },
   copyBtn: { paddingVertical: 2 },
   copyBtnPressed: { opacity: 0.5 },

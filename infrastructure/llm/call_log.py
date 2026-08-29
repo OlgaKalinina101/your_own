@@ -28,7 +28,7 @@ import logging
 import os
 import shutil
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TextIO
 
@@ -166,3 +166,46 @@ def _row_month(line: str) -> str | None:
         return datetime.fromisoformat(ts).strftime("%Y-%m") if ts else None
     except Exception:
         return None
+
+
+# Reading back is bounded on purpose: the live segment is tens of megabytes and
+# a single row averages 34 KB, so "read the file" is not an option for anything
+# that runs while he is waiting.
+_TAIL_BYTES = 16 * 1024 * 1024
+
+
+def recent(days: int = 7, *, directory: Path | None = None,
+           max_bytes: int = _TAIL_BYTES) -> list[dict]:
+    """Rows from the last *days*, newest first, read from the end of the segment.
+
+    Only the current month's segment is read. A window that reaches into last
+    month simply stops at its boundary — the alternative is decompressing an
+    archive to answer a question about this week.
+    """
+    path = _segment_path(datetime.now(timezone.utc), directory=directory)
+    if not path.exists():
+        return []
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    size = path.stat().st_size
+    with open(path, "rb") as fh:
+        fh.seek(max(0, size - max_bytes))
+        blob = fh.read()
+
+    if size > max_bytes:
+        # The first line is almost certainly cut in half by the seek.
+        blob = blob.split(b"\n", 1)[-1]
+
+    rows: list[dict] = []
+    for line in reversed(blob.splitlines()):
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+            when = datetime.fromisoformat(row["ts"])
+        except (json.JSONDecodeError, KeyError, ValueError):
+            continue
+        if when < cutoff:
+            break
+        rows.append(row)
+    return rows

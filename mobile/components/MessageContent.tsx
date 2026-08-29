@@ -18,6 +18,7 @@ import {
 } from "react-native";
 import Markdown from "react-native-markdown-display";
 import { buildChatImageSource } from "@/lib/chatImages";
+import { onMarkdownLinkPress } from "@/lib/links";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -353,7 +354,9 @@ const MessageContent = React.memo(function MessageContent({
             return <GeneratingShimmer key={`gs-${i}`} prompt={part.prompt} />;
           case "text":
             return part.text.trim() ? (
-              <Markdown key={`md-${i}`} style={mdStyles}>{part.text}</Markdown>
+              <Markdown key={`md-${i}`} style={mdStyles} onLinkPress={onMarkdownLinkPress}>
+                {part.text}
+              </Markdown>
             ) : null;
           default:
             return null;

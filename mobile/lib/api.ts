@@ -1,14 +1,34 @@
 /**
  * API client for the Your Own backend.
  *
- * Stores backend URL and auth token in AsyncStorage.
+ * Backend URL in AsyncStorage; the auth token in the keychain (see below).
  * All requests go directly to the backend URL (no Next.js proxy needed in native app).
  */
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as SecureStore from "expo-secure-store";
+import { apiErrorFrom } from "./apiError";
+import { PUSH_STORAGE_KEYS } from "./pushPolicy";
+import { decideTokenMigration } from "./tokenMigration";
 import type { Settings } from "./types";
 
 const KEY_BACKEND_URL = "backend_url";
-const KEY_AUTH_TOKEN = "auth_token";
+
+/**
+ * The token lives in the keychain, not in AsyncStorage.
+ *
+ * AsyncStorage is a SQLite file on Android and a plist on iOS: fine for an
+ * address and a volume, wrong for a credential that opens the entire backend —
+ * `/api/settings/raw` included, which hands back the OpenRouter key in full.
+ *
+ * `LEGACY_KEY_AUTH_TOKEN` is where it used to sit; it is read once, moved, and
+ * deleted. See lib/tokenMigration.ts.
+ *
+ * Default accessibility (`WHEN_UNLOCKED`) is deliberate and sufficient: nothing
+ * reads the token while the phone is locked. Push delivery does not need it —
+ * the notification is built by the Pushy handler from the payload alone.
+ */
+const SECURE_KEY_AUTH_TOKEN = "auth_token";
+const LEGACY_KEY_AUTH_TOKEN = "auth_token";
 
 export const DEFAULT_BACKEND_URL = "http://localhost:8000";
 
@@ -25,6 +45,9 @@ export async function setBackendUrl(url: string): Promise<void> {
 
 // Mirrors the stored token so it can be read synchronously.
 //
+// It also keeps the keychain out of the path of every request: `buildHeaders`
+// runs per call, and a keychain read is not free the way a SQLite read was.
+//
 // `<Image source={{uri, headers}}>` in React Native *can* carry an
 // Authorization header — a web `<img>` cannot, which is why the desktop signs
 // media URLs instead (see `frontend/lib/media.ts`). The two clients differ here
@@ -39,19 +62,63 @@ export function peekAuthToken(): string | null {
   return cachedAuthToken;
 }
 
+/** Set once the plaintext copy has been dealt with, so it is looked for once. */
+let legacyChecked = false;
+
 export async function getAuthToken(): Promise<string | null> {
-  cachedAuthToken = await AsyncStorage.getItem(KEY_AUTH_TOKEN);
-  return cachedAuthToken;
+  if (cachedAuthToken !== null) return cachedAuthToken;
+
+  let secure: string | null;
+  try {
+    secure = await SecureStore.getItemAsync(SECURE_KEY_AUTH_TOKEN);
+  } catch (error) {
+    // A keychain that will not answer is not a reason to destroy anything.
+    // Report no token, let the person reconnect, leave storage untouched.
+    console.warn("[api] secure store unreadable:", error);
+    return null;
+  }
+
+  if (legacyChecked) {
+    cachedAuthToken = secure || null;
+    return cachedAuthToken;
+  }
+
+  const legacy = await AsyncStorage.getItem(LEGACY_KEY_AUTH_TOKEN);
+  const plan = decideTokenMigration({ secure, legacy });
+  if (plan.writeSecure && plan.token) {
+    await SecureStore.setItemAsync(SECURE_KEY_AUTH_TOKEN, plan.token);
+  }
+  if (plan.clearLegacy) {
+    await AsyncStorage.removeItem(LEGACY_KEY_AUTH_TOKEN);
+  }
+  legacyChecked = true;
+  cachedAuthToken = plan.token;
+  return plan.token;
 }
 
 export async function setAuthToken(token: string): Promise<void> {
-  cachedAuthToken = token.trim();
-  await AsyncStorage.setItem(KEY_AUTH_TOKEN, cachedAuthToken);
+  const trimmed = token.trim();
+  // Deliberately allowed to throw. A token that was not stored is gone on the
+  // next launch, and the connect screen is the only place able to say so.
+  await SecureStore.setItemAsync(SECURE_KEY_AUTH_TOKEN, trimmed);
+  await AsyncStorage.removeItem(LEGACY_KEY_AUTH_TOKEN);
+  legacyChecked = true;
+  cachedAuthToken = trimmed;
 }
 
 export async function clearAuth(): Promise<void> {
   cachedAuthToken = null;
-  await AsyncStorage.multiRemove([KEY_BACKEND_URL, KEY_AUTH_TOKEN]);
+  legacyChecked = false;
+  await SecureStore.deleteItemAsync(SECURE_KEY_AUTH_TOKEN).catch(() => {});
+  // The push keys go too. Leaving them behind meant a disconnected phone still
+  // believed it was registered, so the next connect decided "unchanged" and
+  // never told the new server anything. The legacy key is in the list for a
+  // phone that was disconnected before it ever migrated.
+  await AsyncStorage.multiRemove([
+    KEY_BACKEND_URL,
+    LEGACY_KEY_AUTH_TOKEN,
+    ...PUSH_STORAGE_KEYS,
+  ]);
 }
 
 // ── HTTP helpers ──────────────────────────────────────────────────────────────
@@ -94,9 +161,13 @@ export async function apiFetchStreaming(path: string, init?: RequestInit): Promi
   });
 }
 
+// Both of these throw. `apiFetch` deliberately does not — the streaming and
+// media paths want the raw Response — but a screen asking for data has no use
+// for a 401 that looks like success, and that is how "0 memories" used to mean
+// "not authorised".
 export async function apiGet<T>(path: string): Promise<T> {
   const res = await apiFetch(path);
-  if (!res.ok) throw new Error(`GET ${path} → ${res.status}`);
+  if (!res.ok) throw await apiErrorFrom(res);
   return res.json() as Promise<T>;
 }
 
@@ -106,7 +177,7 @@ export async function apiPut<T>(path: string, body: unknown): Promise<T> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(`PUT ${path} → ${res.status}`);
+  if (!res.ok) throw await apiErrorFrom(res);
   return res.json() as Promise<T>;
 }
 
@@ -161,11 +232,6 @@ export async function loadSettings(): Promise<Settings> {
 /** Save partial settings patch to backend. */
 export async function saveSettings(patch: Partial<Settings>): Promise<void> {
   await apiPut<unknown>("/api/settings", patch);
-}
-
-/** Delete a chat pair from the backend DB by pair_id. Best-effort. */
-export async function deleteChatPair(pairId: string): Promise<void> {
-  await apiFetch(`/api/chat/pair/${pairId}`, { method: "DELETE" });
 }
 
 /** Return the latest workbench note (stripped of markdown). */

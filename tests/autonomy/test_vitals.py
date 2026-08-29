@@ -277,3 +277,133 @@ class TestWiring:
             assert "{vitals}" in load_prompt(
                 "infrastructure/autonomy/prompts/reflection_awakening.md", lang=lang
             )
+
+
+# ── Live probes ───────────────────────────────────────────────────────────────
+
+class TestTheProbes:
+    """Four things he cannot see from the inside.
+
+    Every one of them reports "could not check" instead of falling silent. An
+    absent line reads as "fine", and a panel that goes quiet when a measurement
+    fails is worse than no panel — that is finding R9 in another costume.
+    """
+
+    def test_the_disk_is_reported(self):
+        from infrastructure.autonomy.vitals import probe_disk
+
+        line = " ".join(probe_disk().values())
+
+        assert "ГБ" in line and "из" in line
+
+    def test_a_disk_that_cannot_be_read_says_so(self, monkeypatch):
+        import shutil
+
+        from infrastructure.autonomy.vitals import probe_disk
+
+        def _broken(_path):
+            raise OSError("no such device")
+
+        monkeypatch.setattr(shutil, "disk_usage", _broken)
+
+        assert "не удалось" in " ".join(probe_disk().values())
+
+    @pytest.mark.parametrize(
+        "state, detail, expected",
+        [
+            ("loaded", "mini-lm", "загружена"),
+            ("failed", "no torch", "не загрузилась"),
+            ("not_loaded", "mini-lm", "не загружалась"),
+        ],
+    )
+    def test_the_memory_model_states_are_distinguished(
+        self, monkeypatch, state, detail, expected
+    ):
+        # "not loaded" and "cannot load" look the same from outside and mean
+        # opposite things: idle, versus his recall quietly running on keywords.
+        import infrastructure.memory.embedder as embedder
+
+        from infrastructure.autonomy.vitals import probe_embedder
+
+        monkeypatch.setattr(embedder, "status", lambda: (state, detail))
+
+        assert expected in " ".join(probe_embedder().values())
+
+    @pytest.mark.asyncio
+    async def test_no_key_is_not_the_same_as_no_money(self):
+        from infrastructure.autonomy.vitals import probe_key
+
+        assert "не настроен" in " ".join((await probe_key("")).values())
+
+    @pytest.mark.asyncio
+    async def test_the_balance_is_shown_in_money(self, monkeypatch):
+        from infrastructure.autonomy import vitals
+
+        async def _state(_key):
+            return {"remaining": 23.234, "daily": 1.32, "weekly": 30.36, "monthly": 154.47}
+
+        monkeypatch.setattr(
+            "infrastructure.llm.client.fetch_account_state", _state, raising=False
+        )
+
+        out = await vitals.probe_key("sk-test")
+
+        assert out["остаток"] == "$23.23"
+        assert out["за сутки"] == "$1.32"
+        # No projection: how long that lasts is arithmetic he can do himself,
+        # and the guess behind it is not the instrument's to make.
+        assert not any("дн" in k for k in out)
+
+    @pytest.mark.asyncio
+    async def test_an_unreachable_provider_does_not_blank_the_line(self, monkeypatch):
+        from infrastructure.autonomy import vitals
+
+        async def _down(_key):
+            raise OSError("connection refused")
+
+        monkeypatch.setattr(
+            "infrastructure.llm.client.fetch_account_state", _down, raising=False
+        )
+
+        assert "не удалось" in " ".join((await vitals.probe_key("sk-test")).values())
+
+    def test_spending_counts_what_he_has_been_doing(self, monkeypatch):
+        from infrastructure.autonomy import vitals
+        from infrastructure.llm import call_log
+
+        monkeypatch.setattr(call_log, "recent", lambda days=7: [
+            {"call_type": "complete", "usage": {"cost": 0.01}},
+            {"call_type": "complete", "usage": {"cost": 0.02}},
+            {"call_type": "stream", "usage": {"cost": 0.005}},
+        ])
+
+        out = vitals.probe_spending()
+
+        assert "внутренние 2" in out["вызовов за 7 дн."]
+        assert "внутренние $0.03" in out["стоило"]
+
+    def test_calls_with_no_recorded_cost_are_named_not_hidden(self, monkeypatch):
+        from infrastructure.autonomy import vitals
+        from infrastructure.llm import call_log
+
+        # Everything logged before the provider's cost was recorded looks like
+        # this. Summing only the priced ones would show a smaller bill as if it
+        # were the whole one.
+        monkeypatch.setattr(call_log, "recent", lambda days=7: [
+            {"call_type": "complete"}, {"call_type": "stream"},
+        ])
+
+        out = vitals.probe_spending()
+
+        assert "ещё не записана" in out["стоимость"]
+
+    def test_a_corpus_that_cannot_be_read_says_so(self, monkeypatch):
+        from infrastructure.autonomy import vitals
+        from infrastructure.llm import call_log
+
+        def _broken(days=7):
+            raise OSError("dataset gone")
+
+        monkeypatch.setattr(call_log, "recent", _broken)
+
+        assert "не удалось" in " ".join(vitals.probe_spending().values())

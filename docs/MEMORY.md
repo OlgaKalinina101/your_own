@@ -104,18 +104,26 @@ When the AI emits `[SEARCH_DIALOGUE: query]` during a response, the `ResearchAge
 
 This searches **raw past conversations** stored in PostgreSQL, not distilled facts.
 
-1. NLP tokenization via `FocusPointPipeline` — lemmatization + synonym expansion (pymorphy3 + RuWordNet for RU, NLTK WordNet for EN).
-2. If embeddings available: KNN query using pgvector `<=>` cosine distance, fetching top 200 candidates.
-3. If embeddings unavailable: fallback to PostgreSQL array `&&` overlap on `focus_point` keyword arrays.
-4. Each candidate scored:
+1. The question is read once into a `_Query`: pipeline lemmas, surface forms, the
+   normalised text, and an embedding.
+2. **With an embedding** — KNN via pgvector `<=>` cosine distance, top 200 candidates,
+   then scored:
    ```
    composite = min(1.0, cosine_similarity + keyword_boost + exact_boost)
    ```
-   - `keyword_boost`: +0.10 per matching lemma, max +0.25
+   - `keyword_boost`: +0.10 per matching token, max +0.25
    - `exact_boost`: +0.15 for exact match, +0.10 for subset
-5. Floor filters: cosine < 0.35 or total < 0.40 are discarded.
-6. Deduplicate by `pair_id`, keep best-scored chunk per pair.
-7. Full user+assistant text fetched for the top pairs.
+   - floors: cosine < 0.35 or total < 0.40 are discarded
+3. **Without an embedding** — the model failed to load, which is what happens on a
+   fresh machine. Candidates come from a PostgreSQL array `&&` overlap on
+   `focus_point`, and are ranked by how much of the question they carry, newest
+   first among equals. There is no score threshold here: with one or two concepts
+   per question a threshold either admits everything or nothing. The run is
+   coarser than usual and says so in the log — memory that quietly answers worse
+   is the failure this branch exists to avoid.
+4. Deduplicate by `pair_id`, keep the best-scored chunk per pair.
+5. Full user+assistant text fetched for the top pairs — the chunk only decides
+   *which* moment; he is shown the whole exchange.
 
 Results are injected back into the conversation as a continuation prompt, and the AI continues its reply with awareness of what it found.
 
@@ -145,11 +153,32 @@ During autonomous reflection, the AI can emit `[WRITE_NOTE: text]` (workbench) o
 
 ---
 
+## The two vocabularies
+
+`focus_point` — the keyword array on every chunk — is written by
+`extract_focus_fast` over each stored sentence, so it holds whatever form that
+sentence used. On a live corpus both forms are there: "говорить" in 85 chunks and
+"говорили" in 13, "чувствовать" in 53 and "чувствовала" in 41.
+
+The two extractors applied to a *question* produce disjoint sets. So every lookup
+into `focus_point` — the keyword boost and the no-embedding branch alike — uses
+the **union** of both. Consulting either alone reads half the index and reports
+the other half as absent.
+
+The subset test inside `exact_boost` deliberately keeps the narrower set: against
+the union it would ask for every word in both its forms at once, which nothing
+satisfies.
+
+---
+
 ## NLP Pipeline
 
 Both Chroma and pgvector retrieval use `FocusPointPipeline` (`infrastructure/memory/focus_point.py`) for keyword extraction:
 
-- Language detection (Russian vs. English)
+- Language detection (Russian vs. English) — the rule itself lives in
+  `infrastructure/language.py`. Cyrillic wins; text with **no letters at all** is
+  not evidence of anything, and falls back to the language the soul prompt is
+  written in rather than to English
 - Tokenization and lemmatization:
   - **Russian**: `pymorphy3` for morphological analysis, `RuWordNet` for synonyms
   - **English**: NLTK tokenizer, `WordNet` for synonyms
@@ -167,4 +196,7 @@ Both Chroma and pgvector retrieval use `FocusPointPipeline` (`infrastructure/mem
 | `infrastructure/memory/key_info.py` | SAVE_MEMORY handler — extract, rate, dedup, store |
 | `infrastructure/memory/focus_point.py` | NLP — lemmatization, synonyms, language detection |
 | `api/chat.py` — `_build_chroma_block()` | Formats facts for context injection |
-| `api/chat.py` — context assembly (~line 430) | Assembles the full LLM message list |
+| `api/chat.py` — `_assemble_llm_messages()` | History, memory block, the question — the list as the model sees it |
+| `api/chat.py` — `_build_system_prompt()` | Soul + skills + the state blocks the registry allows chat |
+| `infrastructure/autonomy/context.py` | Which state blocks each consumer gets, and why |
+| `infrastructure/language.py` | One rule for what language to answer in |

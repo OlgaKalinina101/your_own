@@ -4,142 +4,109 @@
  * Each entry is a collapsible section with the timestamp as header.
  * Tap to expand/collapse. All collapsed by default.
  */
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useRef, useState } from "react";
 import {
-  Animated,
-  Easing,
+  ActivityIndicator,
+  FlatList,
   SafeAreaView,
-  ScrollView,
   StyleSheet,
   Text,
-  TouchableOpacity,
   View,
 } from "react-native";
 import { loadWorkbenchEntries } from "@/lib/api";
+import Collapsible from "@/components/Collapsible";
+import { Empty, Loading, LoadFailed } from "@/components/ScreenState";
+import { useResource } from "@/lib/useResource";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
 type WbEntry = { ts: string; text: string };
-
-// ── Collapsible journal entry ────────────────────────────────────────────────
-
-function JournalEntry({ entry }: { entry: WbEntry }) {
-  const [open, setOpen] = useState(false);
-  const anim = useRef(new Animated.Value(0)).current;
-
-  const toggle = useCallback(() => {
-    const next = !open;
-    setOpen(next);
-    Animated.timing(anim, {
-      toValue: next ? 1 : 0,
-      duration: 260,
-      easing: Easing.out(Easing.quad),
-      useNativeDriver: false,
-    }).start();
-  }, [open, anim]);
-
-  const bodyMaxHeight = anim.interpolate({
-    inputRange: [0, 1],
-    outputRange: [0, 4000],
-  });
-
-  const bodyOpacity = anim.interpolate({
-    inputRange: [0, 0.3, 1],
-    outputRange: [0, 0, 1],
-  });
-
-  const chevronRotate = anim.interpolate({
-    inputRange: [0, 1],
-    outputRange: ["0deg", "90deg"],
-  });
-
-  return (
-    <View style={sty.section}>
-      <TouchableOpacity
-        onPress={toggle}
-        activeOpacity={0.6}
-        style={sty.sectionHeader}
-      >
-        <Animated.Text
-          style={[sty.chevron, { transform: [{ rotate: chevronRotate }] }]}
-        >
-          ›
-        </Animated.Text>
-        <Text style={sty.sectionTs}>{entry.ts}</Text>
-      </TouchableOpacity>
-
-      <Animated.View
-        style={{ maxHeight: bodyMaxHeight, opacity: bodyOpacity, overflow: "hidden" }}
-      >
-        <Text style={sty.entryText}>{entry.text}</Text>
-      </Animated.View>
-    </View>
-  );
-}
 
 // ── Main screen ──────────────────────────────────────────────────────────────
 
 const PAGE_SIZE = 50;
 
 export default function JournalScreen() {
-  const [entries, setEntries] = useState<WbEntry[]>([]);
-  const [hasMore, setHasMore] = useState(true);
-  const [loading, setLoading] = useState(false);
+  // Paging state lives in refs, not state, and that is the fix rather than a
+  // style choice: the old `if (loading) return` read a state flag that is still
+  // the previous value inside one tick, so two scroll events in the same frame
+  // both passed it and both fetched — the same page twice, appended twice. The
+  // desktop hit this exact bug in its history loader and fixed it the same way.
   const offsetRef = useRef(0);
+  const hasMoreRef = useRef(true);
+  const loadingMoreRef = useRef(false);
+  const [loadingMore, setLoadingMore] = useState(false);
 
-  const fetchPage = useCallback(async (reset = false) => {
-    if (loading) return;
-    if (!reset && !hasMore) return;
-
-    const offset = reset ? 0 : offsetRef.current;
-    setLoading(true);
-    try {
-      const data = await loadWorkbenchEntries(offset, PAGE_SIZE);
-      const newEntries = data.entries;
-
-      if (reset) {
-        setEntries(newEntries);
-      } else {
-        setEntries(prev => [...prev, ...newEntries]);
-      }
-      offsetRef.current = offset + newEntries.length;
-      setHasMore(data.has_more);
-    } catch (err) {
-      console.warn("[journal] workbench fetch failed:", err);
-    } finally {
-      setLoading(false);
-    }
-  }, [loading, hasMore]);
-
-  useEffect(() => {
-    fetchPage(true);
+  const { resource, reload, update } = useResource<WbEntry[]>(async () => {
+    const data = await loadWorkbenchEntries(0, PAGE_SIZE);
+    offsetRef.current = data.entries.length;
+    hasMoreRef.current = data.has_more;
+    return data.entries;
   }, []);
 
-  const handleLoadMore = useCallback(() => {
-    if (!loading && hasMore) fetchPage();
-  }, [loading, hasMore, fetchPage]);
+  const loadMore = useCallback(async () => {
+    if (loadingMoreRef.current || !hasMoreRef.current) return;
+    loadingMoreRef.current = true;
+    setLoadingMore(true);
+    try {
+      const data = await loadWorkbenchEntries(offsetRef.current, PAGE_SIZE);
+      offsetRef.current += data.entries.length;
+      hasMoreRef.current = data.has_more;
+      update((current) => [...current, ...data.entries]);
+    } catch (error) {
+      // The first page is the one that must not lie about being empty; a failed
+      // page two just leaves what is already on screen and can be tried again
+      // by scrolling.
+      console.warn("[journal] could not load more:", error);
+      hasMoreRef.current = false;
+    } finally {
+      loadingMoreRef.current = false;
+      setLoadingMore(false);
+    }
+  }, [update]);
+
+  if (resource.status === "loading") {
+    return (
+      <SafeAreaView style={sty.root}>
+        <Loading />
+      </SafeAreaView>
+    );
+  }
+
+  if (resource.status === "error") {
+    return (
+      <SafeAreaView style={sty.root}>
+        <LoadFailed message={resource.message} onRetry={reload} />
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={sty.root}>
-      <ScrollView
+      <FlatList
+        data={resource.data}
+        keyExtractor={(entry, index) => `${entry.ts}-${index}`}
+        renderItem={({ item }) => (
+          <Collapsible title={item.ts}>
+            <Text style={sty.entryText}>{item.text}</Text>
+          </Collapsible>
+        )}
         contentContainerStyle={sty.scrollContent}
         showsVerticalScrollIndicator={false}
-        onMomentumScrollEnd={(e) => {
-          const { layoutMeasurement, contentOffset, contentSize } = e.nativeEvent;
-          if (contentOffset.y + layoutMeasurement.height >= contentSize.height - 100) {
-            handleLoadMore();
-          }
-        }}
-      >
-        {entries.map((entry, i) => (
-          <JournalEntry key={`${entry.ts}-${i}`} entry={entry} />
-        ))}
-        {loading ? (
-          <View style={sty.loaderWrap}>
-            <Text style={sty.loaderDots}>···</Text>
-          </View>
-        ) : null}
-      </ScrollView>
+        // onEndReached, not onMomentumScrollEnd: the old handler never fired
+        // when someone dragged slowly to the bottom without flinging, so the
+        // list simply stopped growing and looked finished.
+        onEndReached={loadMore}
+        onEndReachedThreshold={0.4}
+        ListEmptyComponent={<Empty text="nothing written yet" />}
+        ListFooterComponent={
+          loadingMore ? (
+            <View style={sty.loaderWrap}>
+              <ActivityIndicator size="small" color="rgba(255,255,255,0.4)" />
+            </View>
+          ) : null
+        }
+      />
     </SafeAreaView>
   );
 }
@@ -149,32 +116,12 @@ export default function JournalScreen() {
 const sty = StyleSheet.create({
   root: { flex: 1, backgroundColor: "#000" },
   scrollContent: {
+    flexGrow: 1,
     paddingHorizontal: 20,
     paddingTop: 16,
     paddingBottom: 40,
   },
 
-  section: {
-    marginBottom: 12,
-  },
-  sectionHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingVertical: 10,
-  },
-  chevron: {
-    color: "rgba(255,255,255,0.3)",
-    fontSize: 14,
-    marginRight: 8,
-    fontWeight: "300",
-  },
-  sectionTs: {
-    color: "rgba(255,255,255,0.35)",
-    fontSize: 10,
-    letterSpacing: 4,
-    textTransform: "uppercase",
-    fontWeight: "500",
-  },
 
   entryText: {
     color: "rgba(255,255,255,0.55)",
@@ -188,10 +135,5 @@ const sty = StyleSheet.create({
   loaderWrap: {
     alignItems: "center",
     paddingVertical: 16,
-  },
-  loaderDots: {
-    color: "rgba(255,255,255,0.2)",
-    fontSize: 18,
-    letterSpacing: 6,
   },
 });

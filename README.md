@@ -175,7 +175,7 @@ On first run, the backend generates a random auth token and saves it to `data/au
 - In the backend console on startup: `[startup] Auth token: xxxxxxx`
 - In the file: `data/auth_token.txt`
 
-On the local machine (Electron), the token is acquired automatically — no manual setup needed. On remote devices (phone, another laptop), enter it once in **Settings → Server Connection → Auth Token**.
+On the local machine (Electron), the token is passed to the app over IPC — no manual setup needed. There is deliberately no HTTP endpoint that hands out the token: anything that could reach the port could ask for it, and on a machine with a local proxy that included things outside your network. On remote devices (phone, another laptop), enter it once in **Settings → Server Connection → Auth Token**.
 
 ### Remote Access
 
@@ -225,14 +225,20 @@ API requests from the phone go through a built-in Next.js proxy (`/api/*` → ba
 │  FastAPI backend (0.0.0.0:8000)                          │
 │  ├── Agentic pipeline (skills, image gen)                │
 │  ├── Memory retrieval (pgvector + ChromaDB)              │
+│  ├── Context registry — who sees which state block       │
 │  ├── Autonomy engine                                     │
 │  │   ├── Reflection worker (thinks, writes, reaches out) │
 │  │   ├── Scheduled push worker (delivers timed messages) │
 │  │   ├── Workbench rotator (archives notes, extracts     │
 │  │   │   self-insights, reviews identity)                │
-│  │   └── Identity memory (persistent self-model)         │
+│  │   ├── Identity memory (persistent self-model)         │
+│  │   ├── Open-threads board (what is still unfinished)   │
+│  │   └── Vitals (its own instrument panel)               │
+│  ├── One transport to OpenRouter (retries, timeouts)     │
+│  ├── One clock (stored UTC, shown in your timezone)      │
 │  ├── Settings store (data/settings.json, data/soul.md)   │
-│  └── Auth (data/auth_token.txt)                          │
+│  ├── Call corpus (data/dataset/, kept in full)           │
+│  └── Auth (data/auth_token.txt) + single-process lock    │
 │                                                          │
 │  PostgreSQL + pgvector                                   │
 │  ChromaDB (key_info + workbench_archive)                 │
@@ -265,16 +271,22 @@ API requests from the phone go through a built-in Next.js proxy (`/api/*` → ba
 - Pagination for older chat history
 - Available on desktop, web, and mobile
 
-### Two-Layer Memory
+### Memory in Four Surfaces
 
-| Layer              | Store                  | Purpose                                        | Source                    |
-|--------------------|------------------------|-------------------------------------------------|---------------------------|
-| Raw conversations  | PostgreSQL + pgvector  | Sentence-level chunks with embeddings + keywords | ChatGPT import + live chat |
-| Distilled facts    | ChromaDB (`key_info`)  | Key facts rated by importance (1–4 stars)        | AI via `[SAVE_MEMORY]` + self-insights from reflection |
+They are not tiers of the same thing — each decays differently, and that is the point.
 
-**ChromaDB facts** are automatically loaded into the AI context as its "memory block" — filtered by age so only older, settled memories surface.
+| Surface | Store | What it holds | How it ends |
+|---|---|---|---|
+| **The library** | ChromaDB `key_info` | Distilled facts, rated 1–4 | Never; surfaces by relevance |
+| **The desk** | `data/autonomy/{account}/workbench.md` | Today's thinking, written by the AI to itself | Decays by time — archived after ~48h |
+| **The board** | `data/autonomy/{account}/threads.md` | Open threads that must live forward — a debt, a count, a topic to revive | Only by an explicit "done" |
+| **The skin** | `data/autonomy/{account}/identity.md` | The self-model: who it is, who you are, what you have been through | Slowly, by rewriting |
 
-**pgvector** is used when the AI explicitly calls `[SEARCH_DIALOGUE]` to dig into raw past conversations.
+Underneath all four: **PostgreSQL + pgvector** holds the raw conversations — sentence-level chunks with embeddings and keywords, from your ChatGPT import and every live message.
+
+**ChromaDB facts** are loaded into every chat automatically as the memory block, filtered by age so only settled memories surface. **pgvector** is searched when the AI explicitly calls `[SEARCH_DIALOGUE]`.
+
+Which surface is visible where is decided in one registry (`infrastructure/autonomy/context.py`) rather than by whichever prompt happens to be built — chat sees the canon of the identity, the board and the last desk entries; reflection sees all of it, plus its own vitals.
 
 ### Hybrid Retrieval
 
@@ -288,6 +300,7 @@ API requests from the phone go through a built-in Next.js proxy (`/api/*` → ba
 | Exact match     | Extra bonus for literal word match                |
 | Impressive      | Priority by importance rating (4 = always on top) |
 | Recency         | Penalty for age > 60 days (except rating 4)       |
+| Degraded mode   | If the embedding model cannot load, dialogue search ranks on word overlap and recency instead, and says in the log that it is running coarse |
 
 ### Agentic Skill Pipeline
 
@@ -298,8 +311,9 @@ The AI doesn't just respond — it acts. During a conversation, the model invoke
 | **`[SAVE_MEMORY: fact]`** | Extracts a key fact, categorizes it, rates importance 1–4, deduplicates via AI, stores in ChromaDB |
 | **`[SEARCH_DIALOGUE: query]`** | Searches raw conversation history in pgvector through the `ResearchAgent`, which re-queries with a different formulation when the first attempt misses. A brief plus the excerpts is fed back as a continuation prompt. Up to 5 searches per reply. `[SEARCH_MEMORIES]` is still accepted as the old name |
 | **`[WEB_SEARCH: query]`** | Searches the live web for current information (weather, news, prices, addresses). Runs through the `ResearchAgent` orchestrator, which drives a searcher model with OpenRouter's `openrouter:web_search` and `openrouter:web_fetch` server tools, judges the result, re-queries when it misses, and returns a brief with sources |
-| **`[GENERATE_IMAGE: model \| prompt]`** | Generates an image using `gpt5` (GPT-5 Image — photorealistic) or `gemini` (Gemini 3 Pro — design, diagrams, text). AI chooses the model and writes the prompt |
+| **`[GENERATE_IMAGE: model \| prompt]`** | Generates an image. The AI picks the model and writes the prompt: `gpt5` (photorealistic), `gemini` (design, diagrams, text), `flux`, or `grok` |
 | **`[SCHEDULE_MESSAGE: datetime \| text]`** | Schedules a push notification for later. The AI decides when and what to send — a reminder, a thought, a check-in |
+| **`[PIN_THREAD]` / `[UNPIN_THREAD]` / `[UPDATE_THREAD]`** | Puts something unfinished on the board, closes it, or rewrites it. Threads never expire by time — only when the AI says it is done |
 
 **How the agentic loop works:**
 
@@ -330,7 +344,7 @@ Reflection runs in a loop — the AI can take multiple steps, think, search, wri
 
 #### Workbench
 
-A markdown file (`data/workbench/default.md`) that serves as the AI's scratchpad. The AI writes notes to itself here — thoughts, plans, observations, things it wants to remember short-term. The workbench is included in the reflection prompt so the AI can pick up where it left off.
+A markdown file (`data/autonomy/{account}/workbench.md`) that serves as the AI's scratchpad. The AI writes notes to itself here — thoughts, plans, observations, things it wants to remember short-term. The workbench is included in the reflection prompt so the AI can pick up where it left off.
 
 #### Workbench Rotator
 
@@ -343,7 +357,25 @@ Notes don't stay on the workbench forever. A rotator runs before each reflection
 
 #### Identity Memory
 
-A persistent self-model the AI maintains about itself — who it is, who you are, the nature of your relationship, shared history, and guiding principles. Stored as a markdown file (`data/identity/default.md`) with bilingual section headers (Russian/English, auto-detected). The identity is included in every reflection prompt and can be updated by the AI through reflection.
+A persistent self-model the AI maintains about itself — who it is, who you are, the nature of your relationship, shared history, and guiding principles. Stored as a markdown file (`data/autonomy/{account}/identity.md`) with bilingual section headers (Russian/English, auto-detected). The identity is included in every reflection prompt and can be updated by the AI through reflection.
+
+#### Open-Threads Board
+
+A short markdown file (`data/autonomy/{account}/threads.md`) the AI keeps of things that are still open — a debt, a running count, a topic it wants to come back to, a word it is still turning over. Unlike the workbench, nothing leaves the board by time. It goes when the AI says it is done. The board is in view everywhere, chat included.
+
+#### Vitals
+
+The AI's own instrument panel — a fifth surface, holding not what it thinks but what is true about the machinery it runs on:
+
+- when it last woke, whether that waking worked, how many steps it took
+- how long the system has been up, and when it was last down
+- what is left on the OpenRouter key, and what the last day, week and month cost
+- whether the embedding model is loaded — without it, long-term recall silently drops to keyword matching
+- how much room is left on disk, where its journal is written
+
+Two kinds of numbers, deliberately treated differently. **Deltas** — a failed waking, a gap, a restart — are pushed at it unasked, because a gap it does not know about is exactly the failure being guarded against. **State** is pulled on demand with `[VITALS]`, which is what stops the waking prompt from growing every time something new is measured.
+
+Facts only, no verdicts: the panel reports that a waking did not happen. It never says a night was lost, and never says everything is fine. Reading the numbers is the AI's job.
 
 #### Push Notifications
 
@@ -399,12 +431,14 @@ The backend binds to `0.0.0.0` so it's reachable over the network. The auth toke
 | Raw memory | PostgreSQL + pgvector |
 | Fact memory | ChromaDB |
 | Archived notes | ChromaDB (`workbench_archive` collection) |
-| ORM / migrations | SQLAlchemy (async) + Alembic |
+| ORM / migrations | SQLAlchemy 2.0 (async) + Alembic |
 | Embeddings | sentence-transformers (`paraphrase-multilingual-MiniLM-L12-v2`, 384-dim) |
 | NLP (Russian) | pymorphy3 + RuWordNet |
 | NLP (English) | NLTK WordNet |
-| LLM provider | OpenRouter (GPT, Claude, Gemini, Llama, Qwen, and more) |
-| Image generation | OpenRouter → GPT-5 Image, Gemini 3 Pro Image |
+| LLM provider | OpenRouter — one transport for every call, with one retry policy |
+| Chat models | Claude Fable, Kimi, Gemini Pro, GPT Chat, GLM (all "latest" aliases) |
+| Image generation | OpenRouter → GPT Image, Gemini 3 Pro Image, Flux, Grok Imagine |
+| Call corpus | `data/dataset/` — every call in full, monthly segments, gzipped when closed |
 | Push notifications | Pushy (pushy.me) |
 
 ---

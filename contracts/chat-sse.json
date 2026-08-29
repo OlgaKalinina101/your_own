@@ -12,7 +12,8 @@
     "The rule that makes 'unknown event' detectable: text chunks carry NO 'event:' line.",
     "Every named event has one. So an unrecognised name is an unrecognised event, never",
     "text — which is what both clients used to get wrong.",
-    "Frames marked \"synthetic\" are not emitted by the backend: `skill` never was — both clients carry it in a skip-list that predates the contract — and the unknown-event case is invented on purpose. They pin client behaviour, so the backend's coverage test ignores them."
+    "Frames marked \"synthetic\" are not emitted by the backend: `skill` never was — both clients carry it in a skip-list that predates the contract — and the unknown-event case is invented on purpose. They pin client behaviour, so the backend's coverage test ignores them.",
+    "The \"streams\" section pins the lifecycle rather than a single frame: chunks are hex-encoded UTF-8 bytes, \"then\" is what the reader does once they run out (close / throw / abort), and \"outcome\" is the one thing both clients used to be unable to tell apart — a stream that finished from a stream that stopped."
   ],
   "frames": [
     {
@@ -245,6 +246,106 @@
         "data: b"
       ],
       "remainder": ""
+    }
+  ],
+  "streams": [
+    {
+      "name": "a stream that reached [DONE]",
+      "chunks": [
+        "6576656e743a20706169725f69640a646174613a207b22706169725f6964223a20227031227d0a0a",
+        "646174613a20d09fd180d0b8d0b2d0b5d1820a0a",
+        "646174613a205b444f4e455d0a0a"
+      ],
+      "then": "close",
+      "outcome": "done",
+      "events": [
+        {
+          "type": "pair_id",
+          "pairId": "p1"
+        },
+        {
+          "type": "text",
+          "chunk": "Привет"
+        }
+      ]
+    },
+    {
+      "name": "the socket closed with no [DONE] — truncated, not finished",
+      "$comment": "The whole reason this file has a streams section. Both clients used to treat this exactly like the case above.",
+      "chunks": [
+        "6576656e743a20706169725f69640a646174613a207b22706169725f6964223a20227031227d0a0a",
+        "646174613a20d09fd180d0b8d0b2d0b5d1820a0a"
+      ],
+      "then": "close",
+      "outcome": "truncated",
+      "events": [
+        {
+          "type": "pair_id",
+          "pairId": "p1"
+        },
+        {
+          "type": "text",
+          "chunk": "Привет"
+        }
+      ]
+    },
+    {
+      "name": "the reader threw — events read before the throw still count",
+      "chunks": [
+        "646174613a20d09fd0bed0bb0a0a"
+      ],
+      "then": "throw",
+      "outcome": "failed",
+      "events": [
+        {
+          "type": "text",
+          "chunk": "Пол"
+        }
+      ]
+    },
+    {
+      "name": "the reader was aborted",
+      "chunks": [
+        "646174613a20d09fd0bed0bb0a0a"
+      ],
+      "then": "abort",
+      "outcome": "aborted",
+      "events": [
+        {
+          "type": "text",
+          "chunk": "Пол"
+        }
+      ]
+    },
+    {
+      "name": "a chunk boundary inside a Cyrillic character",
+      "$comment": "The decoder must be fed with {stream: true}; without it these two chunks decode to replacement characters and the reply shows mojibake mid-word.",
+      "chunks": [
+        "646174613a20d09fd1",
+        "80d0b8d0b2d0b5d1820a0a"
+      ],
+      "then": "close",
+      "outcome": "truncated",
+      "events": [
+        {
+          "type": "text",
+          "chunk": "Привет"
+        }
+      ]
+    },
+    {
+      "name": "[DONE] stops the read even with more frames behind it",
+      "chunks": [
+        "646174613a20610a0a646174613a205b444f4e455d0a0a646174613a20620a0a"
+      ],
+      "then": "close",
+      "outcome": "done",
+      "events": [
+        {
+          "type": "text",
+          "chunk": "a"
+        }
+      ]
     }
   ]
 }

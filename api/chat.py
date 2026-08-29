@@ -869,7 +869,18 @@ async def _save_partial(pair_id: uuid.UUID, account_id: Optional[str], text: str
         rows = _assistant_rows(pair_id, account_id, text, text)
         await asyncio.get_running_loop().run_in_executor(None, fill_chunk_embeddings, rows)
         async with get_db_session() as _db:
-            await MessageRepository(_db).bulk_save(rows)
+            # Conditional on the pair still existing, and it has to be, because
+            # this task is detached: computing the embeddings takes seconds, and
+            # `DELETE /api/chat/pair/{id}` can arrive inside that window. Writing
+            # unconditionally left a half-reply with no question in front of it.
+            written = await MessageRepository(_db).bulk_save_if_pair_exists(rows, str(pair_id))
+        if not written:
+            logger.info(
+                "[chat] dropped a partial reply for pair=%s — the pair was deleted "
+                "while it was being prepared",
+                pair_id,
+            )
+            return
         logger.warning(
             "[chat] saved a partial reply for pair=%s (%d chars) — stream did not finish",
             pair_id, len(text),
