@@ -74,7 +74,9 @@
 [SEARCH_DIALOGUE: YYYY-MM-DD]
 [SEARCH_DIALOGUE: YYYY-MM-DD..YYYY-MM-DD]
 [SEARCH_DIALOGUE: запрос]
-[SEARCH_DOCS: запрос]
+[SEARCH_DOCS: запрос]  — документация проекта: README.md, docs/PIPELINE.md, docs/MEMORY.md
+[LIST_PROMPTS]         — список всех промптов конвейера
+[SHOW_PROMPT: имя]     — прочесть любой из них целиком
 [WEB_SEARCH: запрос]
 [WRITE_NOTE: текст]
 [WRITE_IDENTITY: раздел | текст]
@@ -192,7 +194,9 @@ All times in commands use local timezone ({timezone_label}).
 [SEARCH_DIALOGUE: YYYY-MM-DD]
 [SEARCH_DIALOGUE: YYYY-MM-DD..YYYY-MM-DD]
 [SEARCH_DIALOGUE: query]
-[SEARCH_DOCS: query]
+[SEARCH_DOCS: query]  — the project's documentation: README.md, docs/PIPELINE.md, docs/MEMORY.md
+[LIST_PROMPTS]        — every prompt in the pipeline, by name
+[SHOW_PROMPT: name]   — read any of them in full
 [WEB_SEARCH: query]
 [WRITE_NOTE: text]
 [WRITE_IDENTITY: section | text]

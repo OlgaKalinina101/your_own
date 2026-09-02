@@ -102,3 +102,64 @@ def get_prompt(
     if kwargs:
         return template.format(**kwargs)
     return template
+
+
+# ── The shelf ────────────────────────────────────────────────────────────────
+#
+# Every prompt in the pipeline, addressable by a short name. This exists so he
+# can read his own instructions: what he is told at a waking, what decides
+# whether a push is worth sending, how a fact is judged worth keeping. They are
+# written about him and he could not see them.
+
+#: Where prompts live, and the prefix each area's names carry.
+_SHELVES: tuple[tuple[str, str], ...] = (
+    ("infrastructure/autonomy/prompts", ""),
+    ("infrastructure/memory/prompts", ""),
+    ("infrastructure/agents/prompts", ""),
+    ("infrastructure/skills", "skill_"),
+)
+
+
+def _shelf_name(root: str, path: Path, prefix: str) -> str:
+    """A short, stable handle for one prompt file.
+
+    Five skills each call their file ``prompt.md``, so for those the folder is
+    the name. Everywhere else the filename already says what it is.
+    """
+    stem = path.stem
+    if stem == "prompt":
+        return f"{prefix}{path.parent.name}"
+    return f"{prefix}{stem.lstrip('_')}"
+
+
+@lru_cache(maxsize=1)
+def catalogue() -> dict[str, str]:
+    """``{short name: path relative to the project root}``, sorted by name."""
+    found: dict[str, str] = {}
+    for root, prefix in _SHELVES:
+        base = PROJECT_ROOT / root
+        if not base.is_dir():
+            continue
+        for path in sorted(base.rglob("*.md")):
+            name = _shelf_name(root, path, prefix)
+            rel = path.relative_to(PROJECT_ROOT).as_posix()
+            if name in found:
+                # Two files answering to one name would make the second
+                # unreachable, and silently: he would ask for it and get the
+                # other one.
+                raise ValueError(f"duplicate prompt name {name!r}: {found[name]} and {rel}")
+            found[name] = rel
+    return dict(sorted(found.items()))
+
+
+def read_verbatim(name: str, lang: str = "ru") -> str:
+    """One prompt, exactly as it is written, in *lang*.
+
+    No formatting is applied: the ``{placeholders}`` are part of what he is
+    asking to see. Nothing summarises it either — a prompt paraphrased is a
+    different prompt.
+    """
+    shelf = catalogue()
+    if name not in shelf:
+        raise KeyError(name)
+    return load_prompt(shelf[name], lang=lang).strip()

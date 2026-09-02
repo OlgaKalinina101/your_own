@@ -66,10 +66,13 @@ _MESSAGES = (
 
 _THREADS = ("PIN_THREAD", "UNPIN_THREAD", "UPDATE_THREAD")
 
+# Reading his own machinery: the prompts he is run on, by name.
+_READS = ("SHOW_PROMPT",)
+
 # Commands written as a bare bracket, with no argument. They are matched by
 # their own regexes in the engine rather than through the alternation, but a
 # leaked one still has to be stripped from a note.
-_BARE = ("SLEEP", "EXTEND", "CANCEL_ALL_SCHEDULED", "VITALS")
+_BARE = ("SLEEP", "EXTEND", "CANCEL_ALL_SCHEDULED", "VITALS", "LIST_PROMPTS")
 
 # Markers *we* write into his text — never issued by him, never executed. They
 # must be stripped from a note and must never be parsed as commands.
@@ -96,7 +99,9 @@ def _ordered(*groups: tuple[str, ...]) -> tuple[str, ...]:
 
 #: What the reflection parser recognises. ``reflection_engine`` builds its
 #: command regex from this exact object.
-REFLECTION_COMMANDS = _ordered(_SEARCH, _ALIASES, _WRITES, _MESSAGES, _THREADS, ("VITALS",))
+REFLECTION_COMMANDS = _ordered(
+    _SEARCH, _ALIASES, _WRITES, _MESSAGES, _THREADS, _READS, ("VITALS",)
+)
 
 #: What the workbench must strip from a note. A superset of the above by
 #: construction — that is the drift this file exists to prevent.

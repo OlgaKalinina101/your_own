@@ -92,7 +92,7 @@ _CMD_ALTERNATION = "|".join(REFLECTION_COMMANDS)
 # to the next ``]`` and swallows whatever command sat in between. The lookahead
 # below stops the argument at any command opener, so a broken command is
 # dropped on its own instead of eating its neighbour.
-_ARG_STOPPER = r"(?:\[(?:" + _CMD_ALTERNATION + r"):|\[SLEEP\]|\[VITALS\]|\[CANCEL[_ ]ALL[_ ]SCHEDULED\])"
+_ARG_STOPPER = r"(?:\[(?:" + _CMD_ALTERNATION + r"):|\[SLEEP\]|\[VITALS\]|\[LIST[_ ]PROMPTS\]|\[CANCEL[_ ]ALL[_ ]SCHEDULED\])"
 
 _CMD_RE = re.compile(
     r"\[(?P<cmd>" + _CMD_ALTERNATION + r"):\s*"
@@ -110,6 +110,7 @@ _UNCLOSED_CMD_RE = re.compile(
 
 _SLEEP_RE = re.compile(r"\[SLEEP\]", re.IGNORECASE)
 _VITALS_RE = re.compile(r"\[VITALS\]", re.IGNORECASE)
+_LIST_PROMPTS_RE = re.compile(r"\[LIST[_ ]PROMPTS\]", re.IGNORECASE)
 _CANCEL_ALL_RE = re.compile(r"\[CANCEL[_ ]ALL[_ ]SCHEDULED\]", re.IGNORECASE)
 _EXTEND_RE = re.compile(r"\[EXTEND:\s*(\d+)\]", re.IGNORECASE)
 
@@ -337,6 +338,65 @@ async def _run_search(
     return "\n\n".join(p for p in parts if p)
 
 
+#: A prompt he asks to see is returned whole, but not without limit: the
+#: awakening prompt alone is 10 KB, and a step that spends its budget on one
+#: document has nothing left to think with.
+PROMPT_MAX_CHARS = 6000
+
+
+def _list_prompts(lang: str = "ru") -> str:
+    """Every prompt in the pipeline, by name — the shelf, not the books.
+
+    Pulled on demand rather than carried in the awakening prompt. Twenty-one
+    names would cost him context at every waking to answer a question he asks
+    rarely; the same reasoning as the vitals panel.
+    """
+    from infrastructure.llm.prompt_loader import catalogue
+
+    shelf = catalogue()
+    header = (
+        f"Промпты конвейера ({len(shelf)}). Любой можно прочесть: [SHOW_PROMPT: имя]"
+        if lang == "ru"
+        else f"Pipeline prompts ({len(shelf)}). Read any of them: [SHOW_PROMPT: name]"
+    )
+    lines = [f"  {name} — {path}" for name, path in shelf.items()]
+    return "\n".join([header, *lines])
+
+
+def _read_prompt(name: str, lang: str = "ru") -> str:
+    """One prompt, verbatim, in the language he is thinking in.
+
+    Not through the research agent on purpose. He is asking for the text, and a
+    model in the middle would paraphrase it — a prompt retold is a different
+    prompt. The ``{placeholders}`` stay as they are: they are part of what it
+    actually says.
+    """
+    from infrastructure.llm.prompt_loader import read_verbatim
+
+    try:
+        body = read_verbatim(name, lang)
+    except KeyError:
+        return (
+            f"Промпта {name!r} нет. Список: [LIST_PROMPTS]" if lang == "ru"
+            else f"No prompt named {name!r}. The list: [LIST_PROMPTS]"
+        )
+    except Exception as exc:
+        logger.warning("[reflection] SHOW_PROMPT %s failed: %s", name, exc)
+        return (
+            f"Не удалось прочитать {name!r}: {exc}" if lang == "ru"
+            else f"Could not read {name!r}: {exc}"
+        )
+
+    if len(body) > PROMPT_MAX_CHARS:
+        cut = len(body) - PROMPT_MAX_CHARS
+        tail = (
+            f"\n\n[…обрезано {cut} символов]" if lang == "ru"
+            else f"\n\n[…{cut} characters cut]"
+        )
+        body = body[:PROMPT_MAX_CHARS] + tail
+    return f"=== {name} ===\n{body}"
+
+
 async def _handle_command(
     cmd: str,
     arg: str,
@@ -350,6 +410,9 @@ async def _handle_command(
 
     if cmd in _SEARCH_SOURCES:
         return await _run_search(cmd, arg, account_id, api_key, db, lang)
+
+    if cmd == "SHOW_PROMPT":
+        return _read_prompt(arg.strip(), lang)
 
     elif cmd == "WRITE_NOTE":
         wb.append(account_id, arg.strip())
@@ -614,6 +677,13 @@ async def _execute_response(
             logger.info("[reflection:%s] CANCEL_ALL_SCHEDULED: %d cancelled", account_id, count)
         except Exception as exc:
             logger.warning("[reflection] CANCEL_ALL_SCHEDULED error: %s", exc)
+
+    if _LIST_PROMPTS_RE.search(response):
+        try:
+            outcome.results.append(f"[LIST_PROMPTS] → {_list_prompts(lang)}")
+            logger.info("[reflection:%s] LIST_PROMPTS read", account_id)
+        except Exception as exc:
+            logger.warning("[reflection] LIST_PROMPTS error: %s", exc)
 
     if _VITALS_RE.search(response):
         try:
