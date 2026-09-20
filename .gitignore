@@ -38,9 +38,18 @@ debug_dataset.jsonl
 
 # ChromaDB persistent storage
 chroma_data/
-infrastructure/vector_store/*.bin
-infrastructure/vector_store/*.sqlite3
-infrastructure/vector_store/*/
+# His semantic memory lives inside a source directory that a deploy overwrites,
+# so this is an allowlist, not a denylist: everything here is ignored and the
+# one file that belongs in the repo is named back in. Listing the formats
+# instead (*.bin, *.sqlite3, */) held only until Chroma wrote a file of a shape
+# nobody had listed, and that file would then ride a deploy onto the server.
+#
+# The first line must NOT be written "vector_store/" — git cannot re-include a
+# file whose parent directory is excluded, and the negation below would be dead.
+infrastructure/vector_store/*
+# The embedding-model stamp is meant to be tracked: a mismatch between it and
+# the configured model is supposed to be loud, and it cannot be if it is local.
+!infrastructure/vector_store/.embedding_model
 
 # IDE
 .idea/
