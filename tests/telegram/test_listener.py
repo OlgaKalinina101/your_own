@@ -71,6 +71,13 @@ class TestOneMessageBecomesOneRow:
         assert hers.is_owner is True
         assert theirs.is_owner is False
 
+    def test_a_handle_typed_by_hand_also_names_her(self):
+        row = listener.row_from_message(
+            _msg(text="я тут", sender_id="555", username="nishtyakina"),
+            account_id=ACCOUNT, owner_user_id="@Nishtyakina",
+        )
+        assert row.is_owner is True
+
     def test_without_an_owner_configured_nobody_is_her(self):
         row = listener.row_from_message(
             _msg(text="я тут", sender_id=OWNER), account_id=ACCOUNT, owner_user_id="",

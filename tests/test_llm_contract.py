@@ -19,6 +19,7 @@ from aiohttp import web
 from infrastructure.llm.client import (
     IMAGE_ONLY_PREFIXES,
     LLMClient,
+    _TEXT_ATTACHMENT_LIMIT,
     _content_part,
     modalities_for,
     parse_image_response,
@@ -133,12 +134,23 @@ class TestAttachmentShapes:
     def test_a_very_long_file_is_cut_and_says_so(self):
         """Silently cutting it is the failure mode that matters: the model
         answers about the first half, confidently, and nothing says why."""
-        part = _content_part(b"a" * 400_000, "text/plain", "big.txt")
-        assert len(part["text"]) < 250_000
+        oversized = b"a" * (_TEXT_ATTACHMENT_LIMIT + 50_000)
+        part = _content_part(oversized, "text/plain", "big.txt")
+        assert len(part["text"]) < _TEXT_ATTACHMENT_LIMIT + 1_000
         assert "cut here" in part["text"]
 
     def test_a_file_that_fits_is_not_marked_as_cut(self):
         assert "cut here" not in _content_part(b"short", "text/plain", "s.txt")["text"]
+
+    def test_a_book_length_story_arrives_whole(self):
+        """The limit is not a round number someone liked: it is set against the
+        smallest context among the models on offer. A 252k-character story was
+        the first real attachment and it was cut at 200k — that is what this
+        size is here to keep from happening again."""
+        story = ("я" * 252_573).encode()
+        part = _content_part(story, "text/plain", "story.txt")
+        assert "cut here" not in part["text"]
+        assert part["text"].count("я") == 252_573
 
 
 class TestWhatTheModelIsNotShown:

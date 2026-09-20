@@ -131,6 +131,12 @@ def row_from_message(
 
     sender_id = str(sender.get("id", ""))
     stamp = message.get("date")
+    # "Her" may be given as the numeric id the picker stores, or as a handle
+    # typed by hand — "@nishtyakina" is what a person knows about themselves.
+    owner = str(owner_user_id or "").strip().lstrip("@").lower()
+    is_owner = bool(owner) and (
+        sender_id == owner or str(sender.get("username") or "").lower() == owner
+    )
     created_at = (
         datetime.fromtimestamp(int(stamp), tz=timezone.utc)
         if stamp else datetime.now(timezone.utc)
@@ -145,7 +151,7 @@ def row_from_message(
         message_id=int(message.get("message_id", 0)),
         sender_id=sender_id,
         sender_name=sender_name_of(sender),
-        is_owner=bool(owner_user_id) and sender_id == str(owner_user_id),
+        is_owner=is_owner,
         is_self=False,
         reply_to_message_id=int(reply["message_id"]) if reply.get("message_id") else None,
         text=text,

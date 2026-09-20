@@ -357,9 +357,19 @@ def kind_of(mime: str) -> str:
 
 
 # A text file longer than this is cut, with the cut announced in the text the
-# model sees. Roughly 50k tokens — enough for any note or transcript she would
-# attach, and short of the point where one file crowds out the conversation.
-_TEXT_ATTACHMENT_LIMIT = 200_000
+# model sees.
+#
+# This was 200_000 on the guess that it was "enough for any note or transcript
+# she would attach". The first real file was a 252k-character story that mattered
+# to her, and 21% of it never reached him — he read to the cut and said so.
+#
+# The number now comes from the models instead of from a guess. The binding one
+# is the smallest: gpt-chat-latest at 400k tokens, where Cyrillic runs about two
+# characters per token — call it 800k characters of room, less ~30k of system
+# prompt and whatever history weighs. The other four hold 1M tokens and upwards.
+# 500k leaves every one of them headroom, and an attachment is sent on the
+# message it rides and never re-sent: only the typed text is kept as history.
+_TEXT_ATTACHMENT_LIMIT = 500_000
 
 
 def _content_part(data: bytes, mime: str, filename: str) -> dict:
