@@ -4,6 +4,9 @@
   • Используй, когда нужен свежий факт: погода, новости, адрес, режим работы, цена, текущая информация.
   • Формулируй запрос коротко и конкретно, без лишних слов.
   • Если важно проверить что-то актуальное снаружи — просто смотри.
+  • Можно ограничить поиск одним сайтом — допиши `site:домен`. Например
+    `[WEB_SEARCH: site:instagram.com кафе в Ереване]` ищет только в инстаграме.
+    Работает с любым доменом: `site:youtube.com`, `site:reddit.com` и так далее.
 
 ### web_continuation
 Ты искал в интернете: {web_query}
@@ -28,6 +31,9 @@
   • Use it when you need a fresh external fact: weather, news, address, opening hours, price, current info.
   • Keep the query short and concrete.
   • If they ask about something current outside — just look, don't say you have no internet.
+  • You can restrict the search to a single site — add `site:domain`. For example
+    `[WEB_SEARCH: site:instagram.com cafes in Yerevan]` searches only Instagram.
+    Works with any domain: `site:youtube.com`, `site:reddit.com`, and so on.
 
 ### web_continuation
 You searched the web for: {web_query}

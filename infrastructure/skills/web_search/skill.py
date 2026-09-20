@@ -14,7 +14,7 @@ class WebSearchSkill(SkillBase):
         "en": "AI searches the live web for fresh external information.",
         "ru": "AI ищет актуальную информацию в интернете.",
     }
-    example = "[WEB_SEARCH: weather Yerevan today]"
+    example = "[WEB_SEARCH: site:instagram.com cafes in Yerevan]"
     action_type = "agentic"
     persist_in_db = True
     parse_re = re.compile(r"\[WEB[_ ]SEARCH:\s*(.*?)\]", re.DOTALL | re.IGNORECASE)
