@@ -330,7 +330,7 @@ async def _workbench_notes(query: str, ctx: ResearchContext) -> str:
 # summarising step for a single good pass.
 
 
-DOC_FILES = ("README.md", "docs/PIPELINE.md", "docs/MEMORY.md")
+DOC_FILES = ("README.md", "docs/PIPELINE.md", "docs/MEMORY.md", "docs/TELEGRAM.md")
 DOCS_MAX_CHARS = 120_000
 # The whole corpus goes in as input, so the model reasons a lot before it
 # writes — and that reasoning is billed against max_tokens. Measured: at 2000
@@ -421,10 +421,104 @@ async def probe_docs(query: str, ctx: ResearchContext) -> ProbeResult:
 
 # ── Registry ──────────────────────────────────────────────────────────────────
 
+# ── Chat (the group with her friends) ─────────────────────────────────────────
+#
+# Same store shape as the dialogue source — rows with an embedding in
+# Postgres — but a room, not pairs. A hit is one line; what he is shown is the
+# line with its neighbours, because a single message out of a group chat is
+# rarely legible on its own.
+
+CHAT_MIN_SIMILARITY = 0.35
+CHAT_NEIGHBOURS = 3
+
+
+async def probe_chat(query: str, ctx: ResearchContext) -> ProbeResult:
+    """Lines from the group chat that resemble the query, each with context."""
+    if ctx.db is None:
+        logger.warning("[sources.chat] no db session — search skipped")
+        return ProbeResult()
+
+    from sqlalchemy import text as sql
+
+    from infrastructure.settings_store import load_settings
+
+    chat_id = str(load_settings().get("telegram_chat_id") or "").strip()
+    if not chat_id:
+        logger.info("[sources.chat] no group configured")
+        return ProbeResult()
+
+    top_n = int(ctx.extras.get("top_n", 6))
+    params: dict = {"a": ctx.account_id, "c": chat_id, "n": top_n}
+
+    from infrastructure.memory.embedder import embed_one
+
+    vector = await _to_thread(lambda: embed_one(query))
+    if vector is not None:
+        params["q"] = "[" + ",".join(f"{v:.8f}" for v in vector) + "]"
+        params["floor"] = CHAT_MIN_SIMILARITY
+        stmt = sql(
+            "SELECT message_id, 1 - (embedding <=> cast(:q as vector)) AS sim "
+            "FROM channel_messages "
+            "WHERE account_id = :a AND chat_id = :c AND embedding IS NOT NULL "
+            "  AND 1 - (embedding <=> cast(:q as vector)) >= :floor "
+            "ORDER BY embedding <=> cast(:q as vector) LIMIT :n"
+        )
+    else:
+        # No model on this machine: a plain substring match, newest first.
+        # Coarser, and said so in the log — see retrieval.py for the same call.
+        logger.warning("[sources.chat] no embedding — falling back to a substring match")
+        params["like"] = f"%{query}%"
+        stmt = sql(
+            "SELECT message_id, 1.0 AS sim FROM channel_messages "
+            "WHERE account_id = :a AND chat_id = :c AND text ILIKE :like "
+            "ORDER BY created_at DESC LIMIT :n"
+        )
+
+    anchors = (await ctx.db.execute(stmt, params)).all()
+    if not anchors:
+        logger.info("[sources.chat] nothing found query=%s", query[:120])
+        return ProbeResult()
+
+    from infrastructure.autonomy.helpers import get_ai_name
+    from infrastructure.database.models.channel_message import ChannelMessage
+    from infrastructure.telegram.responder import render_room
+    from sqlalchemy import select
+
+    ai_name = get_ai_name()
+    hits: list[dict] = []
+    citations: list[Citation] = []
+    for message_id, sim in anchors:
+        rows = (await ctx.db.execute(
+            select(ChannelMessage)
+            .where(ChannelMessage.account_id == ctx.account_id)
+            .where(ChannelMessage.chat_id == chat_id)
+            .where(ChannelMessage.message_id.between(message_id - CHAT_NEIGHBOURS, message_id + CHAT_NEIGHBOURS))
+            .order_by(ChannelMessage.message_id.asc())
+        )).scalars().all()
+        if not rows:
+            continue
+        anchor = next((r for r in rows if r.message_id == message_id), rows[0])
+        day = anchor.created_at.strftime("%Y-%m-%d") if anchor.created_at else "?"
+        hits.append({
+            "text": f"[{day}]\n" + render_room(list(rows), ai_name=ai_name, lang=ctx.lang),
+            "meta": {
+                "kind": "chat",
+                "message_id": message_id,
+                "time": day,
+                "score": float(sim) if sim is not None else None,
+                "sender": anchor.sender_name,
+            },
+        })
+        citations.append(Citation(title=f"{day} {anchor.sender_name}", ref=str(message_id)))
+
+    return ProbeResult(hits=hits, citations=citations)
+
+
 PROBES: dict[str, Callable[[str, ResearchContext], Awaitable[ProbeResult]]] = {
     Source.WEB: probe_web,
     Source.DIALOGUE: probe_dialogue,
     Source.FACTS: probe_facts,
     Source.NOTES: probe_notes,
     Source.DOCS: probe_docs,
+    Source.CHAT: probe_chat,
 }

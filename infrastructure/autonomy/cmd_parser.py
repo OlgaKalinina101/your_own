@@ -2,6 +2,7 @@
 
 Parses the bracketed commands that the LLM can emit in autonomy contexts:
   [SEND_MESSAGE: text]
+  [SEND_TO_CHAT: text]
   [SCHEDULE_MESSAGE: YYYY-MM-DD HH:MM | text]
   [CANCEL_MESSAGE: YYYY-MM-DD HH:MM]
   [CANCEL_ALL_SCHEDULED]
@@ -21,6 +22,7 @@ from typing import Literal
 
 class CmdType(str, Enum):
     SEND_MESSAGE = "SEND_MESSAGE"
+    SEND_TO_CHAT = "SEND_TO_CHAT"
     SCHEDULE_MESSAGE = "SCHEDULE_MESSAGE"
     CANCEL_MESSAGE = "CANCEL_MESSAGE"
     CANCEL_ALL_SCHEDULED = "CANCEL_ALL_SCHEDULED"
@@ -34,6 +36,14 @@ class CmdType(str, Enum):
 @dataclass
 class SendMessage:
     type: Literal[CmdType.SEND_MESSAGE] = CmdType.SEND_MESSAGE
+    text: str = ""
+
+
+@dataclass
+class SendToChat:
+    """A line into the group chat with her friends — not to her, to the room."""
+
+    type: Literal[CmdType.SEND_TO_CHAT] = CmdType.SEND_TO_CHAT
     text: str = ""
 
 
@@ -89,7 +99,7 @@ class UpdateThread:
 
 
 ParsedCommand = (
-    SendMessage | ScheduleMessage | CancelMessage | CancelAllScheduled
+    SendMessage | SendToChat | ScheduleMessage | CancelMessage | CancelAllScheduled
     | RescheduleMessage | RewriteMessage | PinThread | UnpinThread | UpdateThread
 )
 
@@ -99,6 +109,10 @@ _TS = r"\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}"
 
 _SEND_RE = re.compile(
     r"\[SEND[_ ]MESSAGE:\s*(?P<text>.+?)\]",
+    re.IGNORECASE | re.DOTALL,
+)
+_SEND_TO_CHAT_RE = re.compile(
+    r"\[SEND[_ ]TO[_ ]CHAT:\s*(?P<text>.+?)\]",
     re.IGNORECASE | re.DOTALL,
 )
 _SCHEDULE_RE = re.compile(
@@ -138,6 +152,7 @@ _UPDATE_THREAD_RE = re.compile(
 # All command regexes in one pass — used for stripping commands from free text.
 _ALL_CMDS_RE = re.compile(
     r"\[(?:(?:SEND|SCHEDULE|CANCEL|RESCHEDULE|REWRITE)[_ ]MESSAGE:[^\]]*"
+    r"|SEND[_ ]TO[_ ]CHAT:[^\]]*"
     r"|CANCEL[_ ]ALL[_ ]SCHEDULED"
     r"|(?:PIN|UNPIN|UPDATE)[_ ]THREAD:[^\]]*)\]",
     re.IGNORECASE | re.DOTALL,
@@ -156,6 +171,9 @@ def parse_commands(response: str) -> list[ParsedCommand]:
 
     for m in _SEND_RE.finditer(response):
         hits.append((m.start(), SendMessage(text=m.group("text").strip())))
+
+    for m in _SEND_TO_CHAT_RE.finditer(response):
+        hits.append((m.start(), SendToChat(text=m.group("text").strip())))
 
     for m in _SCHEDULE_RE.finditer(response):
         ts = " ".join(m.group("ts").split())   # normalise any extra whitespace

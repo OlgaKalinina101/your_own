@@ -4,6 +4,8 @@ All endpoints require Bearer authentication except /ping.
 """
 from __future__ import annotations
 
+import logging
+
 from infrastructure.account import ACCOUNT_ID
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
@@ -15,6 +17,8 @@ from infrastructure.settings_store import (
     save_settings,
     save_soul,
 )
+
+logger = logging.getLogger("settings_api")
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
@@ -38,6 +42,9 @@ class SettingsPatch(BaseModel):
     research_model: str | None = None
     research_web_engine: str | None = None
     research_max_attempts: int | None = None
+    telegram_bot_token: str | None = None
+    telegram_chat_id: str | None = None
+    telegram_owner_user_id: str | None = None
 
 
 class SoulBody(BaseModel):
@@ -50,7 +57,7 @@ class SoulBody(BaseModel):
 async def get_settings(_token: str = Depends(require_auth)):
     data = load_settings()
     masked = {**data}
-    for field in ("openrouter_api_key", "pushy_api_key"):
+    for field in ("openrouter_api_key", "pushy_api_key", "telegram_bot_token"):
         val = masked.get(field, "")
         if val and len(val) > 8:
             masked[field] = val[:4] + "…" + val[-4:]
@@ -92,6 +99,73 @@ async def get_skills(_token: str = Depends(require_auth)):
             "enabled": enabled_ids is None or s.id in enabled_ids,
         })
     return {"skills": skills_out}
+
+
+# ── Telegram ──────────────────────────────────────────────────────────────────
+
+
+@router.get("/telegram/status")
+async def telegram_status(_token: str = Depends(require_auth)):
+    """What the settings page needs to pick the group and the person.
+
+    ``chats`` are the rooms the bot has been spoken to in, from the listener's
+    state file; ``members`` are the people seen in the chosen room, from the
+    table. Both empty until the bot is in a group and someone has written.
+    """
+    from infrastructure.telegram import listener
+
+    settings = load_settings()
+    chat_id = str(settings.get("telegram_chat_id") or "")
+    state = listener.read_state(ACCOUNT_ID)
+    chats = [
+        {"chat_id": cid, **info} for cid, info in (state.get("chats") or {}).items()
+    ]
+    chats.sort(key=lambda c: c.get("last_seen") or "", reverse=True)
+
+    members: list[dict] = []
+    stored: list[dict] = []
+    try:
+        from infrastructure.database.engine import get_db_session
+        from infrastructure.database.repositories.channel_repo import ChannelRepository
+
+        async with get_db_session() as db:
+            repo = ChannelRepository(db)
+            stored = await repo.list_chats(ACCOUNT_ID)
+            if chat_id:
+                members = await repo.list_senders(ACCOUNT_ID, chat_id)
+    except Exception as exc:   # the page still renders without the database
+        logger.warning("[settings] telegram status: database unavailable: %s", exc)
+
+    counts = {c["chat_id"]: c["messages"] for c in stored}
+    for chat in chats:
+        chat["messages"] = counts.get(chat["chat_id"], 0)
+
+    return {
+        "configured": bool(settings.get("telegram_bot_token")),
+        "bot": state.get("bot"),
+        "chat_id": chat_id,
+        "owner_user_id": str(settings.get("telegram_owner_user_id") or ""),
+        "chats": chats,
+        "members": members,
+    }
+
+
+@router.put("/telegram/verify")
+async def telegram_verify(_token: str = Depends(require_auth)):
+    """Ask Telegram who the stored token belongs to, and remember the answer."""
+    from infrastructure.telegram import listener
+    from infrastructure.telegram.client import TelegramError, get_client
+
+    client = get_client()
+    if client is None:
+        return {"ok": False, "error": "no_token"}
+    state = listener.read_state(ACCOUNT_ID)
+    state.pop("bot", None)   # a new token may be a new bot
+    try:
+        bot = await listener.ensure_bot_identity(ACCOUNT_ID, client, state)
+    except TelegramError as exc:
+        return {"ok": False, "error": exc.description or str(exc)}
+    return {"ok": True, "bot": bot}
 
 
 # ── Soul CRUD ────────────────────────────────────────────────────────────────

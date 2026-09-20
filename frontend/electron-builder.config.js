@@ -9,20 +9,15 @@ module.exports = {
   productName: "Your Own",
   copyright: "AGPL-3.0",
 
-  // Files to include in the app bundle
+  // Files to include in the app bundle. A packaged app is a thin client that
+  // loads the remote server, so it ships only the Electron shell — not the Next
+  // build, not the backend. The UI comes from https://victoraihome.com at
+  // runtime; keeping .next out of the bundle is what makes this a client rather
+  // than a second copy of the whole app.
   files: [
     "electron/**/*",
-    ".next/**/*",
-    "public/**/*",
-    "node_modules/**/*",
     "package.json",
-    "next.config.mjs",
   ],
-
-  // Extra resources bundled alongside the app (backend goes here)
-  // extraResources: [
-  //   { from: "../", to: "backend", filter: ["**/*", "!frontend/**", "!.git/**"] }
-  // ],
 
   directories: {
     output: "dist",

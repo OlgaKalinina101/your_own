@@ -82,6 +82,21 @@ export interface Settings {
   research_model?: string;
   research_web_engine?: string;
   research_max_attempts?: number;
+  // Telegram — the group chat. Strings on purpose: a group id is negative and
+  // a user id can exceed what a JS number round-trips.
+  telegram_bot_token?: string;
+  telegram_chat_id?: string;
+  telegram_owner_user_id?: string;
+}
+
+/** `GET /api/settings/telegram/status` — what the picker on the settings page needs. */
+export interface TelegramStatus {
+  configured: boolean;
+  bot: { id: number; username: string; name: string } | null;
+  chat_id: string;
+  owner_user_id: string;
+  chats: { chat_id: string; title: string; type: string; last_seen?: string; messages: number }[];
+  members: { sender_id: string; sender_name: string; messages: number; last_seen?: string }[];
 }
 
 /** `GET /api/settings/skills`. Desktop only — the phone has no skills screen. */

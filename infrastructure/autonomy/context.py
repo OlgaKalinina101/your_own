@@ -41,6 +41,9 @@ class Consumer(str, Enum):
     REFLECTION = "reflection"
     POST_ANALYSIS = "post_analysis"
     PUSH_VALIDATION = "push_validation"
+    # The group chat with her friends. He is in public there: he gets the
+    # whole of who he is, and none of the board — see the registry below.
+    TELEGRAM = "telegram"
 
 
 @dataclass
@@ -102,8 +105,11 @@ def _canon(request: Request, _consumer: Consumer) -> str:
 
 
 # How much of the desk each consumer sees. Reflection reads the whole thing
-# because rotation is its job; everyone else gets the last few notes.
+# because rotation is its job; everyone else gets the last few notes. The group
+# gets fewer still: enough to know where he and she are today, not enough to
+# carry the desk into a public room.
 WORKBENCH_RECENT_ENTRIES = 3
+WORKBENCH_RECENT_ENTRIES_PUBLIC = 2
 
 
 def _workbench(request: Request, consumer: Consumer) -> str:
@@ -111,9 +117,11 @@ def _workbench(request: Request, consumer: Consumer) -> str:
 
     if consumer is Consumer.REFLECTION:
         return workbench.read(request.account_id)
-    return workbench.get_recent_entries(
-        request.account_id, max_entries=WORKBENCH_RECENT_ENTRIES,
+    entries = (
+        WORKBENCH_RECENT_ENTRIES_PUBLIC if consumer is Consumer.TELEGRAM
+        else WORKBENCH_RECENT_ENTRIES
     )
+    return workbench.get_recent_entries(request.account_id, max_entries=entries)
 
 
 def _open_threads(request: Request, _consumer: Consumer) -> str:
@@ -156,9 +164,11 @@ _ALL = frozenset(Consumer)
 SECTIONS: tuple[Section, ...] = (
     Section(
         name="identity",
-        consumers=frozenset({Consumer.REFLECTION, Consumer.POST_ANALYSIS}),
+        consumers=frozenset({Consumer.REFLECTION, Consumer.POST_ANALYSIS, Consumer.TELEGRAM}),
         render=_identity,
-        why="the pillars, whole. Chat gets only the canon; the validator needs neither.",
+        why="the pillars, whole. Chat gets only the canon; the validator needs neither. "
+            "The group gets all of it: in a room full of people, who she is and "
+            "who he is are the two things he must not lose.",
     ),
     Section(
         name="canon",
@@ -178,11 +188,12 @@ SECTIONS: tuple[Section, ...] = (
     ),
     Section(
         name="open_threads",
-        consumers=_ALL,
+        consumers=_ALL - {Consumer.TELEGRAM},
         render=_open_threads,
         omit_when_empty=frozenset({Consumer.CHAT}),
         why="the board is present-continuous: it is in view everywhere, including "
-            "the validator, which decides whether to interrupt someone.",
+            "the validator, which decides whether to interrupt someone. Everywhere "
+            "but the group: the board is the two of them, and he is in public there.",
     ),
     Section(
         name="vitals",

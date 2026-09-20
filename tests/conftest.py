@@ -31,10 +31,11 @@ def _state_off_the_real_thing(tmp_path_factory, monkeypatch):
     """
     from infrastructure.autonomy import identity_memory, threads, vitals, workbench
     from infrastructure.llm import call_log
+    from infrastructure.telegram import listener as telegram_listener
 
     root = tmp_path_factory.mktemp("state")
     monkeypatch.setattr(call_log, "DATASET_DIR", root / "dataset")
-    for module in (identity_memory, threads, vitals, workbench):
+    for module in (identity_memory, threads, vitals, workbench, telegram_listener):
         monkeypatch.setattr(module, "_DATA_DIR", root / "autonomy")
 
 

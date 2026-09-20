@@ -10,12 +10,16 @@ will notice when one goes missing.
 from __future__ import annotations
 
 import asyncio
+import logging
+from base64 import b64encode
 
 import pytest
 from aiohttp import web
 
 from infrastructure.llm.client import (
     IMAGE_ONLY_PREFIXES,
+    LLMClient,
+    _content_part,
     modalities_for,
     parse_image_response,
 )
@@ -46,6 +50,146 @@ class TestImageOnlyModels:
     def test_every_prefix_ends_with_a_slash(self):
         # Without it "x-ai" would also match "x-airline/whatever".
         assert all(p.endswith("/") for p in IMAGE_ONLY_PREFIXES)
+
+
+class TestAttachmentShapes:
+    """The three shapes an attachment can take on the way out.
+
+    OpenRouter does not take one envelope for everything: a picture is an
+    ``image_url`` data URI, sound is ``input_audio`` with bare base64 and a bare
+    codec name, and documents and video both ride in a ``file`` part. Getting
+    the shape wrong is a 400 at best; at worst the provider accepts it and
+    answers about nothing, which is what a wrong ``format`` does.
+    """
+
+    def test_a_picture_goes_as_a_data_uri(self):
+        part = _content_part(b"\x89PNG", "image/png", "shot.png")
+        assert part["type"] == "image_url"
+        assert part["image_url"]["url"] == "data:image/png;base64," + b64encode(b"\x89PNG").decode()
+
+    def test_sound_goes_as_raw_base64_with_no_data_uri(self):
+        # input_audio takes the bytes alone. A data: prefix here is accepted
+        # and then decoded as audio, which it is not.
+        part = _content_part(b"ID3", "audio/wav", "clip.wav")
+        assert part["type"] == "input_audio"
+        assert part["input_audio"]["data"] == b64encode(b"ID3").decode()
+        assert not part["input_audio"]["data"].startswith("data:")
+
+    def test_an_mp3_is_called_mp3_and_not_mpeg(self):
+        """Every picker on Android and the web hands us "audio/mpeg" for an
+        mp3, and "mpeg" is not a format OpenRouter knows — so the naive
+        subtype split sends sound that is silently never listened to."""
+        assert _content_part(b"ID3", "audio/mpeg", "a.mp3")["input_audio"]["format"] == "mp3"
+
+    @pytest.mark.parametrize(
+        "mime,expected",
+        [("audio/wav", "wav"), ("audio/x-wav", "wav"), ("audio/mp4", "mp4"),
+         ("audio/x-m4a", "m4a"), ("audio/ogg; codecs=opus", "ogg")],
+    )
+    def test_the_codec_name_is_bare(self, mime, expected):
+        assert _content_part(b"x", mime, "c")["input_audio"]["format"] == expected
+
+    def test_a_document_carries_the_name_the_model_will_see(self):
+        part = _content_part(b"%PDF", "application/pdf", "invoice.pdf")
+        assert part["type"] == "file"
+        assert part["file"]["filename"] == "invoice.pdf"
+        assert part["file"]["file_data"].startswith("data:application/pdf;base64,")
+
+    def test_a_nameless_document_still_has_a_name(self):
+        # OpenRouter rejects a file part with no filename.
+        assert _content_part(b"x", "application/pdf", "")["file"]["filename"] == "attachment"
+
+    def test_video_rides_in_a_file_part(self):
+        """Not for want of a video_url shape — that one exists and is refused.
+        This is the one Gemini actually watches."""
+        part = _content_part(b"\x00\x00ftyp", "video/mp4", "clip.mp4")
+        assert part["type"] == "file"
+        assert part["file"]["file_data"].startswith("data:video/mp4;base64,")
+
+    def test_a_text_file_becomes_prose_and_not_an_attachment(self):
+        """A .txt in a file part is refused by four of the five models, and
+        every one of them reads the same bytes as text. So it is never sent as
+        an attachment — the encoding that nobody can open becomes the one
+        everybody can."""
+        part = _content_part("привет".encode(), "text/plain", "note.txt")
+        assert part["type"] == "text"
+        assert "привет" in part["text"]
+
+    def test_the_inlined_text_says_which_file_it_came_from(self):
+        # Two attached files otherwise run together into one wall of text with
+        # no way for the model — or her — to tell which said what.
+        part = _content_part(b"x = 1", "text/x-python", "calc.py")
+        assert "calc.py" in part["text"]
+
+    def test_a_nameless_text_file_is_still_marked_off(self):
+        assert "attachment" in _content_part(b"hi", "text/plain", "")["text"]
+
+    def test_bytes_that_are_not_utf8_do_not_raise(self):
+        # A file saved in cp1251 is common here and must not take the message
+        # down; the unreadable bytes become replacement characters.
+        part = _content_part(b"\xff\xfe bad bytes", "text/plain", "old.txt")
+        assert "bad bytes" in part["text"]
+
+    def test_a_very_long_file_is_cut_and_says_so(self):
+        """Silently cutting it is the failure mode that matters: the model
+        answers about the first half, confidently, and nothing says why."""
+        part = _content_part(b"a" * 400_000, "text/plain", "big.txt")
+        assert len(part["text"]) < 250_000
+        assert "cut here" in part["text"]
+
+    def test_a_file_that_fits_is_not_marked_as_cut(self):
+        assert "cut here" not in _content_part(b"short", "text/plain", "s.txt")["text"]
+
+
+class TestWhatTheModelIsNotShown:
+    """An attachment the model cannot read is left out — and said so.
+
+    Sending it anyway fails the whole message mid-conversation. Dropping it
+    without a word is worse: the model answers confidently about a document it
+    was never handed, and nothing anywhere records that it happened.
+    """
+
+    @pytest.fixture
+    def captured(self, caplog):
+        """caplog, wired to the client's logger.
+
+        ``setup_logger`` turns propagation off so the app's own handler is the
+        only one — which means caplog's handler on the root logger never sees a
+        thing, and an assertion on the text passes against an empty string.
+        """
+        client_logger = logging.getLogger("LLMClient")
+        client_logger.addHandler(caplog.handler)
+        caplog.set_level(logging.WARNING, logger="LLMClient")
+        yield caplog
+        client_logger.removeHandler(caplog.handler)
+
+    def _build(self, model, attachments, captured):
+        client = LLMClient(api_key="k", model=model)
+        return client._build_messages([{"role": "user", "content": "look"}], attachments)
+
+    def test_gemini_is_handed_the_sound(self, captured):
+        built = self._build("~google/gemini-pro-latest", [(b"x", "audio/wav", "c.wav")], captured)
+        assert [p["type"] for p in built[0]["content"]] == ["text", "input_audio"]
+
+    def test_claude_is_not_handed_sound_it_cannot_hear(self, captured):
+        built = self._build("~anthropic/claude-fable-latest", [(b"x", "audio/wav", "c.wav")], captured)
+        assert [p["type"] for p in built[0]["content"]] == ["text"]
+
+    def test_the_dropped_attachment_is_logged(self, captured):
+        self._build("~anthropic/claude-fable-latest", [(b"x", "audio/wav", "c.wav")], captured)
+        assert "cannot read audio" in captured.text
+
+    def test_a_two_item_attachment_still_works(self):
+        # Callers predating filenames pass (data, mime); the name only matters
+        # for documents, so requiring it would break them for nothing.
+        client = LLMClient(api_key="k", model="~anthropic/claude-fable-latest")
+        built = client._build_messages([{"role": "user", "content": "hi"}], [(b"\x89PNG", "image/png")])
+        assert built[0]["content"][1]["type"] == "image_url"
+
+    def test_the_text_only_model_keeps_the_text(self):
+        client = LLMClient(api_key="k", model="~z-ai/glm-latest")
+        built = client._build_messages([{"role": "user", "content": "hi"}], [(b"x", "image/png", "p.png")])
+        assert [p["type"] for p in built[0]["content"]] == ["text"]
 
 
 class TestImageResponseShapes:

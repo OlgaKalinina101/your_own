@@ -4,7 +4,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import MarkdownMessage from "@/components/chat/MarkdownMessage";
 
-import { MAX_CHAT_IMAGES, imageFilesFromClipboard } from "@/lib/chatAttachments";
+import { MAX_CHAT_IMAGES, fileLabel, imageFilesFromClipboard } from "@/lib/chatAttachments";
+import { describeAccepted } from "@/lib/modelInputs";
 import { mediaUrl, useMediaSignature } from "@/lib/media";
 import type { Message } from "@/lib/types";
 import { useChatController } from "@/lib/useChatController";
@@ -65,6 +66,7 @@ export default function ChatPage() {
     imagePreviews,
     model,
     canAttach,
+    acceptTypes,
     loadingHistory,
     historyReady,
     setInput,
@@ -320,12 +322,25 @@ export default function ChatPage() {
             <div className="flex items-center gap-3 overflow-x-auto pb-1">
               {imagePreviews.map((imagePreview, index) => (
                 <div key={`preview-${index}`} className="relative shrink-0">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={imagePreview}
-                    alt={`preview ${index + 1}`}
-                    className="h-16 w-16 border border-white/15 object-cover"
-                  />
+                  {imagePreview ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={imagePreview}
+                      alt={`preview ${index + 1}`}
+                      className="h-16 w-16 border border-white/15 object-cover"
+                    />
+                  ) : (
+                    // A document or a clip has no thumbnail; it gets its type
+                    // and its name, which is what she needs to tell two apart.
+                    <div className="flex h-16 w-16 flex-col items-center justify-center gap-1 border border-white/15 px-1">
+                      <span className="text-[0.6rem] tracking-widest text-white/70">
+                        {images[index] ? fileLabel(images[index]) : "FILE"}
+                      </span>
+                      <span className="w-full truncate text-center text-[0.5rem] text-white/40">
+                        {images[index]?.name ?? ""}
+                      </span>
+                    </div>
+                  )}
                   <button
                     onClick={() => removeImageAt(index)}
                     className="absolute right-1 top-1 border border-black/40 bg-black/65 px-1.5 py-0.5 text-[0.52rem] tracking-widest uppercase text-white/70 transition-colors duration-200 hover:text-white"
@@ -335,30 +350,31 @@ export default function ChatPage() {
                 </div>
               ))}
               <span className="shrink-0 text-[0.62rem] tracking-[0.16em] uppercase text-white/35">
-                {imagePreviews.length} / {MAX_CHAT_IMAGES} images
+                {imagePreviews.length} / {MAX_CHAT_IMAGES} files
               </span>
             </div>
           )}
 
           <div className="flex items-end gap-4">
-            {/* Attach image button (only for vision models) */}
+            {/* Attach button — hidden only for a model that takes nothing at
+                all, and the dialog offers exactly what this one can read. */}
             {canAttach && (
               <>
                 <input
                   ref={fileInputRef}
                   type="file"
-                  accept="image/*"
+                  accept={acceptTypes}
                   multiple
                   className="hidden"
                   onChange={handleImageSelect}
                 />
                 <button
                   onClick={() => fileInputRef.current?.click()}
-                  title="Attach image"
+                  title={`Attach: ${describeAccepted(model, "en")}`}
                   disabled={images.length >= MAX_CHAT_IMAGES}
                   className="mb-1 shrink-0 text-[0.68rem] tracking-widest uppercase text-white/45 transition-colors duration-300 hover:text-white/80"
                 >
-                  +img
+                  +file
                 </button>
               </>
             )}

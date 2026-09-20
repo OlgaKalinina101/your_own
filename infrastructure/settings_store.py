@@ -56,6 +56,12 @@ _DEFAULTS: dict[str, object] = {
     "research_model": "~google/gemini-pro-latest",
     "research_web_engine": "parallel",   # parallel (cheap) | exa (richer)
     "research_max_attempts": 3,
+    # Telegram — the group chat with her friends. All three are strings: a
+    # group id is a negative number Telegram writes as text, and a user id is
+    # too large for a JavaScript number to round-trip safely.
+    "telegram_bot_token": "",
+    "telegram_chat_id": "",
+    "telegram_owner_user_id": "",   # her account in the group — how he tells her apart
 }
 
 _lock = Lock()

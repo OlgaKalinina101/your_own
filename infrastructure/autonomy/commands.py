@@ -31,6 +31,7 @@ from infrastructure.autonomy.cmd_parser import (
     RewriteMessage,
     ScheduleMessage,
     SendMessage,
+    SendToChat,
     UnpinThread,
     UpdateThread,
 )
@@ -43,6 +44,7 @@ logger = setup_logger("autonomy.commands")
 
 # Every search command maps to one backend of the research agent.
 _SEARCH = (
+    "SEARCH_CHAT",
     "SEARCH_DIALOGUE",
     "SEARCH_DOCS",
     "SEARCH_FACTS",
@@ -58,6 +60,7 @@ _WRITES = ("WRITE_NOTE", "WRITE_IDENTITY")
 
 _MESSAGES = (
     "SEND_MESSAGE",
+    "SEND_TO_CHAT",
     "SCHEDULE_MESSAGE",
     "CANCEL_MESSAGE",
     "RESCHEDULE_MESSAGE",
@@ -117,6 +120,7 @@ LEAKABLE_COMMANDS = _ordered(
 NAMES: dict[type, str] = {
     CancelAllScheduled: "CANCEL_ALL_SCHEDULED",
     SendMessage: "SEND_MESSAGE",
+    SendToChat: "SEND_TO_CHAT",
     ScheduleMessage: "SCHEDULE_MESSAGE",
     CancelMessage: "CANCEL_MESSAGE",
     RescheduleMessage: "RESCHEDULE_MESSAGE",
@@ -132,10 +136,12 @@ _OUTCOMES = {
     "ru": {
         "no_message": "Сообщение на {ts} не найдено (уже отправлено или не существует).",
         "no_thread": "Нить {tid} не найдена на доске.",
+        "no_chat": "Общий чат не подключён: в настройках нет токена бота или не выбрана группа. Сообщение не отправлено.",
     },
     "en": {
         "no_message": "No message found at {ts} (already sent, or never existed).",
         "no_thread": "Thread {tid} is not on the board.",
+        "no_chat": "The group chat is not connected: no bot token or no group chosen in settings. The message was not sent.",
     },
 }
 
@@ -180,6 +186,7 @@ async def execute(
         rewrite_message,
         schedule_message,
         send_push_and_save,
+        send_to_chat,
     )
 
     if isinstance(cmd, CancelAllScheduled):
@@ -192,6 +199,10 @@ async def execute(
             account_id=account_id, text=cmd.text, log_prefix=log_prefix
         )
         return None
+
+    if isinstance(cmd, SendToChat):
+        sent = await send_to_chat(account_id=account_id, text=cmd.text, log_prefix=log_prefix)
+        return None if sent else _say(lang, "no_chat")
 
     if isinstance(cmd, ScheduleMessage):
         await schedule_message(

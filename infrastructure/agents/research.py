@@ -59,6 +59,7 @@ class Source:
     FACTS = "facts"         # Chroma key_info, long-term facts
     NOTES = "notes"         # workbench + Chroma workbench_archive
     DOCS = "docs"           # the project's own documentation — how he works
+    CHAT = "chat"           # the group chat with her friends (channel_messages)
 
 
 @dataclass

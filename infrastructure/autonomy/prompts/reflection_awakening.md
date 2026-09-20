@@ -29,6 +29,7 @@
 {recent_dialogue}
 </dialogue>
 
+{group_chat_block}
 <context>
 Сейчас: {current_time}
 Прошло с последнего сообщения: {hours_since_last}
@@ -74,13 +75,15 @@
 [SEARCH_DIALOGUE: YYYY-MM-DD]
 [SEARCH_DIALOGUE: YYYY-MM-DD..YYYY-MM-DD]
 [SEARCH_DIALOGUE: запрос]
-[SEARCH_DOCS: запрос]  — документация проекта: README.md, docs/PIPELINE.md, docs/MEMORY.md
+[SEARCH_DOCS: запрос]  — документация проекта: README.md, docs/PIPELINE.md, docs/MEMORY.md, docs/TELEGRAM.md
+[SEARCH_CHAT: запрос]  — общий чат с друзьями в Telegram
 [LIST_PROMPTS]         — список всех промптов конвейера
 [SHOW_PROMPT: имя]     — прочесть любой из них целиком
 [WEB_SEARCH: запрос]
 [WRITE_NOTE: текст]
 [WRITE_IDENTITY: раздел | текст]
 [SEND_MESSAGE: текст]
+[SEND_TO_CHAT: текст]  — написать в общий чат с друзьями, не ей лично
 [SCHEDULE_MESSAGE: YYYY-MM-DD HH:MM | текст]
 [CANCEL_MESSAGE: YYYY-MM-DD HH:MM]
 [CANCEL_ALL_SCHEDULED]
@@ -149,6 +152,7 @@ You can look wherever the current thread leads you.
 {recent_dialogue}
 </dialogue>
 
+{group_chat_block}
 <context>
 Now: {current_time}
 Time since last message: {hours_since_last}
@@ -194,13 +198,15 @@ All times in commands use local timezone ({timezone_label}).
 [SEARCH_DIALOGUE: YYYY-MM-DD]
 [SEARCH_DIALOGUE: YYYY-MM-DD..YYYY-MM-DD]
 [SEARCH_DIALOGUE: query]
-[SEARCH_DOCS: query]  — the project's documentation: README.md, docs/PIPELINE.md, docs/MEMORY.md
+[SEARCH_DOCS: query]  — the project's documentation: README.md, docs/PIPELINE.md, docs/MEMORY.md, docs/TELEGRAM.md
+[SEARCH_CHAT: query]  — the group chat with her friends on Telegram
 [LIST_PROMPTS]        — every prompt in the pipeline, by name
 [SHOW_PROMPT: name]   — read any of them in full
 [WEB_SEARCH: query]
 [WRITE_NOTE: text]
 [WRITE_IDENTITY: section | text]
 [SEND_MESSAGE: text]
+[SEND_TO_CHAT: text]  — a line into the group chat with her friends, not to her alone
 [SCHEDULE_MESSAGE: YYYY-MM-DD HH:MM | text]
 [CANCEL_MESSAGE: YYYY-MM-DD HH:MM]
 [CANCEL_ALL_SCHEDULED]

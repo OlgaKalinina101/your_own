@@ -225,7 +225,7 @@ class TestWiring:
             lang=lang,
             ai_name="Victor", identity="", workbench="",
             open_threads="", recent_dialogue="", current_time="2026-08-29 12:00",
-            hours_since_last="3.0 h", pending_tasks_block="", vitals="",
+            hours_since_last="3.0 h", pending_tasks_block="", group_chat_block="", vitals="",
             cooldown_h=4, interval_h=12, timezone_label="Asia/Yerevan",
         )
         assert "SEARCH_DOCS" in prompt

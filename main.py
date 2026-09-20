@@ -138,6 +138,39 @@ async def _scheduled_push_worker() -> None:
         await asyncio.sleep(TICK_SECONDS)
 
 
+TELEGRAM_SETTLE_SECONDS = 5
+
+
+async def _telegram_worker() -> None:
+    """Long-polls the group chat, one open request at a time.
+
+    A poll that has a token waits up to 25 s on Telegram's side and returns on
+    its own, so the loop needs no sleep of its own while configured. Without a
+    token — or after an error — it waits a tick before looking again; the
+    settings page can add the token at any moment and the next tick picks it
+    up.
+    """
+    wlog = setup_logger("telegram.worker")
+    await asyncio.sleep(TELEGRAM_SETTLE_SECONDS)
+    while True:
+        try:
+            from infrastructure.telegram.listener import tick as _poll
+            polled = await _poll(ACCOUNT_ID)
+        except Exception as exc:
+            conflict = getattr(exc, "conflict", False)
+            if conflict:
+                wlog.warning(
+                    "[telegram_worker] another process is polling with this bot token "
+                    "(409) — stop the other one, or this bot stays deaf"
+                )
+            else:
+                wlog.warning("[telegram_worker] error: %s", exc)
+            await asyncio.sleep(TICK_SECONDS)
+            continue
+        if not polled:
+            await asyncio.sleep(TICK_SECONDS)
+
+
 def _prepare_call_log() -> None:
     """Move the corpus out of logs/ if it is still there, then pack closed months."""
     try:
@@ -174,6 +207,7 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(_heartbeat_worker(), name="heartbeat"),
         asyncio.create_task(_reflection_worker(), name="reflection"),
         asyncio.create_task(_scheduled_push_worker(), name="scheduled_push"),
+        asyncio.create_task(_telegram_worker(), name="telegram"),
     ]
 
     yield

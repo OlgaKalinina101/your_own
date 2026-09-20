@@ -43,6 +43,8 @@ export default function ChatScreen() {
     attachments,
     backendUrl,
     canAttach,
+    canAttachFiles,
+    acceptedDescription,
     canSend,
     errorNotice,
     historyError,
@@ -57,6 +59,7 @@ export default function ChatScreen() {
     reloadHistory,
     setInput,
     pickImages,
+    pickFiles,
     removeAttachment,
     sendMessage,
     stopStreaming,
@@ -187,10 +190,13 @@ export default function ChatScreen() {
           onChangeInput={setInput}
           attachments={attachments}
           canAttach={canAttach}
+          canAttachFiles={canAttachFiles}
+          acceptedDescription={acceptedDescription}
           canSend={canSend}
           streaming={streaming}
           backendUrl={backendUrl}
           onPickImages={pickImages}
+          onPickFiles={pickFiles}
           onRemoveAttachment={removeAttachment}
           onSend={sendMessage}
           onStop={stopStreaming}

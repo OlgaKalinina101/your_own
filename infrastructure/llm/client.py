@@ -282,18 +282,127 @@ def parse_image_response(body: dict) -> str | None:
     return None
 
 
-# Which models can be shown a photograph. A model that is not here gets the
-# text and never learns there was a picture — silently, which is why the same
-# set has to hold on every client too (frontend and mobile keep their own
-# copies; they had already drifted apart before this list was cut to four).
-VISION_MODELS = {
-    "~anthropic/claude-fable-latest",
-    "~moonshotai/kimi-latest",
-    "~google/gemini-pro-latest",
-    "openai/gpt-chat-latest",
-    # ~z-ai/glm-latest is text-only — confirmed against the OpenRouter
-    # catalogue, its input modalities are ["text"] alone.
+# What each model can actually be handed, beyond the text itself. A kind that
+# is not listed gets dropped before the request, so the model answers about the
+# words alone — which is why the same table has to hold on every client too
+# (frontend and mobile keep their own copies; they had already drifted apart
+# before this list was cut to four).
+#
+# Every entry below was established by sending the real thing through
+# OpenRouter — a PDF built here holding a word no model can have memorised, a
+# recording, a road video — and asking for the content back. None of it is
+# transcribed from the catalogue, which is wrong in both directions: Kimi's
+# entry advertises video it refuses outright, and GLM is listed as text-only
+# yet read the PDF. Changing a line here means running that probe again.
+MODEL_INPUTS: dict[str, frozenset[str]] = {
+    "~anthropic/claude-fable-latest": frozenset({"image", "pdf", "text"}),
+    # Kimi's catalogue entry claims video; asked to watch one it answers "I'm
+    # not able to process or watch video files".
+    "~moonshotai/kimi-latest": frozenset({"image", "pdf", "text"}),
+    # The only one that hears and watches. Nothing else here has an endpoint
+    # for sound at all — OpenRouter answers 404 before a provider is reached.
+    "~google/gemini-pro-latest": frozenset({"image", "pdf", "text", "audio", "video"}),
+    "openai/gpt-chat-latest": frozenset({"image", "pdf", "text"}),
+    # The one that cannot be shown a photograph — but it does read PDFs, since
+    # OpenRouter turns those into text before any provider sees them.
+    "~z-ai/glm-latest": frozenset({"pdf", "text"}),
 }
+
+# Kept as a name of its own because the clients and their tests speak in terms
+# of "can this model be shown a photograph", and that question has one answer.
+VISION_MODELS = {m for m, kinds in MODEL_INPUTS.items() if "image" in kinds}
+
+
+def accepts(model: str, kind: str) -> bool:
+    """Whether *model* can be handed an attachment of *kind*.
+
+    An unknown model accepts nothing: a new slug arrives with no evidence about
+    what it reads, and text-only is the failure that still answers the question.
+    """
+    return kind in MODEL_INPUTS.get(model, frozenset())
+
+
+# Text that arrives as a file rather than as prose. Not every one of these
+# starts with "text/", which is the whole reason for the set.
+_TEXT_MIMES = frozenset({
+    "application/json", "application/xml", "application/javascript",
+    "application/x-yaml", "application/yaml", "application/sql",
+    "application/x-sh", "application/rtf",
+})
+
+
+def kind_of(mime: str) -> str:
+    """Which kind of attachment a MIME type is.
+
+    A PDF is its own kind and not a document-in-general: OpenRouter parses PDFs
+    server-side, so every model reads one, while the same ``file`` part holding
+    a .txt is refused by four of the five. Text files are therefore their own
+    kind too, and are inlined rather than attached.
+
+    Anything else — a .docx, an archive — is "other", which nothing accepts. It
+    is dropped and logged rather than sent to be refused mid-conversation.
+    """
+    mime = (mime or "").lower().split(";")[0].strip()
+    if mime.startswith("image/"):
+        return "image"
+    if mime.startswith("audio/"):
+        return "audio"
+    if mime.startswith("video/"):
+        return "video"
+    if mime == "application/pdf":
+        return "pdf"
+    if mime.startswith("text/") or mime in _TEXT_MIMES:
+        return "text"
+    return "other"
+
+
+# A text file longer than this is cut, with the cut announced in the text the
+# model sees. Roughly 50k tokens — enough for any note or transcript she would
+# attach, and short of the point where one file crowds out the conversation.
+_TEXT_ATTACHMENT_LIMIT = 200_000
+
+
+def _content_part(data: bytes, mime: str, filename: str) -> dict:
+    """One attachment in the shape OpenRouter wants for its kind.
+
+    Four shapes, not one: pictures go as an ``image_url`` data URI, sound as
+    ``input_audio`` with bare base64 and a bare format ("mp3", not "audio/mp3"),
+    PDFs and video as a ``file`` part, and a text file as plain text folded into
+    the message.
+
+    Video through ``file`` is not a workaround for a missing ``video_url``:
+    that shape exists and is refused, and this one is what Gemini watches.
+    Inlining text is not a workaround either — a .txt in a ``file`` part is
+    refused by four of the five models, while every one of them reads it as
+    text, so the attachment nobody can open becomes the prose everybody can.
+    """
+    kind = kind_of(mime)
+    if kind == "text":
+        body = data.decode("utf-8", errors="replace")
+        if len(body) > _TEXT_ATTACHMENT_LIMIT:
+            body = body[:_TEXT_ATTACHMENT_LIMIT] + "\n[…file cut here — it was longer than this]"
+        name = filename or "attachment"
+        return {"type": "text", "text": f"\n\n--- contents of {name} ---\n{body}\n--- end of {name} ---"}
+
+    encoded = base64.b64encode(data).decode()
+    if kind == "image":
+        return {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{encoded}"}}
+    if kind == "audio":
+        # The format is the bare codec name, and it is not always the MIME
+        # subtype: an mp3 arrives as "audio/mpeg" from every picker there is,
+        # and "mpeg" is not a format OpenRouter knows.
+        subtype = mime.split("/", 1)[-1].split(";")[0]
+        fmt = {"mpeg": "mp3", "x-wav": "wav", "wave": "wav", "x-m4a": "m4a"}.get(
+            subtype, subtype or "wav"
+        )
+        return {"type": "input_audio", "input_audio": {"data": encoded, "format": fmt}}
+    return {
+        "type": "file",
+        "file": {
+            "filename": filename or "attachment",
+            "file_data": f"data:{mime};base64,{encoded}",
+        },
+    }
 
 
 class LLMClient:
@@ -321,14 +430,20 @@ class LLMClient:
     def _build_messages(
         self,
         messages: list[dict],
-        image_items: Optional[list[tuple[bytes, str]]] = None,
+        attachments: Optional[list[tuple]] = None,
         geo: Optional[dict] = None,
         system_prompt: Optional[str] = None,
     ) -> list[dict]:
-        """
-        Converts message list to OpenRouter format.
-        - Injects geo context as text into the last user message
-        - Attaches one or more images (base64) to the last user message for vision models
+        """Convert the message list to OpenRouter's format.
+
+        Geo context is folded into the last user message as text, and any
+        attachments ride along with it. Each attachment is ``(data, mime)`` or
+        ``(data, mime, filename)`` — the name matters only for documents, where
+        it is what the model sees the file called.
+
+        An attachment the model cannot read is left out and said so in the log.
+        Sending it anyway is an error mid-conversation; dropping it in silence
+        is worse — the model then answers about text it was never shown.
         """
         result = []
 
@@ -338,7 +453,7 @@ class LLMClient:
         for i, msg in enumerate(messages):
             is_last_user = msg["role"] == "user" and i == len(messages) - 1
 
-            if is_last_user and (image_items or geo):
+            if is_last_user and (attachments or geo):
                 content: list = []
 
                 text = msg.get("content", "")
@@ -347,13 +462,17 @@ class LLMClient:
                 if text:
                     content.append({"type": "text", "text": text})
 
-                if image_items and self.model in VISION_MODELS:
-                    for image_bytes, image_mime in image_items:
-                        b64 = base64.b64encode(image_bytes).decode()
-                        content.append({
-                            "type": "image_url",
-                            "image_url": {"url": f"data:{image_mime};base64,{b64}"},
-                        })
+                for item in attachments or []:
+                    data, mime = item[0], item[1]
+                    filename = item[2] if len(item) > 2 else ""
+                    kind = kind_of(mime)
+                    if not accepts(self.model, kind):
+                        logger.warning(
+                            "[LLMClient] %s cannot read %s (%s) — attachment left out",
+                            self.model, kind, mime,
+                        )
+                        continue
+                    content.append(_content_part(data, mime, filename))
 
                 result.append({"role": "user", "content": content})
             else:
@@ -435,7 +554,7 @@ class LLMClient:
     async def stream(
         self,
         messages: list[dict],
-        image_items: Optional[list[tuple[bytes, str]]] = None,
+        attachments: Optional[list[tuple]] = None,
         geo: Optional[dict] = None,
         system_prompt: Optional[str] = None,
     ) -> AsyncIterator[str]:
@@ -447,13 +566,13 @@ class LLMClient:
         stream any more.
         """
         model = self.model
-        built_messages = self._build_messages(messages, image_items, geo, system_prompt)
+        built_messages = self._build_messages(messages, attachments, geo, system_prompt)
         logger.info(
-            "[LLMClient] stream start model=%s messages=%d has_system=%s images=%d",
+            "[LLMClient] stream start model=%s messages=%d has_system=%s attachments=%d",
             model,
             len(built_messages),
             bool(system_prompt),
-            len(image_items or []),
+            len(attachments or []),
         )
 
         payload = {

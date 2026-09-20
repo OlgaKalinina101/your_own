@@ -18,10 +18,12 @@ Commands:
   [SEARCH_DIALOGUE: YYYY-MM-DD..YYYY-MM-DD]
   [SEARCH_DIALOGUE: query]       — semantic search in dialogue history
   [SEARCH_DOCS: query]          — the project's own documentation
+  [SEARCH_CHAT: query]          — the group chat with her friends
   [WEB_SEARCH: query]
   [WRITE_NOTE: text]
   [WRITE_IDENTITY: section | text]
   [SEND_MESSAGE: text]
+  [SEND_TO_CHAT: text]           — a line into the group chat
   [SCHEDULE_MESSAGE: YYYY-MM-DD HH:MM | text]
   [EXTEND: N]   (1-5, up to 3 times)
   [SLEEP]
@@ -55,6 +57,7 @@ from infrastructure.autonomy.cmd_parser import (
     RewriteMessage,
     ScheduleMessage,
     SendMessage,
+    SendToChat,
     UnpinThread,
     UpdateThread,
 )
@@ -114,8 +117,8 @@ _LIST_PROMPTS_RE = re.compile(r"\[LIST[_ ]PROMPTS\]", re.IGNORECASE)
 _CANCEL_ALL_RE = re.compile(r"\[CANCEL[_ ]ALL[_ ]SCHEDULED\]", re.IGNORECASE)
 _EXTEND_RE = re.compile(r"\[EXTEND:\s*(\d+)\]", re.IGNORECASE)
 
-_SEARCH_CMDS = {"SEARCH_FACTS", "SEARCH_NOTES", "SEARCH_DIALOGUE", "SEARCH_DOCS", "WEB_SEARCH"}
-_WRITE_CMDS = {"WRITE_NOTE", "WRITE_IDENTITY", "SEND_MESSAGE", "SCHEDULE_MESSAGE"}
+_SEARCH_CMDS = {"SEARCH_FACTS", "SEARCH_NOTES", "SEARCH_DIALOGUE", "SEARCH_DOCS", "SEARCH_CHAT", "WEB_SEARCH"}
+_WRITE_CMDS = {"WRITE_NOTE", "WRITE_IDENTITY", "SEND_MESSAGE", "SEND_TO_CHAT", "SCHEDULE_MESSAGE"}
 
 # Back-compat: SEARCH_MEMORIES used to mean Chroma facts here and Postgres
 # dialogue in chat. One name, one meaning now - it resolves to the dialogue
@@ -203,6 +206,7 @@ _SEARCH_SOURCES = {
     "SEARCH_DOCS": Source.DOCS,
     "SEARCH_FACTS": Source.FACTS,
     "SEARCH_NOTES": Source.NOTES,
+    "SEARCH_CHAT": Source.CHAT,
     "WEB_SEARCH": Source.WEB,
 }
 
@@ -454,6 +458,9 @@ def _as_command(cmd: str, arg: str) -> ParsedCommand | None:
     if cmd == "SEND_MESSAGE":
         return SendMessage(text=arg.strip())
 
+    if cmd == "SEND_TO_CHAT":
+        return SendToChat(text=arg.strip())
+
     if cmd == "SCHEDULE_MESSAGE":
         if "|" not in arg:
             return None
@@ -501,6 +508,7 @@ def _build_awakening_system(
     recent_dialogue: str,
     hours_since_last: str,
     pending_tasks_block: str,
+    group_chat_block: str,
     cooldown_h: int,
     interval_h: int,
     **state: str,
@@ -519,6 +527,7 @@ def _build_awakening_system(
         recent_dialogue=recent_dialogue,
         hours_since_last=hours_since_last,
         pending_tasks_block=pending_tasks_block,
+        group_chat_block=group_chat_block,
         cooldown_h=cooldown_h,
         interval_h=interval_h,
         **state,
@@ -603,6 +612,44 @@ def _build_pending_tasks_block(lang: str, tasks: list) -> str:
             "[REWRITE_MESSAGE: YYYY-MM-DD HH:MM | new text]"
         )
     return f"{header}\n{tasks_list}\n{footer}\n\n"
+
+
+# How much of the room he is shown at a waking. The count says how busy it was;
+# the tail says what it was about. He can read more with [SEARCH_CHAT].
+GROUP_CHAT_TAIL = 12
+
+
+async def _build_group_chat_block(
+    db: AsyncSession, account_id: str, lang: str, since: datetime | None,
+) -> str:
+    """The group chat since his last waking, or nothing when there is no chat.
+
+    Its own block rather than a registry section for the reason the registry's
+    docstring gives: it is a reflection-shaped input (a count since a moment
+    only reflection knows), and it needs the database.
+    """
+    from infrastructure.database.repositories.channel_repo import ChannelRepository
+    from infrastructure.settings_store import load_settings
+    from infrastructure.telegram import listener, responder
+
+    chat_id = str(load_settings().get("telegram_chat_id") or "").strip()
+    if not chat_id:
+        return ""
+
+    repo = ChannelRepository(db)
+    tail = await repo.get_recent(account_id, chat_id, limit=GROUP_CHAT_TAIL)
+    count = await repo.count_since(account_id, chat_id, since) if since else len(tail)
+
+    bot = listener.read_state(account_id).get("bot") or {}
+    handle = f"@{bot['username']}" if bot.get("username") else ""
+    if lang == "ru":
+        head = f"Общий чат с друзьями {handle}. С прошлого пробуждения: {count} сообщений."
+        empty = "Пока тихо."
+    else:
+        head = f"The group chat with her friends {handle}. Since your last waking: {count} messages."
+        empty = "Quiet so far."
+    body = responder.render_room(tail, ai_name=get_ai_name(), lang=lang) if tail else empty
+    return f"<group_chat>\n{head}\n{body}\n</group_chat>\n"
 
 
 # ── Main run loop ─────────────────────────────────────────────────────────────
@@ -752,6 +799,7 @@ async def _gather_awakening(
     ai_name: str,
     cooldown_h: int,
     interval_h: int,
+    since_last_waking: datetime | None = None,
 ) -> _Awakening:
     """Assemble what he wakes up knowing.
 
@@ -788,6 +836,14 @@ async def _gather_awakening(
     from infrastructure.autonomy.task_queue import get_recent_tasks
     recent_tasks = await get_recent_tasks(db, account_id, hours=24)
 
+    try:
+        group_chat_block = await _build_group_chat_block(db, account_id, lang, since_last_waking)
+    except Exception as exc:
+        # The room is one input among several; a waking without it is still a
+        # waking. Said in the log, because a silent absence is how gaps hide.
+        logger.warning("[reflection:%s] group chat block unavailable: %s", account_id, exc)
+        group_chat_block = ""
+
     state = context.build(
         context.Consumer.REFLECTION,
         context.Request(account_id=account_id, lang=lang),
@@ -806,6 +862,7 @@ async def _gather_awakening(
             recent_dialogue=recent_dialogue,
             hours_since_last=hours_since_last,
             pending_tasks_block=_build_pending_tasks_block(lang, recent_tasks),
+            group_chat_block=group_chat_block,
             cooldown_h=cooldown_h,
             interval_h=interval_h,
             **state,
@@ -816,6 +873,8 @@ async def _gather_awakening(
 async def _run_cycle(account_id: str, api_key: str) -> None:
     """Run one full reflection cycle."""
     logger.info("[reflection:%s] starting reflection", account_id)
+    # Read before it is overwritten: "since the last waking" is this moment.
+    previous_waking = _get_last_reflection_ts(account_id)
     _set_last_reflection_ts(account_id)
 
     from infrastructure.settings_store import load_settings
@@ -828,6 +887,7 @@ async def _run_cycle(account_id: str, api_key: str) -> None:
         waking = await _gather_awakening(
             db, account_id,
             ai_name=ai_name, cooldown_h=cooldown_h, interval_h=interval_h,
+            since_last_waking=previous_waking,
         )
         lang = waking.lang
         awakening_system = waking.system

@@ -17,10 +17,13 @@ export default React.memo(function ChatComposer({
   onChangeInput,
   attachments,
   canAttach,
+  canAttachFiles,
+  acceptedDescription,
   canSend,
   streaming,
   backendUrl,
   onPickImages,
+  onPickFiles,
   onRemoveAttachment,
   onSend,
   onStop,
@@ -28,15 +31,22 @@ export default React.memo(function ChatComposer({
   input: string;
   onChangeInput: (value: string) => void;
   attachments: DraftAttachment[];
+  /** Whether this model takes anything at all. */
   canAttach: boolean;
+  /** Whether it takes something the camera roll does not hold. */
+  canAttachFiles: boolean;
+  /** "фото, PDF, аудио" — the screen reader's label for the two icons. */
+  acceptedDescription: string;
   canSend: boolean;
   streaming: boolean;
   backendUrl: string;
   onPickImages: () => void;
+  onPickFiles: () => void;
   onRemoveAttachment: (attachmentId: string) => void;
   onSend: () => void;
   onStop: () => void;
 }) {
+  const full = attachments.length >= 4;
   return (
     <>
       <ChatAttachmentStrip
@@ -45,13 +55,28 @@ export default React.memo(function ChatComposer({
         onRemove={onRemoveAttachment}
       />
       <View style={s.row}>
+        {/* Two doors, because Android keeps photographs and files in separate
+            places and a picker that opens on the wrong one is a dead end. The
+            paperclip is hidden on a model that reads nothing but pictures, so
+            it never opens a browser whose every result would be dropped. */}
         {canAttach ? (
           <TouchableOpacity
             style={s.attachBtn}
             onPress={onPickImages}
-            disabled={attachments.length >= 4}
+            accessibilityLabel={`Фото. Эта модель читает: ${acceptedDescription}`}
+            disabled={full}
           >
-            <Text style={[s.attachIcon, attachments.length >= 4 && s.attachDisabled]}>⊕</Text>
+            <Text style={[s.attachIcon, full && s.attachDisabled]}>⊕</Text>
+          </TouchableOpacity>
+        ) : null}
+        {canAttach && canAttachFiles ? (
+          <TouchableOpacity
+            style={s.attachBtn}
+            onPress={onPickFiles}
+            accessibilityLabel={`Файл. Эта модель читает: ${acceptedDescription}`}
+            disabled={full}
+          >
+            <Text style={[s.attachIcon, full && s.attachDisabled]}>🖇</Text>
           </TouchableOpacity>
         ) : null}
         <TextInput

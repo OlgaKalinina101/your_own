@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AppState } from "react-native";
+import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
 
 import { apiFetch, apiFetchStreaming, getBackendUrl, loadSettings, loadWorkbenchLatest } from "@/lib/api";
@@ -7,18 +8,23 @@ import { apiErrorFrom, describeApiError } from "@/lib/apiError";
 import { subscribeToChanges } from "@/lib/changeFeed";
 import { consumeChatStream } from "@/lib/chatStream";
 import { latestCursor, mergeMessages } from "@/lib/mergeMessages";
+import {
+  VISION_MODELS,
+  acceptsAnything,
+  acceptsKind,
+  describeAccepted,
+  documentPickerTypes,
+} from "@/lib/modelInputs";
 import { soundEngine } from "@/lib/soundEngine";
 import type { DraftAttachment, HistoryPair, Message } from "@/lib/types";
 
 const HISTORY_BATCH = 25;
 const MAX_IMAGES = 4;
 
-const VISION_MODELS = new Set([
-  "~anthropic/claude-fable-latest",
-  "~moonshotai/kimi-latest",
-  "~google/gemini-pro-latest",
-  "openai/gpt-chat-latest",
-]);
+// The table used to be restated here as a set of models that could be shown a
+// photograph. Now that documents, sound and video each have their own answer
+// per model, one table owns all of it — see lib/modelInputs.ts.
+export { VISION_MODELS };
 
 function makeId(prefix: string) {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -70,6 +76,8 @@ export function useChatController() {
   const [workbenchText, setWorkbenchText] = useState<string | null>(null);
   const [attachments, setAttachments] = useState<DraftAttachment[]>([]);
   const [canAttach, setCanAttach] = useState(false);
+  // The chosen model, kept because what the two pickers offer depends on it.
+  const [model, setModel] = useState("");
   const [backendUrl, setBackendUrl] = useState("");
 
   const abortRef = useRef<AbortController | null>(null);
@@ -186,7 +194,11 @@ export function useChatController() {
     loadSettings()
       .then((settings) => {
         if (settings.ai_name) setAiName(settings.ai_name.toUpperCase());
-        setCanAttach(settings.model ? VISION_MODELS.has(settings.model) : false);
+        setModel(settings.model ?? "");
+        // Not VISION_MODELS any more: the one model that cannot be shown a
+        // photograph still reads documents, and hiding the button on it meant
+        // there was no way to hand it one.
+        setCanAttach(settings.model ? acceptsAnything(settings.model) : false);
       })
       .catch(() => {});
   }, []);
@@ -266,28 +278,16 @@ export function useChatController() {
     };
   }, [loadHistory, refreshWorkbench]);
 
-  const pickImages = useCallback(async () => {
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== "granted") return;
-
-    const result = await ImagePicker.launchImageLibraryAsync({
-      // `MediaTypeOptions` is @deprecated in the installed version.
-      mediaTypes: ["images"],
-      allowsMultipleSelection: true,
-      quality: 0.85,
-      selectionLimit: MAX_IMAGES - attachments.length,
-    });
-
-    if (result.canceled) return;
-
-    const drafts: DraftAttachment[] = result.assets.map((asset, index) => ({
-      id: makeId(`attachment-${index}`),
-      localUri: asset.uri,
-      mimeType: asset.mimeType ?? "image/jpeg",
-      fileName: asset.fileName ?? `image_${index}.jpg`,
-      status: "uploading",
-    }));
-
+  /**
+   * Put the picked files on screen and start uploading them.
+   *
+   * Shared by both pickers, because what follows the picking is the same work
+   * whichever one opened: the photo library and the file browser are two doors
+   * into one tray. The field is still called "image" — that is the name the
+   * endpoint takes, and it has not been only pictures for a while.
+   */
+  const uploadDrafts = useCallback(async (drafts: DraftAttachment[]) => {
+    if (drafts.length === 0) return;
     setAttachments((prev) => [...prev, ...drafts].slice(0, MAX_IMAGES));
 
     for (const draft of drafts) {
@@ -317,7 +317,61 @@ export function useChatController() {
         );
       }
     }
-  }, [attachments.length]);
+  }, []);
+
+  /** The photo library. Videos too, when the chosen model can watch them. */
+  const pickImages = useCallback(async () => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== "granted") return;
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      // `MediaTypeOptions` is @deprecated in the installed version.
+      mediaTypes: acceptsKind(model, "video") ? ["images", "videos"] : ["images"],
+      allowsMultipleSelection: true,
+      quality: 0.85,
+      selectionLimit: MAX_IMAGES - attachments.length,
+    });
+
+    if (result.canceled) return;
+
+    await uploadDrafts(
+      result.assets.map((asset, index) => ({
+        id: makeId(`attachment-${index}`),
+        localUri: asset.uri,
+        mimeType: asset.mimeType ?? "image/jpeg",
+        fileName: asset.fileName ?? `image_${index}.jpg`,
+        status: "uploading" as const,
+      })),
+    );
+  }, [attachments.length, model, uploadDrafts]);
+
+  /**
+   * The file browser: documents, sound, anything that is not in the camera roll.
+   *
+   * The types offered are narrowed to what the chosen model can actually read.
+   * Offering more would have her wait through an upload for a file that is then
+   * dropped on the way out, with only a line in the server log to say why.
+   */
+  const pickFiles = useCallback(async () => {
+    const result = await DocumentPicker.getDocumentAsync({
+      type: documentPickerTypes(model),
+      multiple: true,
+      copyToCacheDirectory: true,
+    });
+    if (result.canceled) return;
+
+    await uploadDrafts(
+      result.assets.map((asset, index) => ({
+        id: makeId(`file-${index}`),
+        localUri: asset.uri,
+        // A picker that cannot name the type leaves us guessing; octet-stream
+        // is the honest guess, and the backend reads the extension instead.
+        mimeType: asset.mimeType ?? "application/octet-stream",
+        fileName: asset.name ?? `file_${index}`,
+        status: "uploading" as const,
+      })),
+    );
+  }, [model, uploadDrafts]);
 
   const removeAttachment = useCallback((attachmentId: string) => {
     setAttachments((prev) => prev.filter((attachment) => attachment.id !== attachmentId));
@@ -576,8 +630,15 @@ export function useChatController() {
     refreshSettings,
     refreshWorkbench,
     reloadHistory,
+    model,
+    /** Whether the file browser is worth offering beside the camera roll. */
+    canAttachFiles: acceptsKind(model, "pdf") || acceptsKind(model, "text")
+      || acceptsKind(model, "audio"),
+    /** "фото, PDF, текстовые файлы" — what this model will actually read. */
+    acceptedDescription: describeAccepted(model, "ru"),
     setInput,
     pickImages,
+    pickFiles,
     removeAttachment,
     sendMessage,
     stopStreaming,

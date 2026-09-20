@@ -10,7 +10,17 @@ import {
 } from "react-native";
 
 import { buildChatImageSource } from "@/lib/chatImages";
+import { kindOf } from "@/lib/modelInputs";
 import type { DraftAttachment } from "@/lib/types";
+
+/** The four-letter badge on a non-image attachment: "PDF", "MP3", "TXT". */
+function shortType(attachment: DraftAttachment): string {
+  const fromName = attachment.fileName.includes(".")
+    ? attachment.fileName.split(".").pop() ?? ""
+    : "";
+  const label = fromName || attachment.mimeType.split("/").pop() || "file";
+  return label.slice(0, 4).toUpperCase();
+}
 
 export default function ChatAttachmentStrip({
   attachments,
@@ -27,14 +37,23 @@ export default function ChatAttachmentStrip({
     <View style={s.strip}>
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.scroll}>
         {attachments.map((attachment) => {
-          const source = buildChatImageSource(attachment.serverUrl ?? attachment.localUri, backendUrl);
+          // Only a picture has a picture to show. A PDF or a recording rendered
+          // through <Image> is a grey square that never loads, so it gets its
+          // type and its name instead — which is also what tells two apart.
+          const isImage = kindOf(attachment.mimeType) === "image";
+          const source = isImage
+            ? buildChatImageSource(attachment.serverUrl ?? attachment.localUri, backendUrl)
+            : null;
           return (
             <View key={attachment.id} style={s.wrap}>
               {source ? (
                 <Image source={source} style={s.thumb} resizeMode="cover" />
               ) : (
                 <View style={[s.thumb, s.fallback]}>
-                  <Text style={s.fallbackText}>image</Text>
+                  <Text style={s.fallbackText}>{shortType(attachment)}</Text>
+                  <Text style={s.fallbackName} numberOfLines={1}>
+                    {attachment.fileName}
+                  </Text>
                 </View>
               )}
               {attachment.status === "uploading" ? (
@@ -74,10 +93,16 @@ const s = StyleSheet.create({
     borderColor: "rgba(255,255,255,0.08)",
   },
   fallbackText: {
-    color: "rgba(255,255,255,0.4)",
+    color: "rgba(255,255,255,0.55)",
     fontSize: 9,
     letterSpacing: 1,
     textTransform: "uppercase",
+  },
+  fallbackName: {
+    color: "rgba(255,255,255,0.35)",
+    fontSize: 7,
+    marginTop: 2,
+    paddingHorizontal: 3,
   },
   remove: {
     position: "absolute",

@@ -35,6 +35,11 @@ EXPECTED: dict[Consumer, set[str]] = {
     Consumer.PUSH_VALIDATION: {
         "workbench", "open_threads", "current_time", "timezone_label",
     },
+    # The group: all of who he is, a glimpse of the desk, and no board — the
+    # board is the two of them and he is in public there.
+    Consumer.TELEGRAM: {
+        "identity", "workbench", "current_time", "timezone_label",
+    },
 }
 
 # Which .md each consumer fills, and which subsection of it. Chat assembles its
@@ -44,6 +49,7 @@ TEMPLATES = {
     Consumer.REFLECTION: ("infrastructure/autonomy/prompts/reflection_awakening.md", None),
     Consumer.POST_ANALYSIS: ("infrastructure/autonomy/prompts/post_analyzer.md", "user"),
     Consumer.PUSH_VALIDATION: ("infrastructure/autonomy/prompts/push_validator.md", "user"),
+    Consumer.TELEGRAM: ("infrastructure/telegram/prompts/group_reply.md", "user"),
 }
 
 

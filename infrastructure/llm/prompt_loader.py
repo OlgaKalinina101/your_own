@@ -116,6 +116,7 @@ _SHELVES: tuple[tuple[str, str], ...] = (
     ("infrastructure/autonomy/prompts", ""),
     ("infrastructure/memory/prompts", ""),
     ("infrastructure/agents/prompts", ""),
+    ("infrastructure/telegram/prompts", ""),
     ("infrastructure/skills", "skill_"),
 )
 

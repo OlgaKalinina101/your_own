@@ -99,6 +99,50 @@ async def send_push_and_save(
     await save_push_message(account_id=account_id, text=text)
 
 
+async def send_to_chat(
+    *,
+    account_id: str,
+    text: str,
+    log_prefix: str = "autonomy",
+) -> bool:
+    """Post a line into the group chat, and keep his copy of it.
+
+    Returns ``False`` when there is no chat to post into — no token, no group
+    chosen — so the caller can tell him in words rather than let the line
+    vanish. Delivery errors raise: reflection has a next step to hear them in.
+    """
+    from infrastructure.database.engine import get_db_session
+    from infrastructure.database.repositories.channel_repo import ChannelRepository
+    from infrastructure.settings_store import load_settings
+    from infrastructure.telegram import listener, responder
+    from infrastructure.telegram.client import get_client
+
+    clean = (text or "").strip()
+    client = get_client()
+    chat_id = str(load_settings().get("telegram_chat_id") or "").strip()
+    if client is None or not chat_id or not clean:
+        logger.warning("[%s:%s] SEND_TO_CHAT: chat not configured", log_prefix, account_id)
+        return False
+
+    sent = await client.send_message(chat_id, clean)
+    logger.info("[%s:%s] said in the group: %s", log_prefix, account_id, clean[:80])
+
+    bot = listener.read_state(account_id).get("bot") or {}
+    row = responder.own_row(
+        sent, account_id=account_id, chat_id=chat_id,
+        bot_id=bot.get("id", ""), ai_name=get_ai_name(),
+    )
+    try:
+        import asyncio
+
+        await asyncio.get_running_loop().run_in_executor(None, listener.fill_embeddings, [row])
+        async with get_db_session() as db:
+            await ChannelRepository(db).save_many([row])
+    except Exception as exc:
+        logger.error("[%s:%s] sent to the group but could not store own row: %s", log_prefix, account_id, exc)
+    return True
+
+
 async def schedule_message(
     *,
     account_id: str,

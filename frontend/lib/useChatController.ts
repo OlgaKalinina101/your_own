@@ -26,6 +26,13 @@ import { fitWithinCap, readPreview, removeAt } from "@/lib/chatAttachments";
 import { consumeChatStream } from "@/lib/chatStream";
 import { latestCursor, mergeMessages } from "@/lib/mergeMessages";
 import { subscribeToChanges } from "@/lib/changeFeed";
+import {
+  VISION_MODELS,
+  acceptAttribute,
+  acceptsAnything,
+  acceptsKind,
+  kindOf,
+} from "@/lib/modelInputs";
 import { useChatSession } from "@/context/ChatSessionContext";
 import type { HistoryPair, HistoryResponse, Message, Settings } from "@/lib/types";
 
@@ -36,20 +43,11 @@ const GENERATING_IMAGE_RE = /\[GENERATE_IMAGE:[^\]]*\]/g;
 
 export const DEFAULT_MODEL = "~anthropic/claude-fable-latest";
 
-/**
- * Models that accept image attachments.
- *
- * Must match VISION_MODELS in infrastructure/llm/client.py: a model missing
- * here has its attach button disabled, one missing there has the photograph
- * dropped on the way out. Both are silent, which is why tests/test_models.py
- * reads this list out of the source.
- */
-export const VISION_MODELS = new Set([
-  "~anthropic/claude-fable-latest",
-  "~moonshotai/kimi-latest",
-  "~google/gemini-pro-latest",
-  "openai/gpt-chat-latest",
-]);
+// Re-exported rather than restated. It used to be a second literal here, and
+// pictures were the only thing that could be attached; now that documents,
+// sound and video each have their own answer per model, one table owns all of
+// it — see lib/modelInputs.ts.
+export { VISION_MODELS, acceptsKind, acceptsAnything, kindOf, acceptAttribute };
 
 export interface ChatControllerHooks {
   /** After each streamed flush, so the page can follow the text if it wants. */
@@ -189,7 +187,7 @@ export function useChatController(hooks: ChatControllerHooks = {}) {
       .catch(() => DEFAULT_MODEL)
       .then((chosen) => {
         setModel(chosen);
-        setCanAttach(VISION_MODELS.has(chosen));
+        setCanAttach(acceptsAnything(chosen));
       });
     void loadHistory(null, false);
     // Deliberately once: loadHistory changes with hasMoreHistory, and this must
@@ -491,6 +489,10 @@ export function useChatController(hooks: ChatControllerHooks = {}) {
     imagePreviews,
     model,
     canAttach,
+    // What the file dialog will offer, narrowed to what this model can
+    // actually read. Offering more means she waits for an upload that is
+    // then dropped before the request goes out.
+    acceptTypes: acceptAttribute(model),
     hasMoreHistory,
     loadingHistory,
     historyReady,

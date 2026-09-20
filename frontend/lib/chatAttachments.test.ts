@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import {
   MAX_CHAT_IMAGES,
+  fileLabel,
   fitWithinCap,
   imageFilesFromClipboard,
+  readPreview,
   removeAt,
   type ClipboardImageItem,
 } from "./chatAttachments";
@@ -98,5 +100,63 @@ describe("removeAt", () => {
     const previews = ["p0", "p1", "p2"];
     expect(removeAt(files, 1)).toEqual(["f0", "f2"]);
     expect(removeAt(previews, 1)).toEqual(["p0", "p2"]);
+  });
+});
+
+describe("previewing what was picked", () => {
+  it("reads a picture into a data URL", async () => {
+    // These tests run under node, which has no FileReader. Stubbing it keeps
+    // the environment as it is for every other test in the suite.
+    class StubReader {
+      result = "";
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      readAsDataURL() {
+        this.result = "data:image/png;base64,iVBOR";
+        this.onload?.();
+      }
+    }
+    // Narrowed rather than cast to `any`: this file is linted as part of the
+    // production build, and one `any` here fails `next build` on the server.
+    const env = globalThis as unknown as { FileReader?: unknown };
+    const original = env.FileReader;
+    env.FileReader = StubReader;
+    try {
+      const png = new File([new Uint8Array([137, 80, 78, 71])], "shot.png", { type: "image/png" });
+      await expect(readPreview(png)).resolves.toMatch(/^data:/);
+    } finally {
+      env.FileReader = original;
+    }
+  });
+
+  it("does not even construct a reader for a non-image", async () => {
+    // The guard is before the FileReader, not inside its callback — so this
+    // resolves with no reader in the environment at all.
+    const env = globalThis as unknown as { FileReader?: unknown };
+    const pdf = new File([], "doc.pdf", { type: "application/pdf" });
+    expect(env.FileReader).toBeUndefined();
+    await expect(readPreview(pdf)).resolves.toBe("");
+  });
+
+  it("does not read anything else", async () => {
+    // A PDF read this way renders as a broken <img>, and a 20 MB video read
+    // this way is a 27 MB base64 string held in React state to produce one.
+    const pdf = new File([new Uint8Array([37, 80, 68, 70])], "doc.pdf", { type: "application/pdf" });
+    await expect(readPreview(pdf)).resolves.toBe("");
+  });
+});
+
+describe("fileLabel", () => {
+  it("names the type from the extension", () => {
+    expect(fileLabel(new File([], "invoice.pdf", { type: "application/pdf" }))).toBe("PDF");
+    expect(fileLabel(new File([], "voice.mp3", { type: "audio/mpeg" }))).toBe("MP3");
+  });
+
+  it("falls back to the MIME type when there is no extension", () => {
+    expect(fileLabel(new File([], "README", { type: "text/plain" }))).toBe("PLAI");
+  });
+
+  it("says something rather than nothing when it knows neither", () => {
+    expect(fileLabel(new File([], "mystery", { type: "" }))).toBe("FILE");
   });
 });

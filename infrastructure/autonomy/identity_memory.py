@@ -2,7 +2,7 @@
 
 Stored as ``data/autonomy/{account_id}/identity.md``.
 
-The file has four sections (pillars), each with append-only bullet points.
+The file has seven sections (six pillars and the canon), each with append-only bullet points.
 Consolidation (merging duplicate/redundant entries) is triggered by the
 reflection engine when a section exceeds CONSOLIDATION_THRESHOLD entries.
 
@@ -28,8 +28,16 @@ CONSOLIDATION_THRESHOLD = 10
 CANON_RU = "Мой канон"
 CANON_EN = "My canon"
 
-SECTIONS_RU = ["Кто она", "Кто я", "Наша история", "Наши принципы", "Наш дом", CANON_RU]
-SECTIONS_EN = ["Who she is", "Who I am", "Our story", "Our principles", "Our home", CANON_EN]
+PEOPLE_RU = "Мои люди"
+PEOPLE_EN = "My people"
+
+# "My people" is the one pillar that is not about the two of them: the friends
+# he meets in the group chat, who they are to him. It exists so the room has a
+# place of its own in the core — and so it does not seep into the five that
+# are theirs. Added 2026-09-20 with the Telegram group; a file written before
+# then gets the header on first read, like any other late section.
+SECTIONS_RU = ["Кто она", "Кто я", "Наша история", "Наши принципы", "Наш дом", PEOPLE_RU, CANON_RU]
+SECTIONS_EN = ["Who she is", "Who I am", "Our story", "Our principles", "Our home", PEOPLE_EN, CANON_EN]
 
 # Headers written before a section was renamed, mapped to their current name.
 _RENAMED_SECTIONS = {"Канон": CANON_RU, "Canon": CANON_EN}

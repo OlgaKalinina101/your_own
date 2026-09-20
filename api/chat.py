@@ -83,30 +83,83 @@ _dbg("MODULE_LOADED")
 router = APIRouter(prefix="/api", tags=["chat"], dependencies=[Depends(require_auth)])
 
 
-def _save_upload(payload: bytes, content_type: str) -> str:
-    """Save raw image bytes to user_uploads/ and return the relative URL."""
-    ext = "jpg"
-    ct = content_type.lower()
-    if "png" in ct:
-        ext = "png"
-    elif "webp" in ct:
-        ext = "webp"
-    elif "gif" in ct:
-        ext = "gif"
-    filename = f"{uuid.uuid4().hex}.{ext}"
+# Extension per MIME type, both directions. Pictures are not the only thing she
+# sends any more: the models also read documents, audio and short clips, and the
+# stored file has to keep an extension that says which is which — that is what
+# tells us the type when the file is read back from disk later.
+_EXTENSIONS: tuple[tuple[str, str], ...] = (
+    ("image/png", "png"), ("image/webp", "webp"), ("image/gif", "gif"),
+    ("image/jpeg", "jpg"),
+    ("application/pdf", "pdf"),
+    ("text/plain", "txt"), ("text/markdown", "md"), ("application/json", "json"),
+    ("text/csv", "csv"), ("text/html", "html"), ("text/xml", "xml"),
+    ("text/x-python", "py"), ("application/x-yaml", "yml"), ("text/plain", "log"),
+    ("audio/mpeg", "mp3"), ("audio/wav", "wav"), ("audio/x-wav", "wav"),
+    ("audio/ogg", "ogg"), ("audio/webm", "weba"), ("audio/mp4", "m4a"),
+    ("video/mp4", "mp4"), ("video/webm", "webm"), ("video/quicktime", "mov"),
+)
+# Both directions resolve to the FIRST entry for a repeated key, which is why
+# both are built from the reversed tuple. A type appears twice on purpose —
+# ".log" and ".txt" are both text/plain, "wav" answers to two audio types — and
+# with last-wins the canonical spelling loses to the alias: every .txt saved
+# would land on disk named .log.
+_EXT_BY_MIME = {mime: ext for mime, ext in reversed(_EXTENSIONS)}
+_MIME_BY_EXT = {ext: mime for mime, ext in reversed(_EXTENSIONS)}
+
+
+def _save_upload(payload: bytes, content_type: str, original_name: str = "") -> str:
+    """Save an attachment to user_uploads/ and return its relative URL.
+
+    The stored name is ``<uuid>_<original stem>.<ext>``. The uuid is what keeps
+    two files called "notes.txt" apart; the stem is kept because a document is
+    read back off disk and handed to the model under its filename, and
+    "contents of 4f2a9c.txt" tells her nothing about which of two files it was.
+    """
+    ct = (content_type or "").lower().split(";")[0].strip()
+    ext = _EXT_BY_MIME.get(ct)
+    if ext is None:
+        # Unknown type: keep the bytes, keep the family in the extension so the
+        # kind survives the round trip through disk.
+        ext = ct.split("/")[-1][:8] or "bin"
+        ext = "".join(c for c in ext if c.isalnum()) or "bin"
+    stem = _safe_stem(original_name)
+    filename = f"{uuid.uuid4().hex}{'_' + stem if stem else ''}.{ext}"
     (USER_UPLOADS_DIR / filename).write_bytes(payload)
     return f"/api/user_uploads/{filename}"
+
+
+def _safe_stem(original_name: str) -> str:
+    """The original name, reduced to what is safe to put in a path.
+
+    Anything that could steer the write elsewhere — separators, dots, the parent
+    directory — is gone rather than escaped, because this string is concatenated
+    into a filename and an escape that is merely mostly right is a file written
+    outside user_uploads/.
+    """
+    stem = (original_name or "").rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+    stem = stem.rsplit(".", 1)[0] if "." in stem else stem
+    kept = "".join(c for c in stem if c.isalnum() or c in "-_ ").strip().replace(" ", "_")
+    return kept[:40]
 
 
 @router.post("/upload")
 async def upload_image(
     image: UploadFile = File(...),
 ):
-    """Upload a single image and return its server URL."""
+    """Upload a single attachment and return its server URL.
+
+    The field is still called ``image`` because both clients send it under that
+    name and renaming it would break the one running on her phone. What comes
+    through it is no longer only pictures.
+    """
     payload = await image.read()
     if not payload:
         raise HTTPException(status_code=400, detail="Empty file")
-    url = _save_upload(payload, image.content_type or "image/jpeg")
+    # Falling back to JPEG was safe when only photographs came through here; a
+    # PDF saved as .jpg is read back as an image and sent in a shape that is
+    # refused. The filename is the better guess, and says so when it has none.
+    content_type = image.content_type or _content_type_of(image.filename or "")
+    url = _save_upload(payload, content_type, image.filename or "")
     return {"url": url}
 
 
@@ -550,7 +603,7 @@ class _Inputs:
     messages: list[dict]
     user_text: str
     language: str
-    image_items: list[tuple[bytes, str]]
+    attachments: list[tuple[bytes, str, str]]
     upload_urls: list[str]
     images_from_urls: bool
 
@@ -580,24 +633,48 @@ def _as_float(value: Optional[str], default: float) -> float:
 
 
 def _content_type_of(filename: str) -> str:
-    for suffix, content_type in (
-        (".png", "image/png"), (".webp", "image/webp"), (".gif", "image/gif"),
-    ):
-        if filename.endswith(suffix):
-            return content_type
-    return "image/jpeg"
+    """The MIME type of a stored attachment, from its extension.
+
+    Files are read back from disk by URL, so the extension is the only thing
+    left that says what they are. Defaulting to JPEG used to be safe when
+    pictures were all we accepted; now a PDF read back as an image would be
+    sent in the wrong shape and refused.
+    """
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    return _MIME_BY_EXT.get(ext, "application/octet-stream")
 
 
-async def _read_images(
+def _original_name_of(stored: str) -> str:
+    """The name the person gave a file, recovered from its stored name.
+
+    ``_save_upload`` writes ``<uuid>_<stem>.<ext>``; a uuid hex has no
+    underscore, so the first one is the seam. A file stored before names were
+    kept has no seam and comes back under its stored name, which is what it had
+    anyway.
+    """
+    head, dot, ext = stored.rpartition(".")
+    base = head if dot else stored
+    _, sep, stem = base.partition("_")
+    if not sep or not stem:
+        return stored
+    return f"{stem}.{ext}" if dot else stem
+
+
+async def _read_attachments(
     image_urls_json: Optional[str],
     image: Optional[UploadFile],
     images: Optional[list[UploadFile]],
-) -> tuple[list[tuple[bytes, str]], list[str], bool]:
-    """Resolve pictures from either pre-uploaded URLs or a legacy multipart body.
+) -> tuple[list[tuple[bytes, str, str]], list[str], bool]:
+    """Resolve attachments from pre-uploaded URLs or a multipart body.
 
-    Returns ``(image_items, urls, came_from_urls)``. The two shapes exist because
-    the client used to send the bytes with the message and now uploads them
-    first; both are still accepted.
+    Returns ``(attachments, urls, came_from_urls)``, where each attachment is
+    ``(data, mime, filename)``. The two shapes exist because the client used to
+    send the bytes with the message and now uploads them first; both are still
+    accepted.
+
+    Not only pictures any more — documents, audio and clips come through the
+    same door. Which of them a given model can actually read is decided later,
+    in the client, against the model's own table.
     """
     urls: list[str] = []
     from_urls = False
@@ -611,13 +688,13 @@ async def _read_images(
         except json.JSONDecodeError:
             pass
 
-    items: list[tuple[bytes, str]] = []
+    items: list[tuple[bytes, str, str]] = []
 
     if from_urls:
         for url in urls:
             path = USER_UPLOADS_DIR / url.rsplit("/", 1)[-1]
             if path.is_file():
-                items.append((path.read_bytes(), _content_type_of(path.name)))
+                items.append((path.read_bytes(), _content_type_of(path.name), _original_name_of(path.name)))
         return items, urls, True
 
     uploaded = [item for item in (images or []) if item and item.filename]
@@ -626,14 +703,15 @@ async def _read_images(
     if len(uploaded) > MAX_CHAT_IMAGES:
         raise HTTPException(
             status_code=400,
-            detail=f"Up to {MAX_CHAT_IMAGES} images allowed per message.",
+            detail=f"Up to {MAX_CHAT_IMAGES} attachments allowed per message.",
         )
 
     for upload in uploaded:
         payload = await upload.read()
         if payload:
-            items.append((payload, upload.content_type or "image/jpeg"))
-    urls = [_save_upload(payload, content_type) for payload, content_type in items]
+            mime = upload.content_type or _content_type_of(upload.filename or "")
+            items.append((payload, mime, upload.filename or ""))
+    urls = [_save_upload(data, mime, name) for data, mime, name in items]
     return items, urls, False
 
 
@@ -672,7 +750,7 @@ async def _read_inputs(
     )
     user_text = (latest_user or {}).get("content", "") if latest_user else ""
 
-    image_items, upload_urls, from_urls = await _read_images(
+    attachments, upload_urls, from_urls = await _read_attachments(
         image_urls_json, image, images
     )
 
@@ -699,7 +777,7 @@ async def _read_inputs(
         messages=parsed_messages,
         user_text=user_text,
         language=detect_or_soul(user_text),
-        image_items=image_items,
+        attachments=attachments,
         upload_urls=upload_urls,
         images_from_urls=from_urls,
     )
@@ -971,7 +1049,7 @@ async def _stream_initial(
     client: LLMClient,
     *,
     messages: list[dict],
-    image_items: list | None,
+    attachments: list | None,
     system_prompt: str,
     command_re,
     state: _Streamed,
@@ -989,7 +1067,7 @@ async def _stream_initial(
     last_emit = time.monotonic()
     async for chunk in client.stream(
         messages=messages,
-        image_items=image_items or None,
+        attachments=attachments or None,
         system_prompt=system_prompt,
     ):
         if not chunk:
@@ -1091,7 +1169,7 @@ async def chat(
     system_prompt = inputs.soul
     cutoff_days = inputs.cutoff_days
     do_web_search = inputs.do_web_search
-    image_items = inputs.image_items
+    attachments = inputs.attachments
     upload_urls = inputs.upload_urls
     images_from_urls = inputs.images_from_urls
     current_user_text = inputs.user_text
@@ -1106,7 +1184,7 @@ async def chat(
         model,
         do_web_search,
         prompt_language,
-        len(image_items),
+        len(attachments),
         inputs.history_pairs,
         cutoff_days,
         _preview(current_user_text),
@@ -1226,7 +1304,7 @@ async def chat(
             async for frame in _stream_initial(
                 client,
                 messages=llm_messages,
-                image_items=image_items,
+                attachments=attachments,
                 system_prompt=combined_system_prompt,
                 command_re=_CMD_OPEN_RE,
                 state=streamed,

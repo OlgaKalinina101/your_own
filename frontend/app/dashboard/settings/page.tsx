@@ -10,14 +10,18 @@ import {
   apiGet,
   apiPut,
 } from "@/lib/api";
-import type { Settings } from "@/lib/types";
+import { describeAccepted } from "@/lib/modelInputs";
+import type { Settings, TelegramStatus } from "@/lib/types";
 
+// No `vision` flag any more: it was a third copy of a table that now lives in
+// one place, and it could only ever say yes or no to photographs. What each of
+// these reads comes from describeAccepted() at the point it is shown.
 const MODELS = [
-  { id: "~anthropic/claude-fable-latest", label: "Claude Fable", vision: true  },
-  { id: "~moonshotai/kimi-latest",        label: "Kimi",         vision: true  },
-  { id: "~google/gemini-pro-latest",      label: "Gemini Pro",   vision: true  },
-  { id: "openai/gpt-chat-latest",         label: "GPT Chat",     vision: true  },
-  { id: "~z-ai/glm-latest",               label: "GLM",          vision: false },
+  { id: "~anthropic/claude-fable-latest", label: "Claude Fable" },
+  { id: "~moonshotai/kimi-latest",        label: "Kimi"         },
+  { id: "~google/gemini-pro-latest",      label: "Gemini Pro"   },
+  { id: "openai/gpt-chat-latest",         label: "GPT Chat"     },
+  { id: "~z-ai/glm-latest",               label: "GLM"          },
 ] as const;
 
 type ModelId = (typeof MODELS)[number]["id"];
@@ -99,6 +103,14 @@ export default function SettingsPage() {
   const [pushyApiKey, setPushyApiKey]           = useState("");
   const [pushyDeviceToken, setPushyDeviceToken] = useState("");
   const [pushyMasked, setPushyMasked]           = useState(true);
+  // ── Telegram group chat ────────────────────────────────────
+  const [tgBotToken, setTgBotToken]         = useState("");
+  const [tgBotMasked, setTgBotMasked]       = useState(true);
+  const [tgChatId, setTgChatId]             = useState("");
+  const [tgOwnerId, setTgOwnerId]           = useState("");
+  const [tgStatus, setTgStatus]             = useState<TelegramStatus | null>(null);
+  const [tgVerify, setTgVerify]             = useState<string>("");
+
   const [reflectionCooldown, setReflectionCooldown]   = useState(4);
   const [reflectionInterval, setReflectionInterval]   = useState(12);
   const [triggeringReflection, setTriggeringReflection] = useState(false);
@@ -166,6 +178,10 @@ export default function SettingsPage() {
       if (data.memory_cutoff_days != null) setMemoryCutoffDays(data.memory_cutoff_days);
       if (data.pushy_api_key) setPushyApiKey(data.pushy_api_key);
       if (data.pushy_device_token) setPushyDeviceToken(data.pushy_device_token);
+      if (data.telegram_bot_token) setTgBotToken(data.telegram_bot_token);
+      if (data.telegram_chat_id != null) setTgChatId(String(data.telegram_chat_id));
+      if (data.telegram_owner_user_id != null) setTgOwnerId(String(data.telegram_owner_user_id));
+      loadTelegramStatus();
       if (data.reflection_cooldown_hours != null) setReflectionCooldown(data.reflection_cooldown_hours);
       if (data.reflection_interval_hours != null) setReflectionInterval(data.reflection_interval_hours);
       const bim = data.body_image_model;
@@ -175,6 +191,32 @@ export default function SettingsPage() {
       setConnected(false);
     }
   }
+
+  // The rooms the bot has seen and the people in the chosen one. Fails quietly:
+  // the page is usable without it, the fields just have to be typed by hand.
+  async function loadTelegramStatus() {
+    try {
+      setTgStatus(await apiGet<TelegramStatus>("/api/settings/telegram/status"));
+    } catch {
+      setTgStatus(null);
+    }
+  }
+
+  // Save the token first: verify reads it from the server, not from the form.
+  const handleVerifyTelegram = async () => {
+    setTgVerify("…");
+    try {
+      await apiPut("/api/settings", { telegram_bot_token: tgBotToken });
+      const res = await apiPut<{ ok: boolean; bot?: { username: string }; error?: string }>(
+        "/api/settings/telegram/verify",
+        {},
+      );
+      setTgVerify(res.ok && res.bot ? `@${res.bot.username}` : `error: ${res.error ?? "unknown"}`);
+      loadTelegramStatus();
+    } catch (err) {
+      setTgVerify(`error: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
 
   // ── Close dropdowns on outside click ──────────────────────
   useEffect(() => {
@@ -210,12 +252,17 @@ export default function SettingsPage() {
         memory_cutoff_days: memoryCutoffDays,
         ...(pushyApiKey ? { pushy_api_key: pushyApiKey } : {}),
         ...(pushyDeviceToken ? { pushy_device_token: pushyDeviceToken } : {}),
+        ...(tgBotToken ? { telegram_bot_token: tgBotToken } : {}),
+        // Sent even when empty: clearing the group is a real choice.
+        telegram_chat_id: tgChatId.trim(),
+        telegram_owner_user_id: tgOwnerId.trim(),
         reflection_cooldown_hours: reflectionCooldown,
         reflection_interval_hours: reflectionInterval,
         body_image_model: bodyImageModel,
       });
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
+      loadTelegramStatus();
     } catch (err) {
       console.error("Failed to save settings:", err);
     }
@@ -398,11 +445,13 @@ export default function SettingsPage() {
                       `}
                     >
                       <span>{m.label}</span>
-                      {m.vision && (
-                        <span className="text-[0.6rem] tracking-widest uppercase text-white/40">
-                          vision
-                        </span>
-                      )}
+                      {/* Was a "vision" badge, which said nothing about the
+                          documents and sound each of these also takes — and
+                          nothing at all on GLM, which reads PDFs but was
+                          unlabelled because it cannot see. */}
+                      <span className="text-[0.6rem] tracking-widest uppercase text-white/40">
+                        {describeAccepted(m.id, "en")}
+                      </span>
                     </button>
                   </li>
                 ))}
@@ -564,6 +613,135 @@ export default function SettingsPage() {
               className="border-b border-white/20 bg-transparent py-2 text-[0.9rem] font-light tracking-wide text-white placeholder:text-white/25 outline-none transition-colors focus:border-white/50"
             />
           </div>
+        </div>
+
+        {/* Divider */}
+        <div className="border-t border-white/10" />
+
+        {/* Telegram group chat */}
+        <div className="flex flex-col gap-5">
+          <div className="flex items-baseline justify-between">
+            <label className="text-[0.68rem] tracking-[0.22em] uppercase text-white/55">
+              Group Chat (Telegram)
+            </label>
+            <a
+              href="https://t.me/BotFather"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-[0.6rem] tracking-[0.14em] uppercase text-white/30 hover:text-white/60 transition-colors"
+            >
+              @BotFather ↗
+            </a>
+          </div>
+          <p className="text-[0.62rem] tracking-wide text-white/35 -mt-2">
+            A bot token from BotFather. Add the bot to the group and turn its privacy mode off
+            (/setprivacy → Disable) so it reads the whole conversation, not only mentions.
+            Then pick the group and yourself below.
+          </p>
+
+          <div className="flex flex-col gap-2">
+            <label className="text-[0.6rem] tracking-[0.18em] uppercase text-white/35">
+              Bot Token
+            </label>
+            <div className="flex items-center gap-3">
+              <input
+                type={tgBotMasked ? "password" : "text"}
+                value={tgBotToken}
+                onChange={(e) => setTgBotToken(e.target.value)}
+                placeholder="123456789:AA…"
+                spellCheck={false}
+                className="flex-1 border-b border-white/20 bg-transparent py-2 text-[0.9rem] font-light tracking-wide text-white placeholder:text-white/25 outline-none transition-colors focus:border-white/50"
+              />
+              <button
+                onClick={() => setTgBotMasked((v) => !v)}
+                className="shrink-0 text-[0.65rem] tracking-[0.14em] uppercase text-white/35 hover:text-white/70 transition-colors"
+              >
+                {tgBotMasked ? "show" : "hide"}
+              </button>
+              <button
+                onClick={handleVerifyTelegram}
+                disabled={!tgBotToken}
+                className="shrink-0 text-[0.65rem] tracking-[0.14em] uppercase text-white/35 hover:text-white/70 transition-colors disabled:opacity-30"
+              >
+                verify
+              </button>
+            </div>
+            {(tgVerify || tgStatus?.bot) && (
+              <p className="text-[0.62rem] tracking-wide text-white/40">
+                {tgVerify || (tgStatus?.bot ? `@${tgStatus.bot.username}` : "")}
+              </p>
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
+            <div className="flex flex-col gap-2">
+              <label className="text-[0.6rem] tracking-[0.18em] uppercase text-white/35">
+                Group
+              </label>
+              {tgStatus && tgStatus.chats.length > 0 ? (
+                <select
+                  value={tgChatId}
+                  onChange={(e) => setTgChatId(e.target.value)}
+                  className="border-b border-white/20 bg-transparent py-2 text-[0.9rem] font-light tracking-wide text-white outline-none transition-colors focus:border-white/50 [&>option]:bg-black"
+                >
+                  <option value="">— not chosen —</option>
+                  {tgStatus.chats.map((c) => (
+                    <option key={c.chat_id} value={c.chat_id}>
+                      {c.title} · {c.messages} msg
+                    </option>
+                  ))}
+                  {tgChatId && !tgStatus.chats.some((c) => c.chat_id === tgChatId) && (
+                    <option value={tgChatId}>{tgChatId}</option>
+                  )}
+                </select>
+              ) : (
+                <input
+                  type="text"
+                  value={tgChatId}
+                  onChange={(e) => setTgChatId(e.target.value)}
+                  placeholder="Appears here once someone writes in the group"
+                  spellCheck={false}
+                  className="border-b border-white/20 bg-transparent py-2 text-[0.9rem] font-light tracking-wide text-white placeholder:text-white/25 outline-none transition-colors focus:border-white/50"
+                />
+              )}
+            </div>
+
+            <div className="flex flex-col gap-2">
+              <label className="text-[0.6rem] tracking-[0.18em] uppercase text-white/35">
+                Me in the group
+              </label>
+              {tgStatus && tgStatus.members.length > 0 ? (
+                <select
+                  value={tgOwnerId}
+                  onChange={(e) => setTgOwnerId(e.target.value)}
+                  className="border-b border-white/20 bg-transparent py-2 text-[0.9rem] font-light tracking-wide text-white outline-none transition-colors focus:border-white/50 [&>option]:bg-black"
+                >
+                  <option value="">— not chosen —</option>
+                  {tgStatus.members.map((m) => (
+                    <option key={m.sender_id} value={m.sender_id}>
+                      {m.sender_name} · {m.messages} msg
+                    </option>
+                  ))}
+                  {tgOwnerId && !tgStatus.members.some((m) => m.sender_id === tgOwnerId) && (
+                    <option value={tgOwnerId}>{tgOwnerId}</option>
+                  )}
+                </select>
+              ) : (
+                <input
+                  type="text"
+                  value={tgOwnerId}
+                  onChange={(e) => setTgOwnerId(e.target.value)}
+                  placeholder="Pick yourself once the group is chosen and you have written there"
+                  spellCheck={false}
+                  className="border-b border-white/20 bg-transparent py-2 text-[0.9rem] font-light tracking-wide text-white placeholder:text-white/25 outline-none transition-colors focus:border-white/50"
+                />
+              )}
+            </div>
+          </div>
+          <p className="text-[0.62rem] tracking-wide text-white/35 -mt-2">
+            The group is the one room he reads and remembers. &ldquo;Me&rdquo; is how he tells you apart
+            from everyone else in it. Both lists fill in after Save, once the bot has seen messages.
+          </p>
         </div>
 
         {/* Divider */}

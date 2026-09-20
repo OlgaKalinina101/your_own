@@ -55,12 +55,27 @@ export function removeAt<T>(list: readonly T[], index: number): T[] {
   return list.filter((_, current) => current !== index);
 }
 
-/** A `data:` URL for a picked file, for showing it before it is sent. */
+/**
+ * A `data:` URL for a picked file, for showing it before it is sent.
+ *
+ * Only for pictures. Everything else comes back as an empty string and is shown
+ * as a named chip instead: a PDF read this way renders as a broken image, and a
+ * video read this way is a 20 MB base64 string held in React state to produce
+ * one — see `previewFor`.
+ */
 export function readPreview(file: File): Promise<string> {
+  if (!file.type.startsWith("image/")) return Promise.resolve("");
   return new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(String(reader.result ?? ""));
     reader.onerror = () => reject(new Error("Failed to read image"));
     reader.readAsDataURL(file);
   });
+}
+
+/** The short label on a non-image attachment: "PDF", "MP3", "TXT". */
+export function fileLabel(file: File): string {
+  const fromName = file.name.includes(".") ? file.name.split(".").pop() ?? "" : "";
+  const label = fromName || file.type.split("/").pop() || "file";
+  return label.slice(0, 4).toUpperCase();
 }
