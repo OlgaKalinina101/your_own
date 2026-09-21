@@ -156,6 +156,13 @@ This document describes the full data flow of the system — from a chat message
 │  │    → ChromaDB workbench_archive collection                     │  │
 │  │    → removed from workbench.md                                 │  │
 │  │                                                                │  │
+│  │  Step 1b — The address book                                    │  │
+│  │    notes marked as coming from the group chat                  │  │
+│  │    → LLM: which of these are facts about a person?             │  │
+│  │    → people.add_fact() — onto that person's card               │  │
+│  │    a card past 12 lines → rebuilt shorter (every rotation,     │  │
+│  │    even when no note went stale)                               │  │
+│  │                                                                │  │
 │  │  Step 2 — Self-insight extraction                              │  │
 │  │    LLM reads stale notes + soul.md                             │  │
 │  │    → extracts insights about who the AI is                     │  │
@@ -165,6 +172,7 @@ This document describes the full data flow of the system — from a chat message
 │  │                                                                │  │
 │  │  Step 3 — Identity review                                      │  │
 │  │    LLM reads stale notes + current identity.md                 │  │
+│  │    + the whole address book, every card in full                │  │
 │  │    → can emit UPDATE: <section>\n---\n<bullets>\n---           │  │
 │  │    → identity.replace_section() rewrites that section          │  │
 │  │                                                                │  │
@@ -291,7 +299,7 @@ The soul (`data/soul.md`) **is** injected into every chat as the base system pro
 | Short-term scratchpad | `data/autonomy/{id}/workbench.md` | Post-analyzer, reflection, the group (`[WRITE_NOTE]`, marked `[общий чат «title»]`) | Reflection and the rotator read it whole; chat, post-analysis and the push validator the last 3 entries **not** taken in the group; the group the last 2 private + its own last 5 |
 | Self-model | `data/autonomy/{id}/identity.md` | Rotator, reflection `[WRITE_IDENTITY]` | Reflection, post-analyzer and the group whole; private chat the canon only |
 | Scheduled messages | PostgreSQL `autonomy_tasks` | Post-analyzer, reflection | Scheduled push worker, reflection context |
-| The address book — one card per person | `data/autonomy/{id}/people/*.md` | He, with `[ABOUT]` / `[FORGET]` in the group and at a waking; the rotator (moves misfiled notes, rebuilds long cards) | The group (speakers + named), reflection (speakers + index), private chat (only who she names), the identity review |
+| The address book — one card per person (found by who is speaking, then by who was named; newest first) | `data/autonomy/{id}/people/*.md` | He, with `[ABOUT]` / `[FORGET]` in the group and at a waking; the rotator (moves misfiled notes, rebuilds long cards) | The group (speakers + named), reflection (speakers + index), private chat (only who she names), the identity review |
 | Open threads (the board) | `data/autonomy/{id}/threads.md` | Reflection, post-analyzer | Every consumer — chat included |
 | Instrument panel | `data/autonomy/{id}/vitals.json` | Reflection worker, heartbeat | Reflection (deltas unasked, full panel on `[VITALS]`) |
 | Every LLM call, in full | `data/dataset/calls-YYYY-MM.jsonl` (older months gzipped) | `llm/client.py` | Kept, not rotated — the record of his own thinking |

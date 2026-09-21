@@ -96,7 +96,10 @@ def _parts(name: str) -> list[str]:
     return [whole, *[w for w in words if _norm(w) != _norm(whole)]] if whole else []
 
 
-@lru_cache(maxsize=16)
+# One matcher per set of names. The address book calls this once per person, so
+# the cache has to hold a book, not just him: at 16 a book of 31 cards rebuilt
+# half its matchers — morphology and all — on every reply in the room.
+@lru_cache(maxsize=512)
 def _matcher(names: tuple[str, ...], handle: str) -> re.Pattern | None:
     forms: set[str] = set()
     for name in names:

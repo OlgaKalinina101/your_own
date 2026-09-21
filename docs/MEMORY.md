@@ -188,7 +188,13 @@ Notes are for what is his — what stirred in him, what is happening today. What
 | Reflection | cards of whoever spoke since he last read the room, an index of the rest, `[SHOW_PERSON]` |
 | Private chat | up to 2 cards, only when she names someone |
 | Post-analysis, push validator | nothing |
-| Rotator | the whole book, for the identity review — with the rule that a card holds facts and *My people* says who they are to him |
+| Rotator | **the whole book, every card in full**, for the identity review — with the rule that a card holds facts and *My people* says who they are to him. Not cut to fit: 31 cards measured 11.6k characters beside an identity of 19.6k |
+
+How a card is found, in the order it is tried:
+
+1. **Who is speaking** — the Telegram id on the message. Exact, free, and it survives a change of display name.
+2. **Who was named** — every name and nickname on every card, matched in any grammatical case («у Элайи», «Панде»), across the whole window of messages, not only the latest.
+3. **Who goes first** — speakers before the named, newest before oldest. This is what decides who is left out when a prompt has room for six cards and nine people qualify.
 
 It is not a Chroma collection on purpose. Semantic retrieval answers "what is this about?"; in a room the useful question is "who is this?", and the answer is an exact key.
 

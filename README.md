@@ -475,7 +475,7 @@ Anything else is the room talking among itself: stored, not answered, and read *
 
 **What it is called.** Its name is a setting and nothing in the code knows what it is. Case forms (*Виктору, с Виктором*) are derived by morphology. Nicknames come three ways into one editable list: a model seeds it once per name — including the ordinary spelling when the setting is written in another script — the AI adds what it is actually called, and you edit it in Settings.
 
-**Who is who.** Every speaker is shown with the name the room knows and the one the AI knows them by — `Ptica Arop (Чарли)` — and their card is in view while they talk.
+**Who is who.** Every speaker is shown with the name the room knows and the one the AI knows them by — `Ptica Arop (Чарли)` — and their card is in view while they talk. So is the card of anyone they name: a friend writes "my Элайя just told me…" and the AI is looking at both the friend's card and Элайя's.
 
 **Keeping the room from outweighing you.** The group has its own table, never moves the reflection clock, and never sees the board. Notes taken there share the journal but are marked, and the three entries shown in a private conversation are always yours. The friends reach long-term memory only through what the AI itself chose to write down.
 

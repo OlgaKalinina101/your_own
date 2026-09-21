@@ -187,20 +187,38 @@ def find(account_id: str, who: str = "", *, tg_id: str = "") -> Person | None:
 
 
 def by_ids(account_id: str, tg_ids: list[str]) -> list[Person]:
-    wanted = {str(i) for i in tg_ids if i}
-    return [p for p in all_people(account_id) if p.tg_id and p.tg_id in wanted]
+    """Cards for these Telegram ids, **in the order the ids were given**.
+
+    The caller passes whoever spoke last first, so when a prompt has room for
+    six cards and nine people qualify, the ones left out are the ones who spoke
+    longest ago — not the ones late in the alphabet.
+    """
+    order = [str(i) for i in dict.fromkeys(tg_ids) if i]
+    found = {p.tg_id: p for p in all_people(account_id) if p.tg_id and p.tg_id in set(order)}
+    return [found[i] for i in order if i in found]
 
 
-def mentioned(account_id: str, text: str) -> list[Person]:
-    """Everyone named in *text*, in whatever case the name was written."""
+def mentioned(account_id: str, text: str | list[str]) -> list[Person]:
+    """Everyone named in *text*, in whatever case the name was written.
+
+    Given a list — messages, newest first — the people come back by where they
+    were named last: someone in the latest line before someone from twenty
+    lines ago.
+    """
     from infrastructure.telegram import addressing
 
-    if not (text or "").strip():
+    texts = [t for t in ([text] if isinstance(text, str) else list(text)) if (t or "").strip()]
+    if not texts:
         return []
-    return [
-        person for person in all_people(account_id)
-        if addressing.mentions(text, ai_name=person.name, aliases=tuple(person.aka))
-    ]
+    placed: list[tuple[int, Person]] = []
+    for person in all_people(account_id):
+        aliases = tuple(person.aka)
+        for position, line in enumerate(texts):
+            if addressing.mentions(line, ai_name=person.name, aliases=aliases):
+                placed.append((position, person))
+                break
+    placed.sort(key=lambda item: item[0])
+    return [person for _position, person in placed]
 
 
 # ── Writing ──────────────────────────────────────────────────────────────────

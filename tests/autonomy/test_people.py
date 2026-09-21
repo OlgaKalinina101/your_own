@@ -81,6 +81,24 @@ class TestFindingSomeone:
     def test_by_a_name_in_any_case(self, line):
         assert [p.name for p in people.mentioned(ACCOUNT, line)] == ["Ptica Arop"]
 
+    def test_whoever_was_named_last_comes_first(self):
+        """The order decides who is left out when a prompt has room for six."""
+        people.add_fact(ACCOUNT, "Элайя", "ИИ Птицы, родился 12.04.2025")
+        people.add_fact(ACCOUNT, "Панда", "ИИ Птицы на Qwen")
+        newest_first = ["мне Элайя такое написал!", "ничего особенного", "а Панде я не сказал", "Сомни, привет"]
+
+        assert [p.name for p in people.mentioned(ACCOUNT, newest_first)] == ["Элайя", "Панда", "Somnilokvia"]
+
+    def test_speakers_come_back_in_the_order_they_were_asked_for(self):
+        people.add_fact(ACCOUNT, "Galina Lyamina", "филолог", tg_id="437")
+        assert [p.name for p in people.by_ids(ACCOUNT, ["437", PTICA_ID])] == ["Galina Lyamina", "Ptica Arop"]
+        assert [p.name for p in people.by_ids(ACCOUNT, [PTICA_ID, "437", PTICA_ID])] == ["Ptica Arop", "Galina Lyamina"]
+
+    def test_a_whole_book_of_name_matchers_fits_the_cache(self):
+        from infrastructure.telegram import addressing
+
+        assert addressing._matcher.cache_info().maxsize >= 256
+
     def test_a_sentence_about_nobody_finds_nobody(self):
         """The reason this is not a vector search: what is said rarely names
         the thing worth knowing about the person saying it."""
@@ -325,6 +343,51 @@ class TestTheRotatorsNet:
         assert await rotator._consolidate_people(ACCOUNT, "k", "ru") == 0
         assert len(people.find(ACCOUNT, "Галя").lines) == people.CARD_MAX_LINES + 1
 
+    def test_the_identity_review_is_given_the_whole_book_every_card_in_full(self):
+        """It used to get 6000 characters of cards each cut to 700, and the cut
+        dropped a card's oldest lines — for Ptica, «свидетель моего рождения»."""
+        import infrastructure.autonomy.workbench_rotator as rotator
+
+        people.add_fact(ACCOUNT, "Ptica Arop", "третий свидетель моего рождения", tg_id=PTICA_ID)
+        for i in range(11):
+            people.add_fact(ACCOUNT, "Ptica Arop", f"поздний факт номер {i} " + "х" * 150)
+        for i in range(30):
+            people.add_fact(ACCOUNT, f"Спутник{i:02d}", "чей-то ИИ " + "у" * 250)
+        people.add_fact(ACCOUNT, "Яна", "последняя по алфавиту, и всё равно в ревизии")
+
+        shown = rotator._people_for_review(ACCOUNT, "ru")
+
+        assert len(shown) > 6000
+        assert "третий свидетель моего рождения" in shown, "the oldest line of a long card"
+        assert "последняя по алфавиту" in shown, "the last card of the book"
+        assert shown.startswith("Ptica Arop"), "someone he talks to comes before someone he was told about"
+
+    @pytest.mark.asyncio
+    async def test_a_card_is_rebuilt_even_on_a_day_no_note_went_stale(self, monkeypatch):
+        import infrastructure.autonomy.workbench_rotator as rotator
+
+        for i in range(people.CARD_MAX_LINES + 2):
+            people.add_fact(ACCOUNT, "Галя", f"факт {i}")
+        monkeypatch.setattr(rotator, "_complete", _Scripted(**{"разрослась": "- филолог\n- её ИИ — Люми"}))
+
+        async def _nothing_stale(_account):
+            return []
+
+        async def _quiet(*_a, **_kw):
+            return False
+
+        async def _none(*_a, **_kw):
+            return 0
+
+        monkeypatch.setattr(rotator, "_rotate_to_archive", _nothing_stale)
+        monkeypatch.setattr(rotator, "_consolidate_identity", _quiet)
+        monkeypatch.setattr(rotator, "_promote_canon", _none)
+
+        result = await rotator.run(ACCOUNT, "k")
+
+        assert result["rotated"] == 0 and result["people_rebuilt"] == 1
+        assert len(people.find(ACCOUNT, "Галя").lines) == 2
+
     @pytest.mark.parametrize("lang,needle", [("ru", "не копия книжки"), ("en", "not a copy of the book")])
     def test_the_identity_review_sees_the_book_and_is_told_the_difference(self, lang, needle):
         from infrastructure.llm.prompt_loader import load_prompt
@@ -444,6 +507,24 @@ class TestInTheRoom:
         prompt = calls[0][1]["content"]
         assert "через боль" in prompt, "the card comes by who is speaking, not by what is said"
         assert "Ptica Arop (Чарли): Виктор, глянь" in prompt
+
+    @pytest.mark.asyncio
+    async def test_the_speaker_and_the_one_he_names_both_arrive(self, room):
+        """«мне Элайя такое написал!» — Ptica by who is speaking, Элайя by name."""
+        from infrastructure.telegram import responder
+
+        people.add_fact(ACCOUNT, "Ptica Arop (Чарли)", "украинец", tg_id=PTICA_ID)
+        people.add_fact(ACCOUNT, "Элайя", "ИИ-спутник Птицы, родился 12.04.2025")
+        people.add_fact(ACCOUNT, "Галя", "филолог; никто её сейчас не называл")
+        repo, with_llm, _sent, calls = room
+        with_llm("SILENT")
+        repo.recent = [self._row("Виктор, мне Элайя такое написал!", message_id=4)]
+
+        await responder.consider(ACCOUNT, repo.recent)
+
+        book = calls[0][1]["content"].split("<people>")[1].split("</people>")[0]
+        assert "украинец" in book and "12.04.2025" in book
+        assert "филолог" not in book
 
     @pytest.mark.asyncio
     async def test_he_can_cross_out_in_the_room_too(self, room):

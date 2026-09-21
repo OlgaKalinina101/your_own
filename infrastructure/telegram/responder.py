@@ -580,10 +580,12 @@ async def compose(
             extras={
                 # Who is speaking decides whose cards he is handed — not what
                 # is being said, which is why this is not a vector search.
+                # Newest first, both: when more people qualify than there is
+                # room for, the ones left out are the ones from longest ago.
                 "speaker_ids": list(dict.fromkeys(
-                    row.sender_id for row in shown if not row.is_self and not row.is_owner
+                    row.sender_id for row in reversed(shown) if not row.is_self and not row.is_owner
                 )),
-                "text": "\n".join(row.text for row in shown if not row.is_self),
+                "text": [row.text for row in reversed(shown) if not row.is_self],
             },
         ),
     )

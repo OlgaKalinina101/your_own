@@ -216,7 +216,15 @@ async def _review_identity(
 # hours for the rotator would leave him not knowing tomorrow where a friend is
 # from. What is left for here is the net and the housekeeping.
 
-_PEOPLE_REVIEW_CHARS = 6000
+# The identity review is given the whole book, every card in full.
+#
+# It used to get 6000 characters of cards that were each already cut to 700 —
+# two truncations, and the second dropped a card's *oldest* lines, which for
+# Ptica is «свидетель моего рождения»: exactly what "My people" is made of.
+# Measured on the live server the whole book is 11.6k characters for 31 cards,
+# beside an identity of 19.6k and a desk of 41k. A group chat is thirty people,
+# not thirty thousand. The ceiling below is an accident guard, not a budget.
+_PEOPLE_REVIEW_CEILING = 60_000
 _ABOUT_LINE_RE = re.compile(r"^\s*ABOUT\s*:\s*(?P<who>[^|]+?)\s*\|\s*(?P<fact>.+?)\s*$", re.IGNORECASE)
 
 
@@ -226,7 +234,22 @@ def _people_for_review(account_id: str, lang: str) -> str:
     book = people.all_people(account_id)
     if not book:
         return "(пусто)" if lang == "ru" else "(empty)"
-    return people.render_cards(book, limit=len(book))[:_PEOPLE_REVIEW_CHARS]
+    # If the ceiling is ever hit, what falls off is the end of this order:
+    # people he actually talks to first, then whoever he knows most about.
+    book.sort(key=lambda person: (not person.tg_id, -len(person.lines), person.name.lower()))
+    cards: list[str] = []
+    size = 0
+    for person in book:
+        card = people.render_card(person, max_chars=_PEOPLE_REVIEW_CEILING)
+        if size + len(card) > _PEOPLE_REVIEW_CEILING:
+            logger.warning(
+                "[rotator:%s] the address book no longer fits the identity review: "
+                "%d of %d cards shown", account_id, len(cards), len(book),
+            )
+            break
+        cards.append(card)
+        size += len(card) + 2
+    return "\n\n".join(cards)
 
 
 async def _sort_group_notes(
@@ -538,6 +561,12 @@ async def run(account_id: str, api_key: str) -> dict:
     if not stale:
         # Still run consolidation and promotion even when nothing rotated
         lang = detect_lang(identity.read(account_id))
+        # The book does not depend on the desk: he adds to cards in the room
+        # all day, so a card can outgrow its limit on a day no note went stale.
+        try:
+            result["people_rebuilt"] = await _consolidate_people(account_id, api_key, lang)
+        except Exception as exc:
+            logger.error("[rotator:%s] address book error: %s", account_id, exc)
         result["consolidated"] = await _consolidate_identity(account_id, api_key, lang, notes_block="")
         try:
             result["promoted"] = await _promote_canon(account_id, api_key, lang, notes_block="")

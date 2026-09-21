@@ -137,11 +137,15 @@ Commands are stripped before posting; the friends see only his text.
 It exists because of what two days of the group left on his desk. Ten of fourteen notes were not journal entries — «Ptica Arop — из Украины», «у Сомни месяц с Гроком» — third person, short, true forever, on a surface that forgets in 48 hours. Traced through the rotator they went nowhere useful: the insight pass asks "is this about you?", the identity review wants pillars, and what is left is the notes archive, which the group reply never reads.
 
 - **Looked up by who, not by what.** Speakers by Telegram id; anyone named in the last 30 messages by name, in any grammatical case (the addressing module's morphology, reused). Up to six cards, each capped at 700 characters, newest lines kept.
+
+  Ptica writes «мне Элайя такое написал!» — he is handed **two** cards: Ptica's, because Ptica is speaking, and Элайя's, because Элайя was named. «Спросил у Элайи, а Панде не сказал» brings three. The name does not have to be in the latest line: the whole window is searched, so someone mentioned five messages ago is still in view.
+
+  When more people qualify than there is room for, order decides who is left out — and the order is **recency, not the alphabet**: speakers first, whoever spoke last first; then the named, whoever was named last first. In a busy window with five people talking about four others, what falls off is the mention from twenty lines ago.
 - **A name is the key, an id only a binding.** The book holds people with no account — someone who left the chat, a friend's AI companion — and one person with three names is one card.
 - **`WRITE_NOTE` is still his**: what stirred in him, what is happening today. `ABOUT` is for what stays true of someone.
 - **The transcript shows both names**: `Ptica Arop (Чарли)`. He once answered to «Зефирка» because nothing told him who in the room was who.
 - **Elsewhere:** at a waking, the cards of whoever spoke since he last read, and an index of the rest (`[SHOW_PERSON: name]` opens one). In a private conversation, at most two cards, and only when she names someone — so the book cannot outweigh the two of them there. The post-dialogue journal and the push validator get none.
-- **The rotator is the net, not the path.** Notes marked as coming from the group are read before they are archived, and facts about people in them are moved onto cards; a card past `CARD_MAX_LINES` (12) is rebuilt, and a rebuild that is not shorter is refused. The identity review is shown the book and told the difference: a card holds facts, *My people* says who they are to him.
+- **The rotator is the net, not the path.** Notes marked as coming from the group are read before they are archived, and facts about people in them are moved onto cards; a card past `CARD_MAX_LINES` (12) is rebuilt — on every rotation, including a day when no note went stale — and a rebuild that is not shorter is refused. The identity review is shown **the whole book, every card in full** — measured live, 31 cards are 11.6k characters beside an identity of 19.6k — and told the difference: a card holds facts, *My people* says who they are to him.
 
 ### What he knows in the room
 

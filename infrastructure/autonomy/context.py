@@ -148,12 +148,17 @@ def _people(request: Request, consumer: Consumer) -> str:
     free. ``extras["text"]`` is searched for names in any grammatical case —
     the only way in for the private chat, which is why the book cannot outweigh
     the two of them there: a card appears only when she herself names someone.
+
+    Both may be given newest first (``text`` as a list of messages), and then
+    the cards come in that order: speakers first, latest speaker first, then
+    the named, latest mention first. The order is what decides who is left out
+    when more people qualify than a prompt has room for.
     """
     from infrastructure.autonomy import people
 
     found = people.by_ids(request.account_id, list(request.extras.get("speaker_ids") or []))
     seen = {person.slug for person in found}
-    for person in people.mentioned(request.account_id, str(request.extras.get("text") or "")):
+    for person in people.mentioned(request.account_id, request.extras.get("text") or ""):
         if person.slug not in seen:
             found.append(person)
             seen.add(person.slug)
