@@ -120,8 +120,8 @@ that: the introductions happened in the morning, hundreds of lines went by, and
 nothing of them was in view by night. A summary was considered and dropped — he
 takes notes in the room himself, so the waking is for checking "did I miss
 something?", and checking needs the original. Measured on the live group: 463
-messages in a day and a half are 67k characters, the busiest twelve hours 35k;
-`GROUP_CHAT_MAX_CHARS` is 80k. Over the cap the newest part is kept and the
+messages in a day and a half are 67k characters of text and 85k once rendered
+with times, ids and names; `GROUP_CHAT_MAX_CHARS` is 120k. Over the cap the newest part is kept and the
 block says how many early messages did not fit.
 
 How far he has read is kept in `data/autonomy/{account}/group_seen_until.txt`

@@ -634,8 +634,11 @@ def _build_pending_tasks_block(lang: str, tasks: list) -> str:
 # original, not a retelling of it.
 #
 # Measured on the live group (2026-09-21): 463 messages in a day and a half are
-# 67k characters, the busiest twelve hours 35k. The cap is above both.
-GROUP_CHAT_MAX_CHARS = 80_000
+# 67k characters of text and 85k once rendered with times, ids and names; the
+# busiest twelve hours are about 45k rendered. The first cap was 80k, set from
+# the raw figure, and on the first real run it cut off exactly the morning of
+# introductions this block exists to keep. Measure what is sent, not what is stored.
+GROUP_CHAT_MAX_CHARS = 120_000
 GROUP_CHAT_QUIET_TAIL = 8        # shown for orientation when nothing is new
 _GROUP_EPOCH = datetime(2000, 1, 1, tzinfo=timezone.utc)
 
