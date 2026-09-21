@@ -291,6 +291,7 @@ The soul (`data/soul.md`) **is** injected into every chat as the base system pro
 | Short-term scratchpad | `data/autonomy/{id}/workbench.md` | Post-analyzer, reflection, the group (`[WRITE_NOTE]`, marked `[общий чат «title»]`) | Reflection and the rotator read it whole; chat, post-analysis and the push validator the last 3 entries **not** taken in the group; the group the last 2 private + its own last 5 |
 | Self-model | `data/autonomy/{id}/identity.md` | Rotator, reflection `[WRITE_IDENTITY]` | Reflection, post-analyzer and the group whole; private chat the canon only |
 | Scheduled messages | PostgreSQL `autonomy_tasks` | Post-analyzer, reflection | Scheduled push worker, reflection context |
+| The address book — one card per person | `data/autonomy/{id}/people/*.md` | He, with `[ABOUT]` / `[FORGET]` in the group and at a waking; the rotator (moves misfiled notes, rebuilds long cards) | The group (speakers + named), reflection (speakers + index), private chat (only who she names), the identity review |
 | Open threads (the board) | `data/autonomy/{id}/threads.md` | Reflection, post-analyzer | Every consumer — chat included |
 | Instrument panel | `data/autonomy/{id}/vitals.json` | Reflection worker, heartbeat | Reflection (deltas unasked, full panel on `[VITALS]`) |
 | Every LLM call, in full | `data/dataset/calls-YYYY-MM.jsonl` (older months gzipped) | `llm/client.py` | Kept, not rotated — the record of his own thinking |
@@ -379,6 +380,7 @@ The soul (`data/soul.md`) **is** injected into every chat as the base system pro
 | `infrastructure/telegram/client.py` | Bot API on aiohttp: `getMe`, `getUpdates`, `sendMessage`, `sendPhoto` |
 | `infrastructure/telegram/listener.py` | One long poll → rows; the cursor; the rooms seen; the room's title |
 | `infrastructure/telegram/responder.py` | Addressed / in conversation; the reply loop and its six commands; bracket-counting command parser |
+| `infrastructure/autonomy/people.py` | The address book: cards, lookup by Telegram id and by name in any case, crossing out |
 | `infrastructure/telegram/addressing.py` | What he answers to: case forms by morphology, nicknames seeded once and added by him |
 | `infrastructure/database/models/channel_message.py` | The group's table — a room, not pairs |
 | `infrastructure/agents/research.py`, `sources.py` | The one orchestrator behind every search: web, dialogue, facts, notes, docs, chat |

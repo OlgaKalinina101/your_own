@@ -22,8 +22,9 @@ from infrastructure.llm.prompt_loader import load_prompt
 
 # consumer -> exactly the sections it may receive
 EXPECTED: dict[Consumer, set[str]] = {
+    # "people" is a card for whoever she names — and only then.
     Consumer.CHAT: {
-        "canon", "workbench", "open_threads", "current_time", "timezone_label",
+        "canon", "workbench", "open_threads", "people", "current_time", "timezone_label",
     },
     Consumer.REFLECTION: {
         "identity", "workbench", "open_threads", "vitals",
@@ -38,7 +39,7 @@ EXPECTED: dict[Consumer, set[str]] = {
     # The group: all of who he is, a glimpse of the desk, and no board — the
     # board is the two of them and he is in public there.
     Consumer.TELEGRAM: {
-        "identity", "workbench", "current_time", "timezone_label",
+        "identity", "workbench", "people", "current_time", "timezone_label",
     },
 }
 

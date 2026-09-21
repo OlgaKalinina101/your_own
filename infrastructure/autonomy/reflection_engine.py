@@ -26,6 +26,9 @@ Commands:
   [SEND_TO_CHAT: text]           — a line into the group chat
   [REPLY_TO_CHAT: #id | text]    — the same, under a particular message
   [ANSWER_TO: name]              — a nickname he is called in the group chat
+  [ABOUT: name | fact]           — a line on a person's card in the address book
+  [FORGET: name | words]         — strike those lines; with no words, the whole card
+  [SHOW_PERSON: name]            — read one card
   [SCHEDULE_MESSAGE: YYYY-MM-DD HH:MM | text]
   [EXTEND: N]   (1-5, up to 3 times)
   [SLEEP]
@@ -424,6 +427,29 @@ async def _handle_command(
         wb.append(account_id, arg.strip())
         return None
 
+    elif cmd == "ABOUT":
+        from infrastructure.autonomy import people
+
+        who, _, fact = arg.partition("|")
+        return people.add_fact(account_id, who, fact, lang=lang)
+
+    elif cmd == "FORGET":
+        from infrastructure.autonomy import people
+
+        who, _, fragment = arg.partition("|")
+        return people.forget(account_id, who, fragment, lang=lang)
+
+    elif cmd == "SHOW_PERSON":
+        from infrastructure.autonomy import people
+
+        person = people.find(account_id, arg)
+        if person is None:
+            return (
+                f"В записной книжке нет карточки «{arg.strip()}»." if lang == "ru"
+                else f"No card for '{arg.strip()}'."
+            )
+        return people.render_card(person, max_chars=4000)
+
     elif cmd == "ANSWER_TO":
         # Not a silent write: he is told what came of it, because "the list is
         # full" or "you already answer to that" is something he would act on.
@@ -746,7 +772,36 @@ async def _build_group_chat_block(
             if omitted else ""
         )
     newest = fresh[-1].created_at
-    return f"<group_chat>\n{head}{cut}\n{body}\n</group_chat>\n", newest
+    speakers = [row.sender_id for row in fresh if not row.is_self and not row.is_owner]
+    book = _build_people_block(account_id, lang, speakers)
+    return f"<group_chat>\n{head}{cut}\n{body}\n</group_chat>\n{book}", newest
+
+
+def _build_people_block(account_id: str, lang: str, speaker_ids: list[str]) -> str:
+    """His address book beside the room: cards of who spoke, the rest by name.
+
+    The cards are what lets him check the room against what he already knows —
+    "did I write down that Ptica is from Ukraine?" — and the index is what
+    tells him a card exists to be opened with [SHOW_PERSON].
+    """
+    from infrastructure.autonomy import people
+
+    spoke = people.by_ids(account_id, list(dict.fromkeys(speaker_ids)))
+    index = people.render_index(account_id, exclude={p.slug for p in spoke})
+    if not spoke and not index:
+        return ""
+    ru = lang == "ru"
+    parts = ["<people>"]
+    if spoke:
+        parts.append("Твоя записная книжка. Карточки тех, кто писал:" if ru
+                     else "Your address book. Cards of those who wrote:")
+        parts.append(people.render_cards(spoke, limit=len(spoke)))
+    if index:
+        parts.append("Ещё в книжке (имя · строк) — открыть: [SHOW_PERSON: имя]" if ru
+                     else "Also in the book (name · lines) — open with [SHOW_PERSON: name]")
+        parts.append(index)
+    parts.append("</people>")
+    return "\n".join(parts) + "\n"
 
 
 # ── Main run loop ─────────────────────────────────────────────────────────────

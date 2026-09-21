@@ -176,6 +176,22 @@ The mark is added by the program (and de-duplicated if he writes it himself). It
 | The group reply | the last 2 private entries + his own last 5 notes from the room, so a thing is noted once |
 | Reflection, the rotator | everything — which is how the friends reach Chroma and the *My people* section of identity |
 
+## The address book
+
+`infrastructure/autonomy/people.py` → `data/autonomy/{account}/people/*.md`
+
+Notes are for what is his — what stirred in him, what is happening today. What stays true of a *person* goes on that person's card instead, with `[ABOUT: name | fact]`, and is struck with `[FORGET: name | words]`.
+
+| Reader | What it gets |
+|---|---|
+| The group reply | cards of whoever is speaking (by Telegram id) or named (by name, any case) in the last 30 messages — up to 6 |
+| Reflection | cards of whoever spoke since he last read the room, an index of the rest, `[SHOW_PERSON]` |
+| Private chat | up to 2 cards, only when she names someone |
+| Post-analysis, push validator | nothing |
+| Rotator | the whole book, for the identity review — with the rule that a card holds facts and *My people* says who they are to him |
+
+It is not a Chroma collection on purpose. Semantic retrieval answers "what is this about?"; in a room the useful question is "who is this?", and the answer is an exact key.
+
 ## The third store — the group itself
 
 | Store | Technology | What it holds | When it's used |

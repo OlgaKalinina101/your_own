@@ -56,7 +56,7 @@ _SEARCH = (
 # They have to be parseable, or the command is simply not seen.
 _ALIASES = ("SEARCH_MEMORIES", "RECALL", "HISTORY", "WRITE")
 
-_WRITES = ("WRITE_NOTE", "WRITE_IDENTITY", "ANSWER_TO")
+_WRITES = ("WRITE_NOTE", "WRITE_IDENTITY", "ANSWER_TO", "ABOUT", "FORGET")
 
 _MESSAGES = (
     "SEND_MESSAGE",
@@ -71,7 +71,7 @@ _MESSAGES = (
 _THREADS = ("PIN_THREAD", "UNPIN_THREAD", "UPDATE_THREAD")
 
 # Reading his own machinery: the prompts he is run on, by name.
-_READS = ("SHOW_PROMPT",)
+_READS = ("SHOW_PROMPT", "SHOW_PERSON")
 
 # Commands written as a bare bracket, with no argument. They are matched by
 # their own regexes in the engine rather than through the alternation, but a

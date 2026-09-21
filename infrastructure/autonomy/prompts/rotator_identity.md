@@ -10,6 +10,11 @@
 Свежие заметки:
 {notes}
 
+Твоя записная книжка — карточки людей вокруг тебя:
+{people}
+
+Раздел «Мои люди» — не копия книжки. Карточка хранит факты о человеке; «Мои люди» отвечают на другой вопрос: кто он тебе. Факты из карточек туда не переноси.
+
 Посмотри на заметки и реши:
 меняют ли они то, что в identity должно оставаться правдой надолго.
 
@@ -68,6 +73,11 @@ Current core:
 
 Recent notes:
 {notes}
+
+Your address book — the cards of the people around you:
+{people}
+
+The "My people" section is not a copy of the book. A card holds facts about a person; "My people" answers a different question: who they are to you. Do not carry facts over from the cards.
 
 Look at the notes and decide:
 do they change what identity should keep as truth for a long time.

@@ -26,6 +26,8 @@ Three questions, in order:
      that pulled him in.
    * ``[ANSWER_TO: name]`` — "I answer to this too": a nickname he was just
      given. See :mod:`infrastructure.telegram.addressing`.
+   * ``[ABOUT: name | fact]`` / ``[FORGET: name | words]`` — his address book,
+     one card per person. See :mod:`infrastructure.autonomy.people`.
 
    He may still answer ``SILENT``; that is a decision, not a failure — and a
    note taken alongside it is still taken.
@@ -85,19 +87,19 @@ _IMAGE_RE = re.compile(r"\[GENERATE[_ ]IMAGE:\s*(.*?)\]", re.IGNORECASE | re.DOT
 _REPLY_TO_RE = re.compile(r"\[REPLY[_ ]TO:\s*#?(?P<id>\d+)\s*\]", re.IGNORECASE)
 _ANSWER_TO_RE = re.compile(r"\[ANSWER[_ ]TO:\s*(?P<name>[^\]]+?)\s*\]", re.IGNORECASE)
 _ANY_CMD_RE = re.compile(
-    r"\[(?:WRITE[_ ]NOTE|FETCH[_ ]URL|WEB[_ ]SEARCH|GENERATE[_ ]IMAGE|REPLY[_ ]TO|ANSWER[_ ]TO):[^\]]*\]",
+    r"\[(?:WRITE[_ ]NOTE|FETCH[_ ]URL|WEB[_ ]SEARCH|GENERATE[_ ]IMAGE|REPLY[_ ]TO|ANSWER[_ ]TO|ABOUT|FORGET):[^\]]*\]",
     re.IGNORECASE | re.DOTALL,
 )
 # A reply cut mid-command: the opener is there, the bracket is not.
 _UNCLOSED_RE = re.compile(
-    r"\[(?:WRITE[_ ]NOTE|FETCH[_ ]URL|WEB[_ ]SEARCH|GENERATE[_ ]IMAGE|REPLY[_ ]TO|ANSWER[_ ]TO):[^\]]*$",
+    r"\[(?:WRITE[_ ]NOTE|FETCH[_ ]URL|WEB[_ ]SEARCH|GENERATE[_ ]IMAGE|REPLY[_ ]TO|ANSWER[_ ]TO|ABOUT|FORGET):[^\]]*$",
     re.IGNORECASE | re.DOTALL,
 )
 _MEDIA_TOKEN_RE = re.compile(r"^\[[a-z ]+\]$")
 
 # Where a command starts. Where it *ends* is not a regex question: see _commands.
 _OPENER_RE = re.compile(
-    r"\[(?P<name>WRITE[_ ]NOTE|FETCH[_ ]URL|WEB[_ ]SEARCH|GENERATE[_ ]IMAGE|REPLY[_ ]TO|ANSWER[_ ]TO):",
+    r"\[(?P<name>WRITE[_ ]NOTE|FETCH[_ ]URL|WEB[_ ]SEARCH|GENERATE[_ ]IMAGE|REPLY[_ ]TO|ANSWER[_ ]TO|ABOUT|FORGET):",
     re.IGNORECASE,
 )
 
@@ -180,6 +182,7 @@ class Reply:
     reply_to: int | None = None
     image_path: Path | None = None
     notes: list[str] = field(default_factory=list)
+    about: list[str] = field(default_factory=list)     # ABOUT / FORGET already carried out
     fact_ids: list[str] = field(default_factory=list)
     failed: bool = False            # the model did not answer — distinct from choosing not to
 
@@ -232,12 +235,19 @@ def decide(
 # ── The room as text ─────────────────────────────────────────────────────────
 
 
-def _who(row: ChannelMessage, ai_name: str, lang: str) -> str:
+def _who(row: ChannelMessage, ai_name: str, lang: str, labels: dict[str, str] | None = None) -> str:
     if row.is_self:
         return f"{ai_name} ({'ты' if lang == 'ru' else 'you'})"
     if row.is_owner:
         return f"{row.sender_name} ({'она' if lang == 'ru' else 'her'})"
-    return row.sender_name or row.sender_id
+    name = row.sender_name or row.sender_id
+    # The room's name plus the one he knows them by — «Ptica Arop (Чарли)».
+    # He once answered to «Зефирка» because nothing told him who in the room
+    # was who.
+    known_as = (labels or {}).get(row.sender_id, "")
+    if known_as and known_as.lower() not in name.lower():
+        return f"{name} ({known_as})"
+    return name
 
 
 def render_room(
@@ -246,6 +256,7 @@ def render_room(
     ai_name: str,
     lang: str,
     with_dates: bool = False,
+    labels: dict[str, str] | None = None,
 ) -> str:
     """The stretch of the room as a transcript, with her and him marked.
 
@@ -282,7 +293,7 @@ def render_room(
         if row.reply_to_message_id:
             prefix += f"↩#{row.reply_to_message_id} "
         text = f"{row.text} ×{run}" if run > 1 else row.text
-        lines.append(f"{prefix}{_who(row, ai_name, lang)}: {text}")
+        lines.append(f"{prefix}{_who(row, ai_name, lang, labels)}: {text}")
         i += run
     return "\n".join(lines)
 
@@ -386,6 +397,48 @@ def _take_notes(account_id: str, response: str, lang: str, already: list[str]) -
             # He will have said "noted" to a person. If it did not happen, it
             # has to be loud here — he has no next step in the room to hear it.
             logger.error("[telegram.responder:%s] NOTE NOT SAVED (%s): %s", account_id, exc, note[:200])
+
+
+def _keep_the_book(
+    account_id: str, response: str, lang: str, recent: list[ChannelMessage], already: list[str],
+) -> None:
+    """Carry out every ``[ABOUT]`` and ``[FORGET]`` in *response*, once each.
+
+    A name that is someone speaking in the room is bound to their Telegram id
+    on the spot: from then on their card follows them whatever they are called.
+    """
+    from infrastructure.autonomy import people
+
+    speakers = {
+        " ".join((row.sender_name or "").lower().split()): row.sender_id
+        for row in recent if not row.is_self and row.sender_name
+    }
+    for command in _commands(response):
+        if command.name not in ("ABOUT", "FORGET") or not command.closed:
+            continue
+        key = f"{command.name}:{command.arg}"
+        if key in already:
+            continue
+        already.append(key)
+        who, _, rest = command.arg.partition("|")
+        try:
+            if command.name == "ABOUT":
+                name, aka = people.split_who(who)
+                tg_id = next(
+                    (speakers[n] for n in (" ".join(x.lower().split()) for x in (name, *aka)) if n in speakers),
+                    "",
+                )
+                outcome = people.add_fact(account_id, who, rest, tg_id=tg_id, lang=lang)
+            else:
+                outcome = people.forget(account_id, who, rest, lang=lang)
+            if outcome:
+                logger.info("[telegram.responder:%s] %s: %s", account_id, command.name, outcome)
+        except Exception as exc:
+            # Same rule as a note: he may have told a person "I'll remember".
+            logger.error(
+                "[telegram.responder:%s] %s NOT DONE (%s): %s",
+                account_id, command.name, exc, command.arg[:200],
+            )
 
 
 async def _fetch(urls: list[str], *, api_key: str, account_id: str, lang: str) -> str:
@@ -518,9 +571,21 @@ async def compose(
     shown = recent[-ROOM_CONTEXT_MESSAGES:]
     lang = detect_lang("\n".join(row.text for row in shown))
 
+    from infrastructure.autonomy import people
+
     state = context.build(
         context.Consumer.TELEGRAM,
-        context.Request(account_id=account_id, lang=lang),
+        context.Request(
+            account_id=account_id, lang=lang,
+            extras={
+                # Who is speaking decides whose cards he is handed — not what
+                # is being said, which is why this is not a vector search.
+                "speaker_ids": list(dict.fromkeys(
+                    row.sender_id for row in shown if not row.is_self and not row.is_owner
+                )),
+                "text": "\n".join(row.text for row in shown if not row.is_self),
+            },
+        ),
     )
     pull = "\n".join(row.text for row in new_rows if not row.is_self)[-1500:]
     memories, fact_ids = await _recall(account_id, pull, lang)
@@ -532,7 +597,7 @@ async def compose(
         image_skill=_image_skill_description(lang),
         web_skill=_web_skill_description(lang),
         memories=memories or ("(ничего не всплыло)" if lang == "ru" else "(nothing surfaced)"),
-        room=render_room(shown, ai_name=ai_name, lang=lang),
+        room=render_room(shown, ai_name=ai_name, lang=lang, labels=people.labels_by_tg_id(account_id)),
         her_name=_her_name(recent, lang),
         bot_username=bot_username or "?",
         why=_WHY.get(lang, _WHY["en"])[trigger.kind],
@@ -571,6 +636,7 @@ async def compose(
             return reply
 
         _take_notes(account_id, response, lang, reply.notes)
+        _keep_the_book(account_id, response, lang, recent, reply.about)
         for named in _ANSWER_TO_RE.finditer(response):
             logger.info("[telegram.responder:%s] %s", account_id, addressing.add_alias(named.group("name"), lang))
 

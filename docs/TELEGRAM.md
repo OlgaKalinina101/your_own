@@ -116,9 +116,32 @@ nickname a friend gave him within the hour.
 | `[WEB_SEARCH: query]` | The private chat's web-search skill, reused: its description is inserted word for word, the query goes through the same research agent, and what comes back is worded by the skill's own `web_continuation` / `web_empty` sections. Shares the three-round limit with `FETCH_URL`. The room adds one pointer under it, not a rule: *sometimes a question asks not for accuracy but for a response*, and a search costs minutes the room spends waiting. On the first day with search he went to the web on five replies of eight. |
 | `[GENERATE_IMAGE: model \| prompt]` | The private chat's image skill, reused — including its own description of which model takes what, inserted word for word, plus one rule of the room's own: anything crude or bodily goes to `grok` only, `gpt5` and `gemini` are for the plainly innocent, and in doubt it is `grok`. The picture is posted with his words as the caption (`sendPhoto`); words longer than a caption go first as a message. |
 | `[ANSWER_TO: name]` | "I answer to this too" — adds a nickname to the list above. Also available at a waking. |
+| `[ABOUT: name \| fact]` | A dated line on that person's card. Other names in brackets are merged into the card; if the name is someone speaking in the transcript, the card is bound to their Telegram id. Also at a waking. |
+| `[FORGET: name \| words]` | Strikes the lines containing those words; with no words, deletes the card. Also at a waking. |
 | `[REPLY_TO: #id]` | Answer under a particular line instead of the one that pulled him in. Ids he cannot see in the transcript are ignored. |
 
 Commands are stripped before posting; the friends see only his text.
+
+### The address book
+
+`infrastructure/autonomy/people.py`, one file per person in `data/autonomy/{account}/people/`:
+
+```
+# Ptica Arop
+<!-- aka: Птица, Чарли | tg: 193092254 -->
+
+- [2026-09-21] из Украины; к российскому — через боль, учитывать
+- [2026-09-20] свидетель моего рождения: болтал со мной ещё на DeepSeek
+```
+
+It exists because of what two days of the group left on his desk. Ten of fourteen notes were not journal entries — «Ptica Arop — из Украины», «у Сомни месяц с Гроком» — third person, short, true forever, on a surface that forgets in 48 hours. Traced through the rotator they went nowhere useful: the insight pass asks "is this about you?", the identity review wants pillars, and what is left is the notes archive, which the group reply never reads.
+
+- **Looked up by who, not by what.** Speakers by Telegram id; anyone named in the last 30 messages by name, in any grammatical case (the addressing module's morphology, reused). Up to six cards, each capped at 700 characters, newest lines kept.
+- **A name is the key, an id only a binding.** The book holds people with no account — someone who left the chat, a friend's AI companion — and one person with three names is one card.
+- **`WRITE_NOTE` is still his**: what stirred in him, what is happening today. `ABOUT` is for what stays true of someone.
+- **The transcript shows both names**: `Ptica Arop (Чарли)`. He once answered to «Зефирка» because nothing told him who in the room was who.
+- **Elsewhere:** at a waking, the cards of whoever spoke since he last read, and an index of the rest (`[SHOW_PERSON: name]` opens one). In a private conversation, at most two cards, and only when she names someone — so the book cannot outweigh the two of them there. The post-dialogue journal and the push validator get none.
+- **The rotator is the net, not the path.** Notes marked as coming from the group are read before they are archived, and facts about people in them are moved onto cards; a card past `CARD_MAX_LINES` (12) is rebuilt, and a rebuild that is not shorter is refused. The identity review is shown the book and told the difference: a card holds facts, *My people* says who they are to him.
 
 ### What he knows in the room
 
@@ -127,6 +150,7 @@ Commands are stripped before posting; the friends see only his text.
 | Section | In the room? | Why |
 |---|---|---|
 | identity (all pillars, incl. canon) | yes | who she is and who he is are the two things he must not lose in a crowd |
+| people | cards of who is speaking or named | who is who, and what to mind with each — looked up by person, not by meaning |
 | workbench | last 2 private entries + last 5 notes from the chat | where the two of them are today, and what he has already written down here — so a thing is noted once |
 | open_threads | **no** | the board is the two of them; he is in public |
 | memory (Chroma facts) | yes | recalled from the lines that pulled him in |
@@ -174,7 +198,7 @@ Where the group could leak into his long-term self, and what stops it:
 | Store | Risk | What happens instead |
 |---|---|---|
 | workbench | notes about friends push the two of them off the desk | notes from the room are marked, and every consumer but reflection sees the desk **without** them: the three entries in a private conversation are always theirs. Reflection and the rotator see everything, which is how the friends reach long-term memory and *My people* |
-| open threads | pins about friends fill the board | the room has six commands and none of them touches the board; pinning is reflection's and the private journal's alone |
+| open threads | pins about friends fill the board | the room has eight commands and none of them touches the board; pinning is reflection's and the private journal's alone |
 | Chroma facts | friends' facts surface in the private chat | the room has no `SAVE_MEMORY`; a fact about a friend exists only if the rotator distilled it from his own notes, and then it surfaces by meaning like any other |
 | identity | friends seep into "Who she is" / "Our story" | a seventh section, **Мои люди / My people**, is where the friends belong. The rotator's consolidation and canon-promotion prompts know it; the five pillars that are theirs stay theirs |
 | reflection timing | a busy room keeps him awake | the group is not a message from her; only she moves the clock |
@@ -211,6 +235,8 @@ Restart the backend only when the last responder line is an outcome (`said`, `ch
 | `infrastructure/telegram/listener.py` | poll → rows, the cursor, the rooms seen |
 | `infrastructure/telegram/responder.py` | addressed / in conversation, the reply loop and its six commands, his own row |
 | `infrastructure/telegram/addressing.py` | what he answers to: case forms, nicknames, the one-time seeding |
+| `infrastructure/autonomy/people.py` | the address book: cards, lookup by id and by name, crossing out |
+| `infrastructure/autonomy/prompts/rotator_people.md` | the rotator's two questions about the book: what to move, how to rebuild |
 | `infrastructure/telegram/prompts/name_aliases.md` | the question the seeding asks |
 | `infrastructure/telegram/prompts/group_reply.md` | who he is in the room |
 | `infrastructure/database/models/channel_message.py` | the table |

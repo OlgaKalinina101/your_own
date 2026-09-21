@@ -136,6 +136,31 @@ def _workbench(request: Request, consumer: Consumer) -> str:
     )
 
 
+# How many cards a private conversation is given. She named someone; he is
+# handed that person, not the book.
+PEOPLE_CARDS_IN_CHAT = 2
+
+
+def _people(request: Request, consumer: Consumer) -> str:
+    """Cards for whoever is speaking, and for whoever was named.
+
+    ``extras["speaker_ids"]`` are Telegram ids — the group's way in, exact and
+    free. ``extras["text"]`` is searched for names in any grammatical case —
+    the only way in for the private chat, which is why the book cannot outweigh
+    the two of them there: a card appears only when she herself names someone.
+    """
+    from infrastructure.autonomy import people
+
+    found = people.by_ids(request.account_id, list(request.extras.get("speaker_ids") or []))
+    seen = {person.slug for person in found}
+    for person in people.mentioned(request.account_id, str(request.extras.get("text") or "")):
+        if person.slug not in seen:
+            found.append(person)
+            seen.add(person.slug)
+    limit = PEOPLE_CARDS_IN_CHAT if consumer is Consumer.CHAT else people.CARDS_PER_PROMPT
+    return people.render_cards(found, limit=limit)
+
+
 def _open_threads(request: Request, _consumer: Consumer) -> str:
     from infrastructure.autonomy import threads
 
@@ -206,6 +231,15 @@ SECTIONS: tuple[Section, ...] = (
         why="the board is present-continuous: it is in view everywhere, including "
             "the validator, which decides whether to interrupt someone. Everywhere "
             "but the group: the board is the two of them, and he is in public there.",
+    ),
+    Section(
+        name="people",
+        consumers=frozenset({Consumer.CHAT, Consumer.TELEGRAM}),
+        render=_people,
+        omit_when_empty=frozenset({Consumer.CHAT}),
+        why="the address book, by who is speaking or who was named. Reflection "
+            "builds its own view of it beside the group transcript; the journal "
+            "and the push validator are about the two of them and get none.",
     ),
     Section(
         name="vitals",

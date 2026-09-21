@@ -175,6 +175,7 @@ async def _review_identity(
         ai_name=ai_name,
         identity=identity_content,
         notes=notes_block,
+        people=_people_for_review(account_id, lang),
     )
     raw = await _complete(api_key, sys_prompt, user_prompt, temperature=0.7, max_tokens=_STEP_MAX_TOKENS)
     if not raw or raw.strip().lower() in ("нет", "no"):
@@ -206,6 +207,162 @@ async def _review_identity(
         )
 
     return False
+
+
+# ── The address book ─────────────────────────────────────────────────────────
+#
+# Two jobs, and neither is the main way the book is written. He writes cards
+# himself, in the room, the moment he learns something — a fact that waited 48
+# hours for the rotator would leave him not knowing tomorrow where a friend is
+# from. What is left for here is the net and the housekeeping.
+
+_PEOPLE_REVIEW_CHARS = 6000
+_ABOUT_LINE_RE = re.compile(r"^\s*ABOUT\s*:\s*(?P<who>[^|]+?)\s*\|\s*(?P<fact>.+?)\s*$", re.IGNORECASE)
+
+
+def _people_for_review(account_id: str, lang: str) -> str:
+    from infrastructure.autonomy import people
+
+    book = people.all_people(account_id)
+    if not book:
+        return "(пусто)" if lang == "ru" else "(empty)"
+    return people.render_cards(book, limit=len(book))[:_PEOPLE_REVIEW_CHARS]
+
+
+async def _sort_group_notes(
+    account_id: str, stale: list[tuple[str, str]], api_key: str, lang: str,
+) -> int:
+    """The net: facts about people that were filed as notes go onto cards.
+
+    He has two ways to write in the room and will sometimes use the wrong one —
+    and everything noted before the book existed was, by necessity, a note. The
+    mark on notes from the group is what makes the candidates findable. The
+    notes themselves still go to the archive; nothing is taken from him.
+    """
+    from infrastructure.autonomy import people
+
+    candidates = [(ts, body) for ts, body in stale if wb.is_group_note(body)]
+    if not candidates:
+        return 0
+
+    path = f"{_PROMPTS_DIR}/rotator_people.md"
+    index = people.render_index(account_id) or ("(пусто)" if lang == "ru" else "(empty)")
+    raw = await _complete(
+        api_key,
+        get_prompt(path, lang=lang, section="sort_system", ai_name=get_ai_name()),
+        get_prompt(
+            path, lang=lang, section="sort_user", index=index,
+            notes="\n---\n".join(f"[{ts}]\n{body}" for ts, body in candidates),
+        ),
+        temperature=0.3, max_tokens=_STEP_MAX_TOKENS,
+    )
+    moved = _apply_about_lines(account_id, raw, lang)
+    logger.info("[rotator:%s] address book: %d fact(s) moved from %d note(s)", account_id, moved, len(candidates))
+    return moved
+
+
+#: How much transcript one call is given. Small enough that the model still
+#: reads the first line as carefully as the last.
+BOOK_FROM_CHAT_CHUNK_CHARS = 30_000
+
+
+def _apply_about_lines(account_id: str, raw: str, lang: str, tg_by_name: dict[str, str] | None = None) -> int:
+    """Carry out every ``ABOUT: name | fact`` line in a model's answer."""
+    from infrastructure.autonomy import people
+
+    written = 0
+    for line in (raw or "").splitlines():
+        match = _ABOUT_LINE_RE.match(line.strip().lstrip("-• ").strip("[]"))
+        if not match:
+            continue
+        name, aka = people.split_who(match.group("who"))
+        tg_id = next(
+            ((tg_by_name or {})[key] for key in (" ".join(n.lower().split()) for n in (name, *aka))
+             if key in (tg_by_name or {})),
+            "",
+        )
+        if people.add_fact(account_id, match.group("who"), match.group("fact"), tg_id=tg_id, lang=lang) is None:
+            written += 1
+    return written
+
+
+async def fill_book_from_chat(account_id: str, api_key: str, rows: list, lang: str = "ru") -> int:
+    """Read a stretch of the group chat and put what it says about people on cards.
+
+    Not part of a normal rotation: he writes cards himself as he goes. This is
+    for the chat that was already there before the book was — the first two
+    days of the live group, where the introductions happened before he had
+    anywhere to put them — and for any room he joins with a history.
+
+    Goes chunk by chunk, handing each call the index as it stands, so a person
+    met in the first chunk is filed under the same name in the third. Speakers
+    are bound to their Telegram ids by the name they are signed with.
+    """
+    from infrastructure.autonomy import people
+    from infrastructure.telegram import responder
+
+    theirs = [row for row in rows if not row.is_self and not row.is_owner]
+    tg_by_name = {" ".join((row.sender_name or "").lower().split()): row.sender_id for row in theirs if row.sender_name}
+    ai_name = get_ai_name()
+    path = f"{_PROMPTS_DIR}/rotator_people.md"
+
+    chunks: list[list] = [[]]
+    size = 0
+    for row in rows:
+        cost = len(row.text or "") + 60
+        if size + cost > BOOK_FROM_CHAT_CHUNK_CHARS and chunks[-1]:
+            chunks.append([])
+            size = 0
+        chunks[-1].append(row)
+        size += cost
+
+    total = 0
+    for number, chunk in enumerate(chunks, start=1):
+        if not chunk:
+            continue
+        raw = await _complete(
+            api_key,
+            get_prompt(path, lang=lang, section="chat_system", ai_name=ai_name),
+            get_prompt(
+                path, lang=lang, section="chat_user",
+                index=people.render_index(account_id) or ("(пусто)" if lang == "ru" else "(empty)"),
+                transcript=responder.render_room(chunk, ai_name=ai_name, lang=lang, with_dates=True),
+            ),
+            temperature=0.3, max_tokens=_STEP_MAX_TOKENS,
+        )
+        written = _apply_about_lines(account_id, raw, lang, tg_by_name)
+        total += written
+        logger.info(
+            "[rotator:%s] address book from chat: chunk %d/%d (%d messages) → %d fact(s)",
+            account_id, number, len(chunks), len(chunk), written,
+        )
+    return total
+
+
+async def _consolidate_people(account_id: str, api_key: str, lang: str) -> int:
+    """Rebuild the cards that have grown long — the identity pattern, per person."""
+    from infrastructure.autonomy import people
+
+    path = f"{_PROMPTS_DIR}/rotator_people.md"
+    rebuilt = 0
+    for person in people.needs_consolidation(account_id):
+        raw = await _complete(
+            api_key,
+            get_prompt(path, lang=lang, section="consolidate_system", ai_name=get_ai_name()),
+            get_prompt(
+                path, lang=lang, section="consolidate_user", name=person.name,
+                count=len(person.lines), card=people.render_card(person, max_chars=20000),
+            ),
+            temperature=0.4, max_tokens=_STEP_MAX_TOKENS,
+        )
+        lines = [ln.strip() for ln in (raw or "").splitlines() if ln.strip().startswith("- ")]
+        # A rebuild that comes back longer, or empty, is not a rebuild.
+        if lines and len(lines) < len(person.lines) and people.replace_lines(account_id, person.slug, lines):
+            rebuilt += 1
+            logger.info(
+                "[rotator:%s] card «%s»: %d → %d lines", account_id, person.name, len(person.lines), len(lines),
+            )
+    return rebuilt
 
 
 # ── Step 4: identity consolidation ──────────────────────────────────────────
@@ -371,6 +528,8 @@ async def run(account_id: str, api_key: str) -> dict:
         "identity_updated": False,
         "consolidated": False,
         "promoted": 0,
+        "people_moved": 0,
+        "people_rebuilt": 0,
     }
 
     # Step 1: archive stale notes
@@ -391,6 +550,14 @@ async def run(account_id: str, api_key: str) -> dict:
     )
 
     lang = detect_lang(notes_block)
+
+    # Before the identity review, so "My people" is judged against a book that
+    # already holds what these notes had to say.
+    try:
+        result["people_moved"] = await _sort_group_notes(account_id, stale, api_key, lang)
+        result["people_rebuilt"] = await _consolidate_people(account_id, api_key, lang)
+    except Exception as exc:
+        logger.error("[rotator:%s] address book error: %s", account_id, exc)
 
     # Step 2: extract self-insights
     try:

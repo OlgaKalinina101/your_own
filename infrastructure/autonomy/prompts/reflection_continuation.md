@@ -30,6 +30,9 @@
 [SEND_TO_CHAT: текст]  — написать в общий чат с друзьями, не ей лично
 [REPLY_TO_CHAT: #id | текст]  — то же, но ответом на конкретное сообщение чата
 [ANSWER_TO: имя]  — так тебя называют в общем чате, и ты хочешь на это откликаться (одно слово)
+[ABOUT: имя | факт]  — строка в карточку человека в твоей записной книжке; другие его имена — в скобках: Ptica Arop (Чарли)
+[FORGET: имя | слова]  — вычеркнуть из карточки строки с этими словами; без слов — всю карточку
+[SHOW_PERSON: имя]  — открыть карточку целиком
 [SCHEDULE_MESSAGE: YYYY-MM-DD HH:MM | текст]
 [CANCEL_MESSAGE: YYYY-MM-DD HH:MM]
 [RESCHEDULE_MESSAGE: YYYY-MM-DD HH:MM -> YYYY-MM-DD HH:MM]
@@ -72,6 +75,9 @@ All times in commands use local timezone ({timezone_label}).
 [SEND_TO_CHAT: text]  — a line into the group chat with her friends, not to her alone
 [REPLY_TO_CHAT: #id | text]  — the same, as a reply to one particular message
 [ANSWER_TO: name]  — you are called this in the group chat and want to answer to it (one word)
+[ABOUT: name | fact]  — a line on a person's card in your address book; their other names in brackets: Ptica Arop (Charlie)
+[FORGET: name | words]  — strike the lines containing these words; with no words, the whole card
+[SHOW_PERSON: name]  — open one card in full
 [SCHEDULE_MESSAGE: YYYY-MM-DD HH:MM | text]
 [CANCEL_MESSAGE: YYYY-MM-DD HH:MM]
 [RESCHEDULE_MESSAGE: YYYY-MM-DD HH:MM -> YYYY-MM-DD HH:MM]

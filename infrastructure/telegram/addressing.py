@@ -68,13 +68,16 @@ def _inflections(word: str) -> set[str]:
         from infrastructure.memory.focus_point import _get_morph_ru
 
         morph = _get_morph_ru()
-        stem = base[: max(3, len(base) - 2)]
+        # Two letters at the least, not three: «Ева» → «Евы», «Оля» → «Оле» keep
+        # only two of their three. Found when a card for Ева was not handed
+        # over on «это дети Евы».
+        stem = base[: max(2, len(base) - 2)]
         for parse in morph.parse(base)[:3]:
             if "NOUN" not in str(parse.tag):
                 continue
             for form in parse.lexeme:
                 candidate = _norm(form.word)
-                if candidate.startswith(stem):
+                if candidate.startswith(stem) and len(candidate) >= 3:
                     forms.add(candidate)
     except Exception as exc:
         # Without morphology he still hears his name in the nominative — a

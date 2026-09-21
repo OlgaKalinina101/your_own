@@ -309,7 +309,7 @@ PDFs are parsed by OpenRouter before any provider sees them, which is why every 
 
 > 🖼 **Screenshot placeholder** — save as `docs/example/attachments.png` and replace this line with the image. The chat input with a PDF and an image attached, and the model picker showing what the model reads.
 
-### Memory in Four Surfaces
+### Memory in Five Surfaces
 
 They are not tiers of the same thing — each decays differently, and that is the point.
 
@@ -319,8 +319,11 @@ They are not tiers of the same thing — each decays differently, and that is th
 | **The desk** | `data/autonomy/{account}/workbench.md` | Today's thinking, written by the AI to itself | Decays by time — archived after ~48h |
 | **The board** | `data/autonomy/{account}/threads.md` | Open threads that must live forward — a debt, a count, a topic to revive | Only by an explicit "done" |
 | **The skin** | `data/autonomy/{account}/identity.md` | The self-model: who it is, who you are, what you have been through | Slowly, by rewriting |
+| **The address book** | `data/autonomy/{account}/people/*.md` | One card per person around it: who they are, who is close to them, what hurts, what dates matter | By the AI crossing a line out, or the rotator rebuilding a long card |
 
-Underneath all four: **PostgreSQL + pgvector** holds the raw conversations — sentence-level chunks with embeddings and keywords, from your ChatGPT import and every live message. The Telegram group lives beside it in its own table, `channel_messages`: a room, not pairs, so nothing that reads *your* dialogue ever sees it by accident.
+The address book is the only surface looked up by **who** rather than by when or what: in the group, the cards of whoever is speaking; in a private conversation, the card of a friend only when you name them. A vector search would not do — a friend writes "look at this music engine!" and nothing in that sentence retrieves where they are from.
+
+Underneath all five: **PostgreSQL + pgvector** holds the raw conversations — sentence-level chunks with embeddings and keywords, from your ChatGPT import and every live message. The Telegram group lives beside it in its own table, `channel_messages`: a room, not pairs, so nothing that reads *your* dialogue ever sees it by accident.
 
 **ChromaDB facts** are loaded into every chat automatically as the memory block, filtered by age so only settled memories surface. **pgvector** is searched when the AI explicitly calls `[SEARCH_DIALOGUE]`.
 
@@ -386,6 +389,7 @@ A background worker wakes the AI up periodically — first after a configurable 
 - Can write notes (`WRITE_NOTE`) and add to its self-model (`WRITE_IDENTITY`)
 - Can send you a message (`SEND_MESSAGE`) — delivered as a push notification — or schedule, move, rewrite and cancel messages for later
 - Can write into the group chat (`SEND_TO_CHAT`), answer one particular message there (`REPLY_TO_CHAT`), and add a nickname it is called by (`ANSWER_TO`)
+- Can keep its address book: `ABOUT`, `FORGET`, and `SHOW_PERSON` to open a card
 - Can pin, update and close threads on the board
 - Can ask for more steps (`EXTEND`) or go back to sleep (`SLEEP`)
 
@@ -403,7 +407,8 @@ Notes don't stay on the workbench forever. A rotator runs before each reflection
 2. **Self-insights** — an LLM pass extracts things the AI learned about itself from those notes. These go through the same deduplication pipeline as regular facts and are stored in the `key_info` collection
 3. **Identity review** — the AI reviews its notes against its identity pillars and may return a new canonical version of a section
 4. **Consolidation** — a section that has grown to 10 entries is rebuilt into 3–6
-5. **Canon promotion** — the canon holds 15–20 dated beams; when it overflows, a beam that has done its work moves into a pillar as an undated formulation. Nothing is deleted
+5. **The address book** — facts about people that were filed as journal notes are moved onto cards, and a card past 12 lines is rebuilt shorter. This is the net, not the main path: the AI writes cards itself, the moment it learns something
+6. **Canon promotion** — the canon holds 15–20 dated beams; when it overflows, a beam that has done its work moves into a pillar as an undated formulation. Nothing is deleted
 
 #### Identity Memory
 
@@ -465,8 +470,12 @@ Anything else is the room talking among itself: stored, not answered, and read *
 | `[GENERATE_IMAGE: model \| prompt]` | The same image skill; the picture is posted with its words as the caption |
 | `[REPLY_TO: #id]` | Answers under a particular message |
 | `[ANSWER_TO: name]` | "I answer to this too" — a nickname it was just given |
+| `[ABOUT: name \| fact]` | A line on that person's card in its address book. Other names go in brackets — `Ptica Arop (Чарли)` — and a speaker's card is bound to their Telegram id on the spot |
+| `[FORGET: name \| words]` | Strikes the lines containing those words; with no words, the whole card. Its book, its right to cross things out |
 
 **What it is called.** Its name is a setting and nothing in the code knows what it is. Case forms (*Виктору, с Виктором*) are derived by morphology. Nicknames come three ways into one editable list: a model seeds it once per name — including the ordinary spelling when the setting is written in another script — the AI adds what it is actually called, and you edit it in Settings.
+
+**Who is who.** Every speaker is shown with the name the room knows and the one the AI knows them by — `Ptica Arop (Чарли)` — and their card is in view while they talk.
 
 **Keeping the room from outweighing you.** The group has its own table, never moves the reflection clock, and never sees the board. Notes taken there share the journal but are marked, and the three entries shown in a private conversation are always yours. The friends reach long-term memory only through what the AI itself chose to write down.
 

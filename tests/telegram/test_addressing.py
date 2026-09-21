@@ -58,7 +58,14 @@ class TestCasesAreGrammar:
     def test_a_name_morphology_cannot_parse_does_not_drag_garbage_in(self):
         # pymorphy reads «Люми» as forms of «лить»; none of that may match.
         assert not addressing.mentions("я лью воду и лил вчера", ai_name="Люми")
-        assert all(f.startswith("люм") for f in addressing.known_forms("Люми"))
+        assert all(f.startswith("лю") and len(f) >= 3 for f in addressing.known_forms("Люми"))
+
+    @pytest.mark.parametrize("name,line", [("Ева", "это дети Евы"), ("Оля", "написал Оле"), ("Оля", "жду Олю")])
+    def test_a_three_letter_name_keeps_only_two_letters_across_its_cases(self, name, line):
+        assert addressing.mentions(line, ai_name=name)
+
+    def test_but_a_two_letter_scrap_is_not_a_name(self):
+        assert not addressing.mentions("ев и не думал", ai_name="Ева")
 
     def test_yo_and_ye_are_the_same_letter_to_people(self):
         assert addressing.mentions("спроси у Артема", ai_name="Артём")

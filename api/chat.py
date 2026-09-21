@@ -298,7 +298,10 @@ def _build_system_prompt(inputs: _Inputs, state: dict, skills: list) -> str:
         f"<open_threads>\n{state['open_threads']}\n</open_threads>\n\n"
         if state["open_threads"] else ""
     )
-    workbench_block = threads_block + (
+    people_block = (
+        f"<people>\n{state['people']}\n</people>\n\n" if state.get("people") else ""
+    )
+    workbench_block = people_block + threads_block + (
         f"<workbench>\n{state['workbench']}\n</workbench>\n\n"
         if state["workbench"] else ""
     )
@@ -1235,7 +1238,12 @@ async def chat(
     # four consumers — see infrastructure/autonomy/context.py.
     state = context.build(
         context.Consumer.CHAT,
-        context.Request(account_id=inputs.account_id, lang=prompt_language),
+        # The text is what the address book is searched with: a friend named
+        # in her message brings that friend's card, and nothing else does.
+        context.Request(
+            account_id=inputs.account_id, lang=prompt_language,
+            extras={"text": current_user_text},
+        ),
     )
     enabled_skills = skill_registry.get_enabled(inputs.account_id)
     combined_system_prompt = _build_system_prompt(inputs, state, enabled_skills)
