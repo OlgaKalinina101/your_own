@@ -119,6 +119,23 @@ class ChannelRepository:
         )
         return int((await self._session.execute(q)).scalar_one())
 
+    async def known_ids(self, account_id: str, chat_id: str, message_ids: list[int]) -> set[int]:
+        """Which of *message_ids* are stored.
+
+        One that is not is a message he cannot see — in practice another bot's:
+        Telegram never delivers one bot's messages to another.
+        """
+        wanted = [int(i) for i in message_ids if i]
+        if not wanted:
+            return set()
+        q = (
+            select(ChannelMessage.message_id)
+            .where(ChannelMessage.account_id == account_id)
+            .where(ChannelMessage.chat_id == chat_id)
+            .where(ChannelMessage.message_id.in_(wanted))
+        )
+        return {int(row[0]) for row in (await self._session.execute(q)).all()}
+
     async def list_senders(self, account_id: str, chat_id: Optional[str] = None) -> list[dict]:
         """Everyone the bot has seen speak, for the settings page to pick from.
 

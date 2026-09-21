@@ -86,20 +86,21 @@ _SEARCH_RE = re.compile(r"\[WEB[_ ]SEARCH:\s*(?P<query>.+?)\]", re.IGNORECASE | 
 _IMAGE_RE = re.compile(r"\[GENERATE[_ ]IMAGE:\s*(.*?)\]", re.IGNORECASE | re.DOTALL)
 _REPLY_TO_RE = re.compile(r"\[REPLY[_ ]TO:\s*#?(?P<id>\d+)\s*\]", re.IGNORECASE)
 _ANSWER_TO_RE = re.compile(r"\[ANSWER[_ ]TO:\s*(?P<name>[^\]]+?)\s*\]", re.IGNORECASE)
+_NOT_MY_NAME_RE = re.compile(r"\[NOT[_ ]MY[_ ]NAME:\s*(?P<name>[^\]]+?)\s*\]", re.IGNORECASE)
 _ANY_CMD_RE = re.compile(
-    r"\[(?:WRITE[_ ]NOTE|FETCH[_ ]URL|WEB[_ ]SEARCH|GENERATE[_ ]IMAGE|REPLY[_ ]TO|ANSWER[_ ]TO|ABOUT|FORGET):[^\]]*\]",
+    r"\[(?:WRITE[_ ]NOTE|FETCH[_ ]URL|WEB[_ ]SEARCH|GENERATE[_ ]IMAGE|REPLY[_ ]TO|ANSWER[_ ]TO|NOT[_ ]MY[_ ]NAME|ABOUT|FORGET):[^\]]*\]",
     re.IGNORECASE | re.DOTALL,
 )
 # A reply cut mid-command: the opener is there, the bracket is not.
 _UNCLOSED_RE = re.compile(
-    r"\[(?:WRITE[_ ]NOTE|FETCH[_ ]URL|WEB[_ ]SEARCH|GENERATE[_ ]IMAGE|REPLY[_ ]TO|ANSWER[_ ]TO|ABOUT|FORGET):[^\]]*$",
+    r"\[(?:WRITE[_ ]NOTE|FETCH[_ ]URL|WEB[_ ]SEARCH|GENERATE[_ ]IMAGE|REPLY[_ ]TO|ANSWER[_ ]TO|NOT[_ ]MY[_ ]NAME|ABOUT|FORGET):[^\]]*$",
     re.IGNORECASE | re.DOTALL,
 )
 _MEDIA_TOKEN_RE = re.compile(r"^\[[a-z ]+\]$")
 
 # Where a command starts. Where it *ends* is not a regex question: see _commands.
 _OPENER_RE = re.compile(
-    r"\[(?P<name>WRITE[_ ]NOTE|FETCH[_ ]URL|WEB[_ ]SEARCH|GENERATE[_ ]IMAGE|REPLY[_ ]TO|ANSWER[_ ]TO|ABOUT|FORGET):",
+    r"\[(?P<name>WRITE[_ ]NOTE|FETCH[_ ]URL|WEB[_ ]SEARCH|GENERATE[_ ]IMAGE|REPLY[_ ]TO|ANSWER[_ ]TO|NOT[_ ]MY[_ ]NAME|ABOUT|FORGET):",
     re.IGNORECASE,
 )
 
@@ -202,6 +203,7 @@ def decide(
     bot_username: str,
     now: datetime,
     aliases: list[str] | tuple[str, ...] = (),
+    not_for_him: set[int] | frozenset[int] = frozenset(),
 ) -> Trigger | None:
     """Which of the new lines, if any, make the room his to answer.
 
@@ -227,9 +229,61 @@ def decide(
         if last_own.tzinfo is None:
             last_own = last_own.replace(tzinfo=timezone.utc)
         if now - last_own <= timedelta(minutes=CONVERSATION_WINDOW_MINUTES):
-            if any(not row.is_self for row in new_rows):
+            # The window means "the next lines may be for him" — not the ones
+            # that plainly are for someone else. His name still wins: a line
+            # that calls him was caught above whatever else it does.
+            if any(not row.is_self and row.message_id not in not_for_him for row in new_rows):
                 return Trigger(kind="conversation")
     return None
+
+
+_VOCATIVE_HEAD_CHARS = 80
+_VOCATIVE_MAX_WORDS = 2
+
+
+def _called_at_the_start(account_id: str, text: str) -> bool:
+    """Does the line open by *calling* someone from the book?
+
+    A vocative is a name standing alone near the start, set off by a comma or
+    an exclamation: «Зефирка, у нас всё в порядке», «Давай, Зефирка, врубай
+    музло!», «Зефирка! Ты где?». A name inside a clause — «мне вчера Зефирка
+    такое выдал!» — is talk *about* them, and that line may well be for him.
+    """
+    from infrastructure.autonomy import people
+
+    head = (text or "")[:_VOCATIVE_HEAD_CHARS]
+    first_sentence = re.split(r"[.!?\n]", head, maxsplit=1)[0]
+    segments = [segment.strip(" —–-:;") for segment in first_sentence.split(",")]
+    set_off = len(segments) > 1 or bool(re.match(r"^\s*\S+(?:\s+\S+)?\s*[!?]", head))
+    if not set_off:
+        return False            # no comma and no «Имя!» — nobody is being called
+    for segment in segments[:2]:
+        if segment and len(segment.split()) <= _VOCATIVE_MAX_WORDS and people.mentioned(account_id, segment):
+            return True
+    return False
+
+
+def lines_for_someone_else(
+    account_id: str, new_rows: list[ChannelMessage], known_reply_targets: set[int],
+) -> set[int]:
+    """Message ids of new lines that are addressed to someone who is not him.
+
+    Two signs, both found in the live room. A line that *opens* by calling
+    someone from his address book — «Зефирка, у нас с тобой всё в порядке» — is
+    that someone's. And a reply to a message he does not have is a reply to a
+    participant he cannot see: other AIs sit in the room as bots, and Telegram
+    never shows one bot another's messages.
+    """
+    elsewhere: set[int] = set()
+    for row in new_rows:
+        if row.is_self:
+            continue
+        if row.reply_to_message_id and row.reply_to_message_id not in known_reply_targets:
+            elsewhere.add(row.message_id)
+            continue
+        if _called_at_the_start(account_id, row.text or ""):
+            elsewhere.add(row.message_id)
+    return elsewhere
 
 
 # ── The room as text ─────────────────────────────────────────────────────────
@@ -257,8 +311,15 @@ def render_room(
     lang: str,
     with_dates: bool = False,
     labels: dict[str, str] | None = None,
+    known_ids: set[int] | None = None,
 ) -> str:
     """The stretch of the room as a transcript, with her and him marked.
+
+    Message ids in a chat run without breaks, so a jump in them is a message
+    he was never given — another bot's, or one that was deleted. The gap is
+    shown, and so is a reply to a message he does not have (``known_ids``,
+    when the caller knows them): otherwise people in the room appear to be
+    talking to nobody, and the nearest somebody is him.
 
     The marks are the whole point: in a list of first names she is one name
     among five, and the one thing he must not do here is fail to know her.
@@ -270,8 +331,16 @@ def render_room(
     lines: list[str] = []
     day = None
     i = 0
+    last_id: int | None = None
+    ru = lang == "ru"
     while i < len(rows):
         row = rows[i]
+        if last_id is not None and row.message_id - last_id > 1:
+            missing = row.message_id - last_id - 1
+            lines.append(
+                f"      ⟨{missing} сообщ. тебе не видно — другие ИИ в чате или удалённое⟩" if ru
+                else f"      ⟨{missing} message(s) you cannot see — other AIs in the chat, or deleted⟩"
+            )
         if with_dates and row.created_at is not None:
             this_day = format_local(row.created_at, "%Y-%m-%d")
             if this_day != day:
@@ -291,9 +360,12 @@ def render_room(
         stamp = format_local(row.created_at, "%H:%M") if row.created_at else "--:--"
         prefix = f"[{stamp}] #{row.message_id} "
         if row.reply_to_message_id:
-            prefix += f"↩#{row.reply_to_message_id} "
+            unseen = known_ids is not None and row.reply_to_message_id not in known_ids
+            mark = ("⟨не видно⟩" if ru else "⟨unseen⟩") if unseen else ""
+            prefix += f"↩#{row.reply_to_message_id}{mark} "
         text = f"{row.text} ×{run}" if run > 1 else row.text
         lines.append(f"{prefix}{_who(row, ai_name, lang, labels)}: {text}")
+        last_id = rows[i + run - 1].message_id
         i += run
     return "\n".join(lines)
 
@@ -561,6 +633,7 @@ async def compose(
     new_rows: list[ChannelMessage],
     trigger: Trigger,
     bot_username: str,
+    known_ids: set[int] | None = None,
 ) -> Reply:
     """Ask him what he wants to do in the room, and do the parts that are not talk.
 
@@ -599,7 +672,10 @@ async def compose(
         image_skill=_image_skill_description(lang),
         web_skill=_web_skill_description(lang),
         memories=memories or ("(ничего не всплыло)" if lang == "ru" else "(nothing surfaced)"),
-        room=render_room(shown, ai_name=ai_name, lang=lang, labels=people.labels_by_tg_id(account_id)),
+        room=render_room(
+            shown, ai_name=ai_name, lang=lang, labels=people.labels_by_tg_id(account_id),
+            known_ids=known_ids,
+        ),
         her_name=_her_name(recent, lang),
         bot_username=bot_username or "?",
         why=_WHY.get(lang, _WHY["en"])[trigger.kind],
@@ -639,6 +715,8 @@ async def compose(
 
         _take_notes(account_id, response, lang, reply.notes)
         _keep_the_book(account_id, response, lang, recent, reply.about)
+        for dropped in _NOT_MY_NAME_RE.finditer(response):
+            logger.info("[telegram.responder:%s] %s", account_id, addressing.remove_alias(dropped.group("name"), lang))
         for named in _ANSWER_TO_RE.finditer(response):
             logger.info("[telegram.responder:%s] %s", account_id, addressing.add_alias(named.group("name"), lang))
 
@@ -754,14 +832,20 @@ async def consider(account_id: str, new_rows: list[ChannelMessage]) -> str | Non
     ai_name = get_ai_name()
 
     async with get_db_session() as db:
-        recent = await ChannelRepository(db).get_recent(account_id, chat_id, limit=ROOM_CONTEXT_MESSAGES)
+        repo = ChannelRepository(db)
+        recent = await repo.get_recent(account_id, chat_id, limit=ROOM_CONTEXT_MESSAGES)
+        targets = [row.reply_to_message_id for row in (*recent, *new_rows) if row.reply_to_message_id]
+        known_ids = await repo.known_ids(account_id, chat_id, targets) if hasattr(repo, "known_ids") else set(targets)
+    known_ids |= {row.message_id for row in recent}
+    elsewhere = lines_for_someone_else(account_id, new_rows, known_ids)
 
     # Nicknames are seeded once per name, in the background: this reply uses
     # whatever is already known and never waits for that call.
     addressing.ensure_aliases_in_background(api_key)
     trigger = decide(
         new_rows, recent, ai_name=ai_name, bot_username=bot_username,
-        now=datetime.now(timezone.utc), aliases=addressing.current_aliases(),
+        now=datetime.now(timezone.utc), aliases=addressing.usable_aliases(),
+        not_for_him=elsewhere,
     )
     if trigger is None:
         return None
@@ -769,7 +853,7 @@ async def consider(account_id: str, new_rows: list[ChannelMessage]) -> str | Non
 
     reply = await compose(
         account_id=account_id, api_key=api_key, recent=recent, new_rows=new_rows,
-        trigger=trigger, bot_username=bot_username,
+        trigger=trigger, bot_username=bot_username, known_ids=known_ids,
     )
     if not reply.speaks:
         return None

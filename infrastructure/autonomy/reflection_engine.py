@@ -26,6 +26,7 @@ Commands:
   [SEND_TO_CHAT: text]           — a line into the group chat
   [REPLY_TO_CHAT: #id | text]    — the same, under a particular message
   [ANSWER_TO: name]              — a nickname he is called in the group chat
+  [NOT_MY_NAME: name]            — stop answering to one: it turned out to be someone else's
   [ABOUT: name | fact]           — a line on a person's card in the address book
   [FORGET: name | words]         — strike those lines; with no words, the whole card
   [SHOW_PERSON: name]            — read one card
@@ -450,6 +451,11 @@ async def _handle_command(
             )
         return people.render_card(person, max_chars=4000)
 
+    elif cmd == "NOT_MY_NAME":
+        from infrastructure.telegram import addressing
+
+        return addressing.remove_alias(arg, lang)
+
     elif cmd == "ANSWER_TO":
         # Not a silent write: he is told what came of it, because "the list is
         # full" or "you already answer to that" is something he would act on.
@@ -755,7 +761,8 @@ async def _build_group_chat_block(
         head = (
             f"Общий чат с друзьями {handle}. С тех пор как ты смотрел: {len(fresh)} сообщений. "
             "Ниже переписка целиком, твои реплики тоже. Номер после # — это id сообщения, "
-            "на него можно ответить."
+            "на него можно ответить. В чате есть и другие ИИ — как боты; Telegram не показывает "
+            "ботам сообщения друг друга, поэтому их реплик здесь нет, а «⟨… тебе не видно⟩» — это они."
         )
         cut = (
             f"\nСамые ранние {omitted} сообщений не поместились — до них можно дотянуться "
@@ -765,7 +772,8 @@ async def _build_group_chat_block(
         head = (
             f"The group chat with her friends {handle}. Since you last looked: {len(fresh)} messages. "
             "The whole exchange is below, your own lines included. The number after # is a "
-            "message id you can reply to."
+            "message id you can reply to. Other AIs are in the chat as bots; Telegram does not show "
+            "bots each other's messages, so their lines are not here — \"⟨… you cannot see⟩\" is them."
         )
         cut = (
             f"\nThe earliest {omitted} messages did not fit — [SEARCH_CHAT: query] reaches them."

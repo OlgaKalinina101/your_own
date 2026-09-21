@@ -160,11 +160,24 @@ def add_alias(word: str, lang: str = "ru") -> str:
     from infrastructure.settings_store import save_settings
 
     ru = lang == "ru"
-    clean = (word or "").strip().strip("«»\"'. ").strip()
+    raw = (word or "").strip()
+    if raw.startswith(("-", "−", "–")):
+        return remove_alias(raw.lstrip("-−– "), lang)
+    clean = raw.strip("«»\"'. ").strip()
     if not _ALIAS_RE.match(clean):
         return (
             f"«{clean}» не подходит: нужно одно слово из букв, от трёх до пятнадцати."
             if ru else f"'{clean}' does not fit: one word, letters only, three to fifteen long."
+        )
+    # A name on someone else's card is theirs. He once took «Зефирка» for his
+    # own — it is what a friend calls another AI in the room — and from then on
+    # every line meant for that AI pulled him in as if he had been called.
+    owner = _owner_of(clean)
+    if owner:
+        return (
+            f"«{clean}» — это имя из карточки «{owner}», не твоё. Если тебя правда так зовут, "
+            f"сначала убери его оттуда: [FORGET]." if ru
+            else f"'{clean}' is a name on the card of '{owner}', not yours."
         )
     existing = current_aliases()
     known = {_norm(a) for a in existing} | {_norm(p) for p in _parts(get_ai_name())}
@@ -178,6 +191,49 @@ def add_alias(word: str, lang: str = "ru") -> str:
     save_settings({"telegram_aliases": existing + [clean]})
     logger.info("[addressing] he now answers to %r", clean)
     return f"Теперь ты откликаешься в общем чате и на «{clean}»." if ru else f"You now answer to '{clean}' in the group chat."
+
+
+def _owner_of(name: str) -> str:
+    """Whose card carries this name, if anyone's."""
+    try:
+        from infrastructure.account import ACCOUNT_ID
+        from infrastructure.autonomy import people
+
+        wanted = _norm(name)
+        for person in people.all_people(ACCOUNT_ID):
+            if wanted in {_norm(n) for n in person.names}:
+                return person.name
+    except Exception as exc:
+        logger.warning("[addressing] could not check the address book for %r: %s", name, exc)
+    return ""
+
+
+def remove_alias(word: str, lang: str = "ru") -> str:
+    """``[ANSWER_TO: -name]`` — stop answering to it. His list, his to trim."""
+    from infrastructure.settings_store import save_settings
+
+    ru = lang == "ru"
+    clean = (word or "").strip().strip("«»\"'. ").strip()
+    existing = current_aliases()
+    kept = [a for a in existing if _norm(a) != _norm(clean)]
+    if len(kept) == len(existing):
+        return f"На «{clean}» ты и так не откликаешься." if ru else f"You do not answer to '{clean}' anyway."
+    save_settings({"telegram_aliases": kept})
+    logger.info("[addressing] he no longer answers to %r", clean)
+    return f"Больше не откликаешься на «{clean}»." if ru else f"You no longer answer to '{clean}'."
+
+
+def usable_aliases() -> list[str]:
+    """The names that actually call him: his list, minus any that belong to someone else.
+
+    The order of events cannot be relied on. He may take «Зефирчик» for his own
+    on Monday and only on Tuesday learn — and write on a card — that it is what
+    a friend calls another AI. From that moment the name must stop pulling him
+    into lines meant for them, whether or not he has got round to taking it off
+    his list. The list itself is left alone: it is his to trim, with
+    ``[NOT_MY_NAME]``.
+    """
+    return [alias for alias in current_aliases() if not _owner_of(alias)]
 
 
 def current_aliases() -> list[str]:

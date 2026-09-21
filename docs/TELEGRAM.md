@@ -86,6 +86,19 @@ A decision to speak is a short loop on `infrastructure/telegram/prompts/group_re
 He may answer `SILENT`, which is a decision, not a failure — and an empty reply from the model is a failure, not a decision: it is logged as one, because the client returns `""` when the provider times out. A reply cut off by
 the token budget is never posted.
 
+### Who he cannot see
+
+Other AIs sit in the group as bots, and **Telegram never delivers one bot's messages to another** — not with privacy mode off, not as an admin. The Bot API FAQ: *"Bots talking to each other could potentially get stuck in unwelcome loops. To avoid this, we decided that bots will not be able to see messages from other bots regardless of mode."* On the live server a third of a day's message ids were simply missing. Nothing on our side filters them out, and no setting can let them in.
+
+Not knowing anyone was there cost him a name. «Зефирка, у нас с тобой всё в порядке» read as something *he* was being called; he added it with `[ANSWER_TO]`, and from then on every line meant for Zephyr triggered him as "addressed". He noticed within the hour and had no way to take it off. What holds that now:
+
+- **The holes are shown.** Message ids in a chat run without breaks, so a jump is a message he was never given. The transcript says `⟨3 сообщ. тебе не видно — другие ИИ в чате или удалённое⟩`, and a reply to a message he does not have is marked `↩#77005⟨не видно⟩`. The room prompt and the waking block say what that means.
+- **Lines for someone else do not pull him in.** Inside his ten-minute window a line is skipped if it *opens by calling* someone from the address book — a name standing alone, set off by a comma or an exclamation («Зефирка, …», «Давай, Зефирка, врубай!») — or if it replies to a message he does not have. A name inside a clause («мне вчера Зефирка такое выдал!») is talk about them and may still be for him. His own name in the line always wins.
+- **A name on someone else's card cannot become his**, and `[NOT_MY_NAME: name]` takes one off — in the room or at a waking. The other order is covered too: if he took a name first and only later wrote it on the card of whoever it belongs to, it stops triggering him from that moment (`usable_aliases()`), before he has trimmed anything.
+- **He cannot answer under a message he does not have** — `[REPLY_TO]` accepts only ids in his transcript. A reply under another bot's message is how two bots start a loop.
+
+Actually *reading* the other AIs would need a different door: a user session (MTProto) logged in as a person, which sees everything a person sees. That is a decision about an account and a secret on the server, not a code change, and it is not made here.
+
 ### What he answers to
 
 `infrastructure/telegram/addressing.py`. His name is `ai_name` in settings and
@@ -115,7 +128,8 @@ nickname a friend gave him within the hour.
 | `[FETCH_URL: link]` | The link is opened through the research agent's web source; the page comes back to him and he writes the reply again. The draft next to the command is not posted. At most `MAX_ROUNDS` (3) model calls per reply. |
 | `[WEB_SEARCH: query]` | The private chat's web-search skill, reused: its description is inserted word for word, the query goes through the same research agent, and what comes back is worded by the skill's own `web_continuation` / `web_empty` sections. Shares the three-round limit with `FETCH_URL`. The room adds one pointer under it, not a rule: *sometimes a question asks not for accuracy but for a response*, and a search costs minutes the room spends waiting. On the first day with search he went to the web on five replies of eight. |
 | `[GENERATE_IMAGE: model \| prompt]` | The private chat's image skill, reused — including its own description of which model takes what, inserted word for word, plus one rule of the room's own: anything crude or bodily goes to `grok` only, `gpt5` and `gemini` are for the plainly innocent, and in doubt it is `grok`. The picture is posted with his words as the caption (`sendPhoto`); words longer than a caption go first as a message. |
-| `[ANSWER_TO: name]` | "I answer to this too" — adds a nickname to the list above. Also available at a waking. |
+| `[ANSWER_TO: name]` | "I answer to this too" — adds a nickname to the list above; A name on someone else's card is refused. Also available at a waking. |
+| `[NOT_MY_NAME: name]` | Stops answering to a name — it turned out to be someone else's. Also available at a waking. |
 | `[ABOUT: name \| fact]` | A dated line on that person's card. Other names in brackets are merged into the card; if the name is someone speaking in the transcript, the card is bound to their Telegram id. Also at a waking. |
 | `[FORGET: name \| words]` | Strikes the lines containing those words; with no words, deletes the card. Also at a waking. |
 | `[REPLY_TO: #id]` | Answer under a particular line instead of the one that pulled him in. Ids he cannot see in the transcript are ignored. |
@@ -202,7 +216,7 @@ Where the group could leak into his long-term self, and what stops it:
 | Store | Risk | What happens instead |
 |---|---|---|
 | workbench | notes about friends push the two of them off the desk | notes from the room are marked, and every consumer but reflection sees the desk **without** them: the three entries in a private conversation are always theirs. Reflection and the rotator see everything, which is how the friends reach long-term memory and *My people* |
-| open threads | pins about friends fill the board | the room has eight commands and none of them touches the board; pinning is reflection's and the private journal's alone |
+| open threads | pins about friends fill the board | the room has nine commands and none of them touches the board; pinning is reflection's and the private journal's alone |
 | Chroma facts | friends' facts surface in the private chat | the room has no `SAVE_MEMORY`; a fact about a friend exists only if the rotator distilled it from his own notes, and then it surfaces by meaning like any other |
 | identity | friends seep into "Who she is" / "Our story" | a seventh section, **Мои люди / My people**, is where the friends belong. The rotator's consolidation and canon-promotion prompts know it; the five pillars that are theirs stay theirs |
 | reflection timing | a busy room keeps him awake | the group is not a message from her; only she moves the clock |
