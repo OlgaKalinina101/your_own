@@ -103,9 +103,13 @@ async def send_to_chat(
     *,
     account_id: str,
     text: str,
+    reply_to_message_id: int | None = None,
     log_prefix: str = "autonomy",
 ) -> bool:
     """Post a line into the group chat, and keep his copy of it.
+
+    ``reply_to_message_id`` puts it under a particular message — the ids are
+    the ``#numbers`` in every transcript he is shown.
 
     Returns ``False`` when there is no chat to post into — no token, no group
     chosen — so the caller can tell him in words rather than let the line
@@ -124,7 +128,7 @@ async def send_to_chat(
         logger.warning("[%s:%s] SEND_TO_CHAT: chat not configured", log_prefix, account_id)
         return False
 
-    sent = await client.send_message(chat_id, clean)
+    sent = await client.send_message(chat_id, clean, reply_to_message_id=reply_to_message_id)
     logger.info("[%s:%s] said in the group: %s", log_prefix, account_id, clean[:80])
 
     bot = listener.read_state(account_id).get("bot") or {}

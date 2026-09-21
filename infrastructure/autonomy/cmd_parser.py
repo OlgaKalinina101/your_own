@@ -3,6 +3,7 @@
 Parses the bracketed commands that the LLM can emit in autonomy contexts:
   [SEND_MESSAGE: text]
   [SEND_TO_CHAT: text]
+  [REPLY_TO_CHAT: #id | text]
   [SCHEDULE_MESSAGE: YYYY-MM-DD HH:MM | text]
   [CANCEL_MESSAGE: YYYY-MM-DD HH:MM]
   [CANCEL_ALL_SCHEDULED]
@@ -45,6 +46,7 @@ class SendToChat:
 
     type: Literal[CmdType.SEND_TO_CHAT] = CmdType.SEND_TO_CHAT
     text: str = ""
+    reply_to: int | None = None     # a Telegram message id, from [REPLY_TO_CHAT: #id | …]
 
 
 @dataclass
@@ -115,6 +117,10 @@ _SEND_TO_CHAT_RE = re.compile(
     r"\[SEND[_ ]TO[_ ]CHAT:\s*(?P<text>.+?)\]",
     re.IGNORECASE | re.DOTALL,
 )
+_REPLY_TO_CHAT_RE = re.compile(
+    r"\[REPLY[_ ]TO[_ ]CHAT:\s*#?(?P<id>\d+)\s*\|\s*(?P<text>.+?)\]",
+    re.IGNORECASE | re.DOTALL,
+)
 _SCHEDULE_RE = re.compile(
     rf"\[SCHEDULE[_ ]MESSAGE:\s*(?P<ts>{_TS})\s*\|\s*(?P<text>.+?)\]",
     re.IGNORECASE | re.DOTALL,
@@ -153,6 +159,7 @@ _UPDATE_THREAD_RE = re.compile(
 _ALL_CMDS_RE = re.compile(
     r"\[(?:(?:SEND|SCHEDULE|CANCEL|RESCHEDULE|REWRITE)[_ ]MESSAGE:[^\]]*"
     r"|SEND[_ ]TO[_ ]CHAT:[^\]]*"
+    r"|REPLY[_ ]TO[_ ]CHAT:[^\]]*"
     r"|CANCEL[_ ]ALL[_ ]SCHEDULED"
     r"|(?:PIN|UNPIN|UPDATE)[_ ]THREAD:[^\]]*)\]",
     re.IGNORECASE | re.DOTALL,
@@ -174,6 +181,9 @@ def parse_commands(response: str) -> list[ParsedCommand]:
 
     for m in _SEND_TO_CHAT_RE.finditer(response):
         hits.append((m.start(), SendToChat(text=m.group("text").strip())))
+
+    for m in _REPLY_TO_CHAT_RE.finditer(response):
+        hits.append((m.start(), SendToChat(text=m.group("text").strip(), reply_to=int(m.group("id")))))
 
     for m in _SCHEDULE_RE.finditer(response):
         ts = " ".join(m.group("ts").split())   # normalise any extra whitespace

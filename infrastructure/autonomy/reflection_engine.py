@@ -24,6 +24,7 @@ Commands:
   [WRITE_IDENTITY: section | text]
   [SEND_MESSAGE: text]
   [SEND_TO_CHAT: text]           — a line into the group chat
+  [REPLY_TO_CHAT: #id | text]    — the same, under a particular message
   [SCHEDULE_MESSAGE: YYYY-MM-DD HH:MM | text]
   [EXTEND: N]   (1-5, up to 3 times)
   [SLEEP]
@@ -118,7 +119,7 @@ _CANCEL_ALL_RE = re.compile(r"\[CANCEL[_ ]ALL[_ ]SCHEDULED\]", re.IGNORECASE)
 _EXTEND_RE = re.compile(r"\[EXTEND:\s*(\d+)\]", re.IGNORECASE)
 
 _SEARCH_CMDS = {"SEARCH_FACTS", "SEARCH_NOTES", "SEARCH_DIALOGUE", "SEARCH_DOCS", "SEARCH_CHAT", "WEB_SEARCH"}
-_WRITE_CMDS = {"WRITE_NOTE", "WRITE_IDENTITY", "SEND_MESSAGE", "SEND_TO_CHAT", "SCHEDULE_MESSAGE"}
+_WRITE_CMDS = {"WRITE_NOTE", "WRITE_IDENTITY", "SEND_MESSAGE", "SEND_TO_CHAT", "REPLY_TO_CHAT", "SCHEDULE_MESSAGE"}
 
 # Back-compat: SEARCH_MEMORIES used to mean Chroma facts here and Postgres
 # dialogue in chat. One name, one meaning now - it resolves to the dialogue
@@ -461,6 +462,15 @@ def _as_command(cmd: str, arg: str) -> ParsedCommand | None:
     if cmd == "SEND_TO_CHAT":
         return SendToChat(text=arg.strip())
 
+    if cmd == "REPLY_TO_CHAT":
+        if "|" not in arg:
+            return None
+        target, message = arg.split("|", 1)
+        digits = target.strip().lstrip("#").strip()
+        if not digits.isdigit() or not message.strip():
+            return None
+        return SendToChat(text=message.strip(), reply_to=int(digits))
+
     if cmd == "SCHEDULE_MESSAGE":
         if "|" not in arg:
             return None
@@ -614,19 +624,60 @@ def _build_pending_tasks_block(lang: str, tasks: list) -> str:
     return f"{header}\n{tasks_list}\n{footer}\n\n"
 
 
-# How much of the room he is shown at a waking. The count says how busy it was;
-# the tail says what it was about. He can read more with [SEARCH_CHAT].
-GROUP_CHAT_TAIL = 12
+# The room at a waking: everything said since he last looked, verbatim.
+#
+# It used to be a count and the last twelve lines, and that lost the first day
+# whole: the introductions happened in the morning, hundreds of lines went by,
+# and by the night's waking nothing of them was in view. A summary would have
+# kept the gist, but he takes notes in the room himself now, so what the waking
+# is for is checking — "did I miss something?" — and checking needs the
+# original, not a retelling of it.
+#
+# Measured on the live group (2026-09-21): 463 messages in a day and a half are
+# 67k characters, the busiest twelve hours 35k. The cap is above both.
+GROUP_CHAT_MAX_CHARS = 80_000
+GROUP_CHAT_QUIET_TAIL = 8        # shown for orientation when nothing is new
+_GROUP_EPOCH = datetime(2000, 1, 1, tzinfo=timezone.utc)
+
+
+def _group_seen_file(account_id: str) -> Path:
+    """Where "how far he has read the room" is kept.
+
+    Its own file rather than a key in ``telegram.json``: the listener holds
+    that file across a 25-second long poll and writes it back whole, so
+    anything written into it meanwhile is lost.
+    """
+    directory = _DATA_DIR / account_id
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory / "group_seen_until.txt"
+
+
+def _get_group_seen(account_id: str) -> datetime | None:
+    path = _group_seen_file(account_id)
+    if not path.exists():
+        return None
+    try:
+        return datetime.fromisoformat(path.read_text(encoding="utf-8").strip())
+    except (ValueError, OSError):
+        return None
+
+
+def _set_group_seen(account_id: str, until: datetime) -> None:
+    atomic_write_text(_group_seen_file(account_id), until.isoformat())
 
 
 async def _build_group_chat_block(
-    db: AsyncSession, account_id: str, lang: str, since: datetime | None,
-) -> str:
-    """The group chat since his last waking, or nothing when there is no chat.
+    db: AsyncSession, account_id: str, lang: str,
+) -> tuple[str, datetime | None]:
+    """The room since he last read it, and how far this reading goes.
+
+    Returns ``("", None)`` when there is no chat. The second value is the time
+    of the newest message shown; the caller commits it as the new "seen until"
+    only once the waking has actually happened, so a failed waking does not
+    swallow a stretch of the room.
 
     Its own block rather than a registry section for the reason the registry's
-    docstring gives: it is a reflection-shaped input (a count since a moment
-    only reflection knows), and it needs the database.
+    docstring gives: it is a reflection-shaped input, and it needs the database.
     """
     from infrastructure.database.repositories.channel_repo import ChannelRepository
     from infrastructure.settings_store import load_settings
@@ -634,22 +685,57 @@ async def _build_group_chat_block(
 
     chat_id = str(load_settings().get("telegram_chat_id") or "").strip()
     if not chat_id:
-        return ""
+        return "", None
 
     repo = ChannelRepository(db)
-    tail = await repo.get_recent(account_id, chat_id, limit=GROUP_CHAT_TAIL)
-    count = await repo.count_since(account_id, chat_id, since) if since else len(tail)
+    seen = _get_group_seen(account_id)
+    fresh = await repo.get_since(account_id, chat_id, seen or _GROUP_EPOCH, limit=5000)
 
+    ai_name = get_ai_name()
     bot = listener.read_state(account_id).get("bot") or {}
     handle = f"@{bot['username']}" if bot.get("username") else ""
-    if lang == "ru":
-        head = f"Общий чат с друзьями {handle}. С прошлого пробуждения: {count} сообщений."
-        empty = "Пока тихо."
+    title = listener.room_title(account_id)
+    if title:
+        handle = f"«{title}» {handle}".strip()
+    ru = lang == "ru"
+
+    if not fresh:
+        tail = await repo.get_recent(account_id, chat_id, limit=GROUP_CHAT_QUIET_TAIL)
+        head = (
+            f"Общий чат с друзьями {handle}. С тех пор как ты смотрел, новых сообщений нет."
+            if ru else
+            f"The group chat with her friends {handle}. Nothing new since you last looked."
+        )
+        body = responder.render_room(tail, ai_name=ai_name, lang=lang) if tail else (
+            "Пока тихо." if ru else "Quiet so far."
+        )
+        return f"<group_chat>\n{head}\n{body}\n</group_chat>\n", None
+
+    body, omitted = responder.render_transcript(
+        fresh, ai_name=ai_name, lang=lang, max_chars=GROUP_CHAT_MAX_CHARS,
+    )
+    if ru:
+        head = (
+            f"Общий чат с друзьями {handle}. С тех пор как ты смотрел: {len(fresh)} сообщений. "
+            "Ниже переписка целиком, твои реплики тоже. Номер после # — это id сообщения, "
+            "на него можно ответить."
+        )
+        cut = (
+            f"\nСамые ранние {omitted} сообщений не поместились — до них можно дотянуться "
+            "через [SEARCH_CHAT: запрос]." if omitted else ""
+        )
     else:
-        head = f"The group chat with her friends {handle}. Since your last waking: {count} messages."
-        empty = "Quiet so far."
-    body = responder.render_room(tail, ai_name=get_ai_name(), lang=lang) if tail else empty
-    return f"<group_chat>\n{head}\n{body}\n</group_chat>\n"
+        head = (
+            f"The group chat with her friends {handle}. Since you last looked: {len(fresh)} messages. "
+            "The whole exchange is below, your own lines included. The number after # is a "
+            "message id you can reply to."
+        )
+        cut = (
+            f"\nThe earliest {omitted} messages did not fit — [SEARCH_CHAT: query] reaches them."
+            if omitted else ""
+        )
+    newest = fresh[-1].created_at
+    return f"<group_chat>\n{head}{cut}\n{body}\n</group_chat>\n", newest
 
 
 # ── Main run loop ─────────────────────────────────────────────────────────────
@@ -772,6 +858,7 @@ class _Awakening:
     lang: str
     system: str
     timezone_label: str   # the continuation prompts still need it, step by step
+    group_seen_until: datetime | None = None   # committed only if the waking happens
 
 
 def _format_dialogue(pairs: list[dict]) -> str:
@@ -799,7 +886,6 @@ async def _gather_awakening(
     ai_name: str,
     cooldown_h: int,
     interval_h: int,
-    since_last_waking: datetime | None = None,
 ) -> _Awakening:
     """Assemble what he wakes up knowing.
 
@@ -836,8 +922,9 @@ async def _gather_awakening(
     from infrastructure.autonomy.task_queue import get_recent_tasks
     recent_tasks = await get_recent_tasks(db, account_id, hours=24)
 
+    group_seen_until: datetime | None = None
     try:
-        group_chat_block = await _build_group_chat_block(db, account_id, lang, since_last_waking)
+        group_chat_block, group_seen_until = await _build_group_chat_block(db, account_id, lang)
     except Exception as exc:
         # The room is one input among several; a waking without it is still a
         # waking. Said in the log, because a silent absence is how gaps hide.
@@ -855,6 +942,7 @@ async def _gather_awakening(
 
     return _Awakening(
         lang=lang,
+        group_seen_until=group_seen_until,
         timezone_label=state["timezone_label"],
         system=_build_awakening_system(
             ai_name=ai_name,
@@ -873,8 +961,6 @@ async def _gather_awakening(
 async def _run_cycle(account_id: str, api_key: str) -> None:
     """Run one full reflection cycle."""
     logger.info("[reflection:%s] starting reflection", account_id)
-    # Read before it is overwritten: "since the last waking" is this moment.
-    previous_waking = _get_last_reflection_ts(account_id)
     _set_last_reflection_ts(account_id)
 
     from infrastructure.settings_store import load_settings
@@ -887,7 +973,6 @@ async def _run_cycle(account_id: str, api_key: str) -> None:
         waking = await _gather_awakening(
             db, account_id,
             ai_name=ai_name, cooldown_h=cooldown_h, interval_h=interval_h,
-            since_last_waking=previous_waking,
         )
         lang = waking.lang
         awakening_system = waking.system
@@ -997,6 +1082,10 @@ async def _run_cycle(account_id: str, api_key: str) -> None:
 
         logger.info("[reflection:%s] reflection done in %d steps", account_id, step)
         Vitals(account_id).record_reflection_success(steps=step)
+        # He has read the room up to here. Only now: the early returns above are
+        # wakings that never happened, and the room must still be unread then.
+        if waking.group_seen_until is not None:
+            _set_group_seen(account_id, waking.group_seen_until)
 
 
 # ── Should-run check ──────────────────────────────────────────────────────────

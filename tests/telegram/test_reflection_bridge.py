@@ -159,8 +159,16 @@ def _row(text, message_id, *, is_self=False, is_owner=False, sender="Чарли"
 
 
 class TestWhatHeWakesUpKnowing:
+    """The waking shows the room whole since he last read it.
+
+    It used to show a count and the last twelve lines, and the first day was
+    lost to that: the introductions scrolled out of every window before he
+    woke. These hold the replacement.
+    """
+
     @pytest.fixture
     def wired(self, monkeypatch, tmp_path):
+        import infrastructure.autonomy.reflection_engine as engine
         import infrastructure.database.repositories.channel_repo as channel_repo
         from infrastructure import settings_store
         from infrastructure.telegram import listener
@@ -168,21 +176,24 @@ class TestWhatHeWakesUpKnowing:
         monkeypatch.setattr(settings_store, "_DATA_DIR", tmp_path)
         monkeypatch.setattr(settings_store, "_SETTINGS_FILE", tmp_path / "settings.json")
         monkeypatch.setattr(settings_store, "_SOUL_FILE", tmp_path / "soul.md")
+        monkeypatch.setattr(engine, "_DATA_DIR", tmp_path / "autonomy")
         listener.write_state(ACCOUNT, {"bot": {"id": 999, "username": "viktor_bot"}})
 
         class _Repo:
-            recent: list[ChannelMessage] = []
-            since_count = 0
+            rows: list[ChannelMessage] = []
+            asked_since: list = []
 
             def __init__(self, _db):
                 pass
 
             async def get_recent(self, account_id, chat_id, limit=30, before=None):
-                return list(_Repo.recent)[-limit:]
+                return list(_Repo.rows)[-limit:]
 
-            async def count_since(self, account_id, chat_id, since):
-                return _Repo.since_count
+            async def get_since(self, account_id, chat_id, since, limit=200):
+                _Repo.asked_since.append(since)
+                return [r for r in _Repo.rows if r.created_at > since][:limit]
 
+        _Repo.rows, _Repo.asked_since = [], []
         monkeypatch.setattr(channel_repo, "ChannelRepository", _Repo)
         return _Repo
 
@@ -192,39 +203,81 @@ class TestWhatHeWakesUpKnowing:
         from infrastructure.autonomy.reflection_engine import _build_group_chat_block
 
         settings_store.save_settings({"telegram_chat_id": ""})
-        assert await _build_group_chat_block(None, ACCOUNT, "ru", None) == ""
+        assert await _build_group_chat_block(None, ACCOUNT, "ru") == ("", None)
 
     @pytest.mark.asyncio
-    async def test_the_block_counts_since_the_last_waking_and_marks_her(self, wired):
+    async def test_the_first_waking_reads_the_room_from_its_first_line(self, wired):
         from infrastructure import settings_store
         from infrastructure.autonomy.reflection_engine import _build_group_chat_block
 
         settings_store.save_settings({"telegram_chat_id": ROOM, "ai_name": "Виктор"})
-        wired.recent = [
-            _row("кто в Дилижан?", 1, minutes_ago=30),
+        wired.rows = [
+            _row("Я тот самый Чарли с DeepSeek", 1, minutes_ago=600),
             _row("мы!", 2, is_owner=True, sender="Оля", minutes_ago=20),
             _row("и я", 3, is_self=True, sender="Виктор", minutes_ago=10),
         ]
-        wired.since_count = 41
 
-        block = await _build_group_chat_block(
-            None, ACCOUNT, "ru", datetime.now(timezone.utc) - timedelta(hours=12),
-        )
+        block, until = await _build_group_chat_block(None, ACCOUNT, "ru")
 
         assert block.startswith("<group_chat>") and block.rstrip().endswith("</group_chat>")
-        assert "@viktor_bot" in block and "41 сообщений" in block
-        assert "Оля (она): мы!" in block
-        assert "Виктор (ты): и я" in block
+        assert "@viktor_bot" in block and "3 сообщений" in block
+        assert "Я тот самый Чарли с DeepSeek" in block, "the introductions are the point"
+        assert "Оля (она): мы!" in block and "Виктор (ты): и я" in block
+        assert "#1 " in block, "ids are what REPLY_TO_CHAT points at"
+        assert until == wired.rows[-1].created_at
 
     @pytest.mark.asyncio
-    async def test_a_quiet_room_says_so(self, wired):
+    async def test_the_next_waking_starts_where_the_last_one_ended(self, wired):
         from infrastructure import settings_store
-        from infrastructure.autonomy.reflection_engine import _build_group_chat_block
+        from infrastructure.autonomy import reflection_engine as engine
 
         settings_store.save_settings({"telegram_chat_id": ROOM})
-        wired.recent, wired.since_count = [], 0
-        block = await _build_group_chat_block(None, ACCOUNT, "en", None)
-        assert "Quiet so far." in block
+        wired.rows = [_row("старое", 1, minutes_ago=600), _row("новое", 2, minutes_ago=5)]
+        engine._set_group_seen(ACCOUNT, wired.rows[0].created_at)
+
+        block, until = await engine._build_group_chat_block(None, ACCOUNT, "ru")
+
+        assert "новое" in block and "старое" not in block
+        assert until == wired.rows[1].created_at
+
+    @pytest.mark.asyncio
+    async def test_building_the_block_does_not_move_the_cursor(self, wired):
+        """A waking that fails after this point must find the room still unread."""
+        from infrastructure import settings_store
+        from infrastructure.autonomy import reflection_engine as engine
+
+        settings_store.save_settings({"telegram_chat_id": ROOM})
+        wired.rows = [_row("привет", 1, minutes_ago=5)]
+        await engine._build_group_chat_block(None, ACCOUNT, "ru")
+        assert engine._get_group_seen(ACCOUNT) is None
+
+    @pytest.mark.asyncio
+    async def test_a_room_too_long_keeps_its_newest_part_and_says_what_is_missing(self, wired, monkeypatch):
+        from infrastructure import settings_store
+        from infrastructure.autonomy import reflection_engine as engine
+
+        settings_store.save_settings({"telegram_chat_id": ROOM})
+        monkeypatch.setattr(engine, "GROUP_CHAT_MAX_CHARS", 1500)
+        wired.rows = [_row(f"сообщение номер {i} " + "х" * 40, i, minutes_ago=500 - i) for i in range(1, 101)]
+
+        block, until = await engine._build_group_chat_block(None, ACCOUNT, "ru")
+
+        assert "сообщение номер 100 " in block and "сообщение номер 1 " not in block
+        assert "не поместились" in block and "[SEARCH_CHAT" in block
+        assert until == wired.rows[-1].created_at
+
+    @pytest.mark.asyncio
+    async def test_nothing_new_says_so_and_moves_nothing(self, wired):
+        from infrastructure import settings_store
+        from infrastructure.autonomy import reflection_engine as engine
+
+        settings_store.save_settings({"telegram_chat_id": ROOM})
+        wired.rows = [_row("вчерашнее", 1, minutes_ago=900)]
+        engine._set_group_seen(ACCOUNT, wired.rows[0].created_at)
+
+        block, until = await engine._build_group_chat_block(None, ACCOUNT, "ru")
+        assert "новых сообщений нет" in block and "вчерашнее" in block
+        assert until is None
 
     def test_the_awakening_prompt_has_the_slot_in_both_languages(self):
         from infrastructure.llm.prompt_loader import load_prompt
@@ -232,3 +285,44 @@ class TestWhatHeWakesUpKnowing:
         for lang in ("ru", "en"):
             body = load_prompt("infrastructure/autonomy/prompts/reflection_awakening.md", lang=lang)
             assert "{group_chat_block}" in body
+
+
+class TestAnsweringOneParticularLine:
+    def test_it_parses_into_the_same_command_with_a_target(self):
+        parsed = parse_commands("[REPLY_TO_CHAT: #412 | Чарли, передай Элайе привет]")
+        assert parsed == [SendToChat(text="Чарли, передай Элайе привет", reply_to=412)]
+        assert "REPLY_TO_CHAT" not in strip_commands("мысль [REPLY_TO_CHAT: #412 | привет]")
+
+    def test_reflection_reads_it(self):
+        assert "REPLY_TO_CHAT" in REFLECTION_COMMANDS and "REPLY_TO_CHAT" in LEAKABLE_COMMANDS
+        assert _as_command("REPLY_TO_CHAT", " #412 | привет ") == SendToChat(text="привет", reply_to=412)
+
+    @pytest.mark.parametrize("arg", ["привет без цели", "#abc | привет", "#412 |   "])
+    def test_a_malformed_one_does_nothing(self, arg):
+        assert _as_command("REPLY_TO_CHAT", arg) is None
+
+    @pytest.mark.asyncio
+    async def test_the_target_reaches_telegram(self, monkeypatch):
+        import infrastructure.autonomy.helpers as helpers
+
+        calls = []
+
+        async def _sent(**kw):
+            calls.append(kw)
+            return True
+
+        monkeypatch.setattr(helpers, "send_to_chat", _sent)
+        await commands.execute(
+            SendToChat(text="привет", reply_to=412), account_id=ACCOUNT, lang="ru",
+            log_prefix="test", source="reflection",
+        )
+        assert calls[0]["reply_to_message_id"] == 412
+
+    @pytest.mark.parametrize("name", [
+        "reflection_awakening.md", "reflection_continuation.md", "reflection_after_action.md",
+    ])
+    @pytest.mark.parametrize("lang", ["ru", "en"])
+    def test_every_step_prompt_offers_it(self, name, lang):
+        from infrastructure.llm.prompt_loader import load_prompt
+
+        assert "[REPLY_TO_CHAT:" in load_prompt(f"infrastructure/autonomy/prompts/{name}", lang=lang)

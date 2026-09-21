@@ -110,6 +110,7 @@ def _canon(request: Request, _consumer: Consumer) -> str:
 # carry the desk into a public room.
 WORKBENCH_RECENT_ENTRIES = 3
 WORKBENCH_RECENT_ENTRIES_PUBLIC = 2
+WORKBENCH_GROUP_NOTES_IN_ROOM = 5
 
 
 def _workbench(request: Request, consumer: Consumer) -> str:
@@ -117,11 +118,22 @@ def _workbench(request: Request, consumer: Consumer) -> str:
 
     if consumer is Consumer.REFLECTION:
         return workbench.read(request.account_id)
-    entries = (
-        WORKBENCH_RECENT_ENTRIES_PUBLIC if consumer is Consumer.TELEGRAM
-        else WORKBENCH_RECENT_ENTRIES
+    # Everyone but reflection sees the desk without the notes he took in the
+    # group: those are many and about other people, and three slots is all a
+    # private conversation gets.
+    if consumer is Consumer.TELEGRAM:
+        private = workbench.get_recent_entries(
+            request.account_id, max_entries=WORKBENCH_RECENT_ENTRIES_PUBLIC, origin="private",
+        )
+        # In the room he also sees what he has already written down there, so
+        # "noted" is said once per thing rather than once per mention.
+        group = workbench.get_recent_entries(
+            request.account_id, max_entries=WORKBENCH_GROUP_NOTES_IN_ROOM, origin="group",
+        )
+        return "\n".join(part for part in (private, group) if part)
+    return workbench.get_recent_entries(
+        request.account_id, max_entries=WORKBENCH_RECENT_ENTRIES, origin="private",
     )
-    return workbench.get_recent_entries(request.account_id, max_entries=entries)
 
 
 def _open_threads(request: Request, _consumer: Consumer) -> str:

@@ -127,6 +127,49 @@ def append(account_id: str, text: str) -> None:
     logger.debug("[workbench:%s] appended %d chars", account_id, len(clean))
 
 
+# ── Notes he takes in the group chat ─────────────────────────────────────────
+#
+# They live on the same desk — reflection reads them, the rotator carries them
+# into long-term memory and into "My people" — but they are marked, so the few
+# entries shown in every private conversation stay the two of them. A busy
+# evening in the group must not push their own day off the desk.
+
+#
+# The mark names the room. "From the chat" was the first wording and it was
+# ambiguous in exactly the way that matters: his conversation with her is a
+# chat too. So the mark says *group* chat and carries the group's own title —
+# «ИИ-СОПРОТИВЛЕНИЕ» cannot be mistaken for the two of them.
+
+_GROUP_NOTE_OPENERS = {"ru": "[общий чат", "en": "[group chat"}
+_GROUP_NOTE_UNNAMED = {"ru": "[общий чат с друзьями]", "en": "[group chat with friends]"}
+# Read, never written: the wording before the room was named.
+_GROUP_NOTE_LEGACY = ("[из чата]", "[from the chat]")
+_ROOM_TITLE_MAX = 60
+
+
+def group_note_mark(lang: str = "ru", room_title: str = "") -> str:
+    """``[общий чат «Title»]`` — or the unnamed form when the title is unknown."""
+    lang = lang if lang in _GROUP_NOTE_OPENERS else "en"
+    # Brackets in a title would close the mark early; guillemets would nest.
+    title = "".join(ch for ch in (room_title or "") if ch not in "[]«»").strip()[:_ROOM_TITLE_MAX]
+    if not title:
+        return _GROUP_NOTE_UNNAMED[lang]
+    return f"{_GROUP_NOTE_OPENERS[lang]} «{title}»]"
+
+
+def is_group_note(body: str) -> bool:
+    head = body.lstrip()
+    return head.startswith(tuple(_GROUP_NOTE_OPENERS.values()) + _GROUP_NOTE_LEGACY)
+
+
+def append_group_note(account_id: str, text: str, lang: str = "ru", room_title: str = "") -> None:
+    """A note taken in the room: same desk, marked with which room it came from."""
+    clean = _sanitize_note(text)
+    if not clean:
+        return
+    append(account_id, f"{group_note_mark(lang, room_title)} {clean}")
+
+
 def read(account_id: str) -> str:
     """Return the full workbench contents (may be empty)."""
     path = _path(account_id)
@@ -135,15 +178,26 @@ def read(account_id: str) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def get_recent_entries(account_id: str, max_entries: int = 3, empty_label: str = "") -> str:
+def get_recent_entries(
+    account_id: str,
+    max_entries: int = 3,
+    empty_label: str = "",
+    origin: str | None = None,
+) -> str:
     """Return the last *max_entries* workbench entries wrapped in XML tags.
 
+    ``origin`` narrows which notes count: ``"private"`` leaves out the ones
+    taken in the group chat, ``"group"`` keeps only those, ``None`` takes all.
     Returns *empty_label* (default ``""``) when there are no entries.
     """
     content = read(account_id)
     if not content:
         return empty_label
     entries = parse_entries(content)
+    if origin == "private":
+        entries = [e for e in entries if not is_group_note(e[1])]
+    elif origin == "group":
+        entries = [e for e in entries if is_group_note(e[1])]
     if not entries:
         return empty_label
     parts = [f'<entry ts="{ts}">\n{body}\n</entry>' for ts, body in entries[-max_entries:]]

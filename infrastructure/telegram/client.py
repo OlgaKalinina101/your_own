@@ -21,6 +21,8 @@ _API = "https://api.telegram.org"
 
 # Telegram caps a message at 4096 characters; over that the API refuses it.
 MESSAGE_MAX_CHARS = 4096
+# ...and a photo caption at 1024.
+CAPTION_MAX_CHARS = 1024
 
 
 class TelegramError(RuntimeError):
@@ -99,6 +101,39 @@ class TelegramClient:
             {"chat_id": chat_id, "text": text, "reply_to_message_id": reply_to_message_id},
             http_timeout=20,
         )
+
+
+    async def send_photo(
+        self,
+        chat_id: str | int,
+        path,
+        *,
+        caption: str = "",
+        reply_to_message_id: int | None = None,
+    ) -> dict:
+        """Upload one picture from disk. Multipart, unlike every other call here."""
+        form = aiohttp.FormData()
+        form.add_field("chat_id", str(chat_id))
+        if caption:
+            form.add_field("caption", caption[:CAPTION_MAX_CHARS])
+        if reply_to_message_id:
+            form.add_field("reply_to_message_id", str(reply_to_message_id))
+        with open(path, "rb") as handle:
+            form.add_field("photo", handle.read(), filename="image.png", content_type="image/png")
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    self._url("sendPhoto"), data=form,
+                    timeout=aiohttp.ClientTimeout(total=60),
+                ) as resp:
+                    body = await resp.json(content_type=None)
+        except aiohttp.ClientError as exc:
+            raise TelegramError(0, f"network: {exc}") from exc
+        if not isinstance(body, dict) or not body.get("ok"):
+            if isinstance(body, dict):
+                raise TelegramError(int(body.get("error_code", 0)), str(body.get("description", "")))
+            raise TelegramError(0, str(body))
+        return body.get("result")
 
 
 def get_client() -> TelegramClient | None:

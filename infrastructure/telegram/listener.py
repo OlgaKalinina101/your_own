@@ -74,6 +74,18 @@ def write_state(account_id: str, state: dict) -> None:
         atomic_write_text(_state_path(account_id), json.dumps(state, indent=2, ensure_ascii=False))
 
 
+def room_title(account_id: str) -> str:
+    """What the chosen group is called, or ``""`` when that is not known yet."""
+    from infrastructure.settings_store import load_settings
+
+    chat_id = str(load_settings().get("telegram_chat_id") or "").strip()
+    if not chat_id:
+        return ""
+    chat = (read_state(account_id).get("chats") or {}).get(chat_id) or {}
+    title = str(chat.get("title") or "")
+    return "" if title == chat_id else title
+
+
 def _remember_chat(state: dict, chat: dict, seen_at: datetime) -> None:
     """Add or refresh one room in ``state["chats"]``."""
     chat_id = str(chat.get("id", ""))

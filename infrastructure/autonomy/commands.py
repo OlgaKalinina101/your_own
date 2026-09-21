@@ -61,6 +61,7 @@ _WRITES = ("WRITE_NOTE", "WRITE_IDENTITY")
 _MESSAGES = (
     "SEND_MESSAGE",
     "SEND_TO_CHAT",
+    "REPLY_TO_CHAT",
     "SCHEDULE_MESSAGE",
     "CANCEL_MESSAGE",
     "RESCHEDULE_MESSAGE",
@@ -201,7 +202,10 @@ async def execute(
         return None
 
     if isinstance(cmd, SendToChat):
-        sent = await send_to_chat(account_id=account_id, text=cmd.text, log_prefix=log_prefix)
+        sent = await send_to_chat(
+            account_id=account_id, text=cmd.text, reply_to_message_id=cmd.reply_to,
+            log_prefix=log_prefix,
+        )
         return None if sent else _say(lang, "no_chat")
 
     if isinstance(cmd, ScheduleMessage):
