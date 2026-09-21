@@ -279,6 +279,65 @@ class TestOpeningALink:
         assert len(llm.calls) == responder.MAX_ROUNDS
 
 
+class _Heard:
+    """What the responder's logger wrote, caught at the logger itself.
+
+    Not caplog: the project's loggers carry their own handler and do not
+    propagate to the root, which is where caplog listens.
+    """
+
+    def __enter__(self):
+        import logging
+
+        self.lines: list[str] = []
+        outer = self
+
+        class _Catch(logging.Handler):
+            def emit(self, record):
+                outer.lines.append(record.getMessage())
+
+        self._handler = _Catch(level=logging.INFO)
+        self._logger = logging.getLogger("telegram.responder")
+        self._logger.addHandler(self._handler)
+        return self
+
+    def __exit__(self, *_exc):
+        self._logger.removeHandler(self._handler)
+
+    @property
+    def text(self) -> str:
+        return " ".join(self.lines)
+
+
+class TestNothingIsNotSilence:
+    """The client returns "" when the provider fails. That is not him choosing."""
+
+    @pytest.mark.asyncio
+    async def test_an_empty_reply_is_logged_as_a_failure_not_as_a_choice(self, room):
+        wire, with_llm = room
+        with_llm("")
+        new = [_row("Виктор, ты тут?", message_id=70)]
+        _Repo.recent = new
+
+        with _Heard() as heard:
+            assert await responder.consider(ACCOUNT, new) is None
+
+        assert "a failure, not a choice" in heard.text
+        assert "chose silence" not in heard.text
+        assert wire.sent == []
+
+    @pytest.mark.asyncio
+    async def test_the_word_silent_is_still_a_choice(self, room):
+        wire, with_llm = room
+        with_llm("SILENT")
+        new = [_row("Виктор, ты тут?", message_id=71)]
+        _Repo.recent = new
+
+        with _Heard() as heard:
+            await responder.consider(ACCOUNT, new)
+        assert "chose silence" in heard.text and "a failure" not in heard.text
+
+
 class TestSearchingTheWeb:
     """The private chat's skill, in the room: same description, same agent, same wording back."""
 
@@ -303,6 +362,18 @@ class TestSearchingTheWeb:
 
         monkeypatch.setattr(agents, "research", _research)
         return asked, answers
+
+    @pytest.mark.parametrize("lang,needle", [
+        ("ru", "Иногда вопрос требует не точности, а отклика."),
+        ("en", "Sometimes a question asks not for accuracy but for a response."),
+    ])
+    def test_the_room_says_what_a_search_costs_without_forbidding_it(self, lang, needle):
+        """A pointer, not a rule: on the first day with search he went to the web
+        on five replies of eight, in a conversation among friends."""
+        from infrastructure.llm.prompt_loader import load_prompt
+
+        body = load_prompt("infrastructure/telegram/prompts/group_reply.md", lang=lang, section="user")
+        assert needle in body
 
     @pytest.mark.asyncio
     async def test_he_is_shown_the_skills_own_description(self, room):

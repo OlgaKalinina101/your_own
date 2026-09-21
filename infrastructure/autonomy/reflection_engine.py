@@ -25,6 +25,7 @@ Commands:
   [SEND_MESSAGE: text]
   [SEND_TO_CHAT: text]           — a line into the group chat
   [REPLY_TO_CHAT: #id | text]    — the same, under a particular message
+  [ANSWER_TO: name]              — a nickname he is called in the group chat
   [SCHEDULE_MESSAGE: YYYY-MM-DD HH:MM | text]
   [EXTEND: N]   (1-5, up to 3 times)
   [SLEEP]
@@ -422,6 +423,13 @@ async def _handle_command(
     elif cmd == "WRITE_NOTE":
         wb.append(account_id, arg.strip())
         return None
+
+    elif cmd == "ANSWER_TO":
+        # Not a silent write: he is told what came of it, because "the list is
+        # full" or "you already answer to that" is something he would act on.
+        from infrastructure.telegram import addressing
+
+        return addressing.add_alias(arg, lang)
 
     elif cmd == "WRITE_IDENTITY":
         if "|" in arg:

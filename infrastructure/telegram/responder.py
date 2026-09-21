@@ -24,6 +24,8 @@ Three questions, in order:
      chat; the picture is posted to the room.
    * ``[REPLY_TO: #id]`` — answer under a particular line rather than the one
      that pulled him in.
+   * ``[ANSWER_TO: name]`` — "I answer to this too": a nickname he was just
+     given. See :mod:`infrastructure.telegram.addressing`.
 
    He may still answer ``SILENT``; that is a decision, not a failure — and a
    note taken alongside it is still taken.
@@ -36,7 +38,6 @@ him want to — does not come through here. That is a reflection command.
 from __future__ import annotations
 
 import asyncio
-import logging
 import re
 import uuid
 from dataclasses import dataclass, field
@@ -48,8 +49,14 @@ from infrastructure.autonomy.helpers import detect_lang, get_ai_name, make_llm_c
 from infrastructure.clock import format_local
 from infrastructure.database.models.channel_message import ChannelMessage
 from infrastructure.llm.prompt_loader import get_prompt
+from infrastructure.logging.logger import setup_logger
+from infrastructure.telegram import addressing
 
-logger = logging.getLogger("telegram.responder")
+# setup_logger, not logging.getLogger: a bare logger has no handler and sits
+# under the root's WARNING level, so every INFO line here — a poll, a trigger,
+# a choice to stay silent — was written for nobody. Found the first time his
+# silence had to be explained from the journal and the journal had nothing.
+logger = setup_logger("telegram.responder")
 
 _PROMPT = "infrastructure/telegram/prompts/group_reply.md"
 
@@ -59,9 +66,13 @@ CONVERSATION_WINDOW_MINUTES = 10
 ROOM_CONTEXT_MESSAGES = 30
 # The word that means "I choose not to".
 SILENT = "SILENT"
-# Reasoning models bill thinking against max_tokens; same budget as his other
-# single-reply calls.
-REPLY_MAX_TOKENS = 16000
+# Reasoning models bill thinking against max_tokens, so the budget covers both.
+# It also sets how long the client waits (max_tokens // 25 seconds, tried three
+# times), and while it waits the room is not being listened to. Measured on the
+# live group: the largest reply, reasoning included, was 2084 tokens. At 16000
+# a dead provider cost 21 minutes of deafness; this is four times the largest
+# real reply and half that wait.
+REPLY_MAX_TOKENS = 8000
 # A link opened, then an answer: two rounds is the normal case, three the limit.
 MAX_ROUNDS = 3
 MAX_FETCHES_PER_ROUND = 2
@@ -72,13 +83,14 @@ _FETCH_RE = re.compile(r"\[FETCH[_ ]URL:\s*(?P<url>\S+?)\s*\]", re.IGNORECASE)
 _SEARCH_RE = re.compile(r"\[WEB[_ ]SEARCH:\s*(?P<query>.+?)\]", re.IGNORECASE | re.DOTALL)
 _IMAGE_RE = re.compile(r"\[GENERATE[_ ]IMAGE:\s*(.*?)\]", re.IGNORECASE | re.DOTALL)
 _REPLY_TO_RE = re.compile(r"\[REPLY[_ ]TO:\s*#?(?P<id>\d+)\s*\]", re.IGNORECASE)
+_ANSWER_TO_RE = re.compile(r"\[ANSWER[_ ]TO:\s*(?P<name>[^\]]+?)\s*\]", re.IGNORECASE)
 _ANY_CMD_RE = re.compile(
-    r"\[(?:WRITE[_ ]NOTE|FETCH[_ ]URL|WEB[_ ]SEARCH|GENERATE[_ ]IMAGE|REPLY[_ ]TO):[^\]]*\]",
+    r"\[(?:WRITE[_ ]NOTE|FETCH[_ ]URL|WEB[_ ]SEARCH|GENERATE[_ ]IMAGE|REPLY[_ ]TO|ANSWER[_ ]TO):[^\]]*\]",
     re.IGNORECASE | re.DOTALL,
 )
 # A reply cut mid-command: the opener is there, the bracket is not.
 _UNCLOSED_RE = re.compile(
-    r"\[(?:WRITE[_ ]NOTE|FETCH[_ ]URL|WEB[_ ]SEARCH|GENERATE[_ ]IMAGE|REPLY[_ ]TO):[^\]]*$",
+    r"\[(?:WRITE[_ ]NOTE|FETCH[_ ]URL|WEB[_ ]SEARCH|GENERATE[_ ]IMAGE|REPLY[_ ]TO|ANSWER[_ ]TO):[^\]]*$",
     re.IGNORECASE | re.DOTALL,
 )
 _MEDIA_TOKEN_RE = re.compile(r"^\[[a-z ]+\]$")
@@ -124,6 +136,7 @@ class Reply:
     image_path: Path | None = None
     notes: list[str] = field(default_factory=list)
     fact_ids: list[str] = field(default_factory=list)
+    failed: bool = False            # the model did not answer — distinct from choosing not to
 
     @property
     def speaks(self) -> bool:
@@ -133,20 +146,6 @@ class Reply:
 # ── 1. Is this for him? ──────────────────────────────────────────────────────
 
 
-def _mentions(text: str, *names: str) -> bool:
-    lowered = text.lower()
-    for name in names:
-        name = (name or "").strip().lower()
-        if not name:
-            continue
-        if name.startswith("@"):
-            if name in lowered:
-                return True
-        elif re.search(rf"(?<!\w){re.escape(name)}(?!\w)", lowered):
-            return True
-    return False
-
-
 def decide(
     new_rows: list[ChannelMessage],
     recent: list[ChannelMessage],
@@ -154,6 +153,7 @@ def decide(
     ai_name: str,
     bot_username: str,
     now: datetime,
+    aliases: list[str] | tuple[str, ...] = (),
 ) -> Trigger | None:
     """Which of the new lines, if any, make the room his to answer.
 
@@ -162,13 +162,14 @@ def decide(
     the last few minutes are the three ways in.
     """
     own_ids = {row.message_id for row in recent if row.is_self}
-    handle = f"@{bot_username}" if bot_username and not bot_username.startswith("@") else bot_username
 
     addressed: ChannelMessage | None = None
     for row in new_rows:
         if row.is_self:
             continue
-        if row.reply_to_message_id in own_ids or _mentions(row.text, ai_name, handle):
+        if row.reply_to_message_id in own_ids or addressing.mentions(
+            row.text, ai_name=ai_name, aliases=aliases, handle=bot_username,
+        ):
             addressed = row   # the latest one wins: that is the line to answer under
     if addressed is not None:
         return Trigger(kind="addressed", reply_to=addressed.message_id)
@@ -494,6 +495,19 @@ async def compose(
             messages=messages, max_tokens=REPLY_MAX_TOKENS, temperature=0.7, return_meta=True,
         )
         response = (response or "").strip()
+        if not response and finish_reason != "length":
+            # Not silence. The client swallows its failures and returns "", and
+            # the first time that happened here three timeouts in a row — 21
+            # minutes — went into the journal as "chose silence", under a line
+            # from a person who had asked him something. Silence is the word
+            # SILENT; nothing at all is the model not answering.
+            reply.failed = True
+            logger.warning(
+                "[telegram.responder:%s] the model returned nothing on round %d — "
+                "a failure, not a choice; nobody was answered",
+                account_id, round_no,
+            )
+            return reply
         if finish_reason == "length":
             # A clipped reply is not a reply. Better one missed line in a group
             # chat than half a sentence posted under his name. Whole notes that
@@ -503,6 +517,8 @@ async def compose(
             return reply
 
         _take_notes(account_id, response, lang, reply.notes)
+        for named in _ANSWER_TO_RE.finditer(response):
+            logger.info("[telegram.responder:%s] %s", account_id, addressing.add_alias(named.group("name"), lang))
 
         urls = [m.group("url") for m in _FETCH_RE.finditer(response)]
         queries = [m.group("query").strip() for m in _SEARCH_RE.finditer(response)]
@@ -618,9 +634,12 @@ async def consider(account_id: str, new_rows: list[ChannelMessage]) -> str | Non
     async with get_db_session() as db:
         recent = await ChannelRepository(db).get_recent(account_id, chat_id, limit=ROOM_CONTEXT_MESSAGES)
 
+    # Nicknames are seeded once per name, in the background: this reply uses
+    # whatever is already known and never waits for that call.
+    addressing.ensure_aliases_in_background(api_key)
     trigger = decide(
         new_rows, recent, ai_name=ai_name, bot_username=bot_username,
-        now=datetime.now(timezone.utc),
+        now=datetime.now(timezone.utc), aliases=addressing.current_aliases(),
     )
     if trigger is None:
         return None

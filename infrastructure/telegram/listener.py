@@ -22,17 +22,21 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
 
 from infrastructure.database.models.channel_message import ChannelMessage
+from infrastructure.logging.logger import setup_logger
 from infrastructure.paths import AUTONOMY_DIR
 from infrastructure.state_file import atomic_write_text, read_json
 
-logger = logging.getLogger("telegram.listener")
+# setup_logger, not logging.getLogger: a bare logger has no handler and sits
+# under the root's WARNING level, so every INFO line here — a poll, a trigger,
+# a choice to stay silent — was written for nobody. Found the first time his
+# silence had to be explained from the journal and the journal had nothing.
+logger = setup_logger("telegram.listener")
 
 _DATA_DIR = AUTONOMY_DIR
 _lock = Lock()

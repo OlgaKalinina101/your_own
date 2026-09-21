@@ -56,7 +56,7 @@ _SEARCH = (
 # They have to be parseable, or the command is simply not seen.
 _ALIASES = ("SEARCH_MEMORIES", "RECALL", "HISTORY", "WRITE")
 
-_WRITES = ("WRITE_NOTE", "WRITE_IDENTITY")
+_WRITES = ("WRITE_NOTE", "WRITE_IDENTITY", "ANSWER_TO")
 
 _MESSAGES = (
     "SEND_MESSAGE",

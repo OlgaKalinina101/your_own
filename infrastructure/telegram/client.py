@@ -10,12 +10,17 @@ settings page is in force on the next poll without a restart.
 """
 from __future__ import annotations
 
-import logging
 from typing import Any
 
 import aiohttp
 
-logger = logging.getLogger("telegram")
+from infrastructure.logging.logger import setup_logger
+
+# setup_logger, not logging.getLogger: a bare logger has no handler and sits
+# under the root's WARNING level, so every INFO line here — a poll, a trigger,
+# a choice to stay silent — was written for nobody. Found the first time his
+# silence had to be explained from the journal and the journal had nothing.
+logger = setup_logger("telegram")
 
 _API = "https://api.telegram.org"
 

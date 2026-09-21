@@ -87,6 +87,8 @@ export interface Settings {
   telegram_bot_token?: string;
   telegram_chat_id?: string;
   telegram_owner_user_id?: string;
+  /** Nicknames he answers to in the group besides `ai_name`. Cases are derived server-side. */
+  telegram_aliases?: string[];
 }
 
 /** `GET /api/settings/telegram/status` — what the picker on the settings page needs. */
@@ -95,6 +97,9 @@ export interface TelegramStatus {
   bot: { id: number; username: string; name: string } | null;
   chat_id: string;
   owner_user_id: string;
+  /** The editable list, and every spelling it expands to (name and nicknames, all cases). */
+  aliases?: string[];
+  answers_to?: string[];
   chats: { chat_id: string; title: string; type: string; last_seen?: string; messages: number }[];
   members: { sender_id: string; sender_name: string; messages: number; last_seen?: string }[];
 }

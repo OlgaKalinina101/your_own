@@ -108,6 +108,10 @@ export default function SettingsPage() {
   const [tgBotMasked, setTgBotMasked]       = useState(true);
   const [tgChatId, setTgChatId]             = useState("");
   const [tgOwnerId, setTgOwnerId]           = useState("");
+  const [tgAliases, setTgAliases]           = useState("");
+  // He adds nicknames himself while this page sits open. The list is sent only
+  // if it was edited here, so a Save for something else cannot undo his entry.
+  const [tgAliasesDirty, setTgAliasesDirty] = useState(false);
   const [tgStatus, setTgStatus]             = useState<TelegramStatus | null>(null);
   const [tgVerify, setTgVerify]             = useState<string>("");
 
@@ -181,6 +185,7 @@ export default function SettingsPage() {
       if (data.telegram_bot_token) setTgBotToken(data.telegram_bot_token);
       if (data.telegram_chat_id != null) setTgChatId(String(data.telegram_chat_id));
       if (data.telegram_owner_user_id != null) setTgOwnerId(String(data.telegram_owner_user_id));
+      if (Array.isArray(data.telegram_aliases)) setTgAliases(data.telegram_aliases.join(", "));
       loadTelegramStatus();
       if (data.reflection_cooldown_hours != null) setReflectionCooldown(data.reflection_cooldown_hours);
       if (data.reflection_interval_hours != null) setReflectionInterval(data.reflection_interval_hours);
@@ -256,12 +261,17 @@ export default function SettingsPage() {
         // Sent even when empty: clearing the group is a real choice.
         telegram_chat_id: tgChatId.trim(),
         telegram_owner_user_id: tgOwnerId.trim(),
+        // When edited, sent even if empty: an emptied list must stay empty.
+        ...(tgAliasesDirty
+          ? { telegram_aliases: tgAliases.split(/[,;\n]+/).map((a) => a.trim()).filter(Boolean) }
+          : {}),
         reflection_cooldown_hours: reflectionCooldown,
         reflection_interval_hours: reflectionInterval,
         body_image_model: bodyImageModel,
       });
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
+      setTgAliasesDirty(false);
       loadTelegramStatus();
     } catch (err) {
       console.error("Failed to save settings:", err);
@@ -737,6 +747,24 @@ export default function SettingsPage() {
                 />
               )}
             </div>
+          </div>
+          <div className="flex flex-col gap-2">
+            <label className="text-[0.6rem] tracking-[0.18em] uppercase text-white/35">
+              Also answers to
+            </label>
+            <input
+              type="text"
+              value={tgAliases}
+              onChange={(e) => { setTgAliases(e.target.value); setTgAliasesDirty(true); }}
+              placeholder="Nicknames, comma-separated — seeded once per name, then he adds his own"
+              spellCheck={false}
+              className="border-b border-white/20 bg-transparent py-2 text-[0.9rem] font-light tracking-wide text-white placeholder:text-white/25 outline-none transition-colors focus:border-white/50"
+            />
+            {tgStatus?.answers_to && tgStatus.answers_to.length > 0 && (
+              <p className="text-[0.62rem] tracking-wide text-white/40">
+                Hears: {tgStatus.answers_to.join(" · ")}
+              </p>
+            )}
           </div>
           <p className="text-[0.62rem] tracking-wide text-white/35 -mt-2">
             The group is the one room he reads and remembers. &ldquo;Me&rdquo; is how he tells you apart

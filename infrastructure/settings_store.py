@@ -62,6 +62,12 @@ _DEFAULTS: dict[str, object] = {
     "telegram_bot_token": "",
     "telegram_chat_id": "",
     "telegram_owner_user_id": "",   # her account in the group — how he tells her apart
+    # What he answers to in the group besides ai_name. Grows three ways: a
+    # model seeds it once per name, he adds what he is actually called, she
+    # edits it. ``telegram_aliases_for`` is the name the seeding was done for —
+    # it is what keeps a list she emptied on purpose from being refilled.
+    "telegram_aliases": [],
+    "telegram_aliases_for": "",
 }
 
 _lock = Lock()

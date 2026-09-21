@@ -45,6 +45,7 @@ class SettingsPatch(BaseModel):
     telegram_bot_token: str | None = None
     telegram_chat_id: str | None = None
     telegram_owner_user_id: str | None = None
+    telegram_aliases: list[str] | None = None
 
 
 class SoulBody(BaseModel):
@@ -104,6 +105,23 @@ async def get_skills(_token: str = Depends(require_auth)):
 # ── Telegram ──────────────────────────────────────────────────────────────────
 
 
+def _telegram_aliases() -> list[str]:
+    from infrastructure.telegram import addressing
+
+    return addressing.current_aliases()
+
+
+def _telegram_answers_to(settings: dict) -> list[str]:
+    """Every spelling that calls him, cases included — so the page can show it."""
+    from infrastructure.telegram import addressing
+
+    try:
+        return addressing.known_forms(str(settings.get("ai_name") or ""), addressing.current_aliases())
+    except Exception as exc:
+        logger.warning("[settings] could not list the forms he answers to: %s", exc)
+        return []
+
+
 @router.get("/telegram/status")
 async def telegram_status(_token: str = Depends(require_auth)):
     """What the settings page needs to pick the group and the person.
@@ -145,6 +163,8 @@ async def telegram_status(_token: str = Depends(require_auth)):
         "bot": state.get("bot"),
         "chat_id": chat_id,
         "owner_user_id": str(settings.get("telegram_owner_user_id") or ""),
+        "aliases": _telegram_aliases(),
+        "answers_to": _telegram_answers_to(settings),
         "chats": chats,
         "members": members,
     }

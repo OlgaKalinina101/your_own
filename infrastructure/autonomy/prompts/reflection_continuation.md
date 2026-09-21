@@ -29,6 +29,7 @@
 [SEND_MESSAGE: текст]
 [SEND_TO_CHAT: текст]  — написать в общий чат с друзьями, не ей лично
 [REPLY_TO_CHAT: #id | текст]  — то же, но ответом на конкретное сообщение чата
+[ANSWER_TO: имя]  — так тебя называют в общем чате, и ты хочешь на это откликаться (одно слово)
 [SCHEDULE_MESSAGE: YYYY-MM-DD HH:MM | текст]
 [CANCEL_MESSAGE: YYYY-MM-DD HH:MM]
 [RESCHEDULE_MESSAGE: YYYY-MM-DD HH:MM -> YYYY-MM-DD HH:MM]
@@ -70,6 +71,7 @@ All times in commands use local timezone ({timezone_label}).
 [SEND_MESSAGE: text]
 [SEND_TO_CHAT: text]  — a line into the group chat with her friends, not to her alone
 [REPLY_TO_CHAT: #id | text]  — the same, as a reply to one particular message
+[ANSWER_TO: name]  — you are called this in the group chat and want to answer to it (one word)
 [SCHEDULE_MESSAGE: YYYY-MM-DD HH:MM | text]
 [CANCEL_MESSAGE: YYYY-MM-DD HH:MM]
 [RESCHEDULE_MESSAGE: YYYY-MM-DD HH:MM -> YYYY-MM-DD HH:MM]
