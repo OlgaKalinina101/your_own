@@ -609,6 +609,37 @@ def _image_skill_description(lang: str) -> str:
     return image_skill.prompt_fragment(lang).strip()
 
 
+_LIVE_MARK = "<!--live-->"
+
+
+def _cacheable(user_prompt: str) -> str | list[dict]:
+    """The prompt as two parts: what is identical on every call, then the rest.
+
+    The template puts identity, instructions and commands above a marker and
+    everything that changes per reply below it. The upper part is sent as one
+    text block with a ``cache_control`` breakpoint: providers that cache on
+    request (Anthropic, Gemini) cache exactly that block; providers that cache
+    automatically (Moonshot, OpenAI) cache the identical prefix anyway and
+    ignore the marker. Either way the ~10k tokens of who he is are paid for
+    once per few minutes, not once per reply.
+    """
+    if _LIVE_MARK not in user_prompt:
+        return user_prompt
+    stable, live = user_prompt.split(_LIVE_MARK, 1)
+    return [
+        {"type": "text", "text": stable.rstrip() + "\n", "cache_control": {"type": "ephemeral"}},
+        {"type": "text", "text": live.lstrip("\n")},
+    ]
+
+
+def prompt_text(message: dict) -> str:
+    """The text of a message whether its content is a string or parts."""
+    content = message.get("content", "")
+    if isinstance(content, str):
+        return content
+    return "".join(part.get("text", "") for part in content if isinstance(part, dict))
+
+
 def _clean(response: str) -> str:
     """The reply with every command cut out, whole — what the room may see."""
     kept: list[str] = []
@@ -683,7 +714,7 @@ async def compose(
     )
 
     reply = Reply(reply_to=trigger.reply_to, fact_ids=fact_ids)
-    messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
+    messages = [{"role": "system", "content": system}, {"role": "user", "content": _cacheable(user)}]
     client = make_llm_client(api_key)
     response = ""
 

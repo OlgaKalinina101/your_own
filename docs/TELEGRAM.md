@@ -223,6 +223,23 @@ Where the group could leak into his long-term self, and what stops it:
 
 ---
 
+## What a day in the room costs, and the cache
+
+Measured 2026-09-21, the first full day with skills in the room: 160 replies, ~17k prompt tokens each, 2.7M prompt tokens and 235k completion tokens on Kimi — $7.39 of a $10.55 day.
+
+Most of every prompt is the same every time: the identity (~7k tokens), the instructions and the command descriptions. The template `group_reply.md` therefore puts everything that never changes **first**, above a `<!--live-->` marker, and the responder sends that part as one text block with a `cache_control` breakpoint; the people cards, the desk, the memories, the room and the clock come after it. Providers that cache on request (Anthropic, Gemini) cache exactly that block; providers that cache automatically (Moonshot/Kimi, OpenAI) cache the identical prefix anyway.
+
+Probed live on the server, the same prompt twice on Kimi:
+
+| | prompt tokens | served from cache | cost |
+|---|---|---|---|
+| first call | 18 242 | 7 680 | $0.0290 |
+| second call | 18 242 | 18 176 | $0.0049 |
+
+Cached input on Kimi is a tenth of the price. In real use the live part differs between calls, so what stays cached is the stable prefix — about 10.5k of the 17k tokens — which is roughly a 40–50 % cut on prompt cost. The call log now records `cached_tokens` per call, so this can be checked rather than believed.
+
+What the cache does not touch: the number of calls (most of the 160 were the ten-minute conversation window, answered `SILENT`), the 30-message window and the cards in the live part, and the completion tokens of a reasoning model. Those are the next levers if the bill is still too high.
+
 ## Reading the journal
 
 The group's modules log through the project's `setup_logger`, so `journalctl -u your_own-backend | grep telegram` tells the whole story of a reply:

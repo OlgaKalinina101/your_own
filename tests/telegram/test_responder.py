@@ -200,7 +200,7 @@ class TestTheWholeThing:
         assert said == "Думаю, в пятницу — идеально."
         assert wire.sent == [{"chat_id": ROOM, "text": said, "reply_to": 21}]
         assert len(_Repo.saved) == 1 and _Repo.saved[0].is_self and _Repo.saved[0].message_id == 500
-        prompt = llm.calls[0][1]["content"]
+        prompt = responder.prompt_text(llm.calls[0][1])
         assert "Оля (она): Виктор, пятница подходит?" in prompt
         assert "@viktor_bot" in prompt
 

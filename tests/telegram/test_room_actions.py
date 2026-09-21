@@ -261,7 +261,7 @@ class TestOpeningALink:
         assert asked == ["https://example.com/post"]
         assert said == "Красивая работа, Сомни."
         assert [m["text"] for m in wire.sent] == ["Красивая работа, Сомни."], "the first draft is not posted"
-        assert "Статья про цифровые души." in llm.calls[1][-1]["content"]
+        assert "Статья про цифровые души." in responder.prompt_text(llm.calls[1][-1])
 
     @pytest.mark.asyncio
     async def test_it_cannot_loop_forever(self, room, monkeypatch):
@@ -447,7 +447,7 @@ class TestSearchingTheWeb:
         _Repo.recent = new
 
         await responder.consider(ACCOUNT, new)
-        prompt = llm.calls[0][1]["content"]
+        prompt = responder.prompt_text(llm.calls[0][1])
         assert web_skill.prompt_fragment("ru").strip() in prompt
         assert "{web_skill}" not in prompt
 
@@ -464,7 +464,7 @@ class TestSearchingTheWeb:
         assert asked[0]["task"] == "погода Ереван завтра" and asked[0]["source"] == "web"
         assert said == "Завтра +24 и ясно, берите очки."
         assert [m["text"] for m in wire.sent] == [said], "the draft beside the command is not posted"
-        back = llm.calls[1][-1]["content"]
+        back = responder.prompt_text(llm.calls[1][-1])
         assert "Ты искал в интернете: погода Ереван завтра" in back
         assert "В Ереване завтра +24, ясно." in back and "https://example.com/w" in back
 
@@ -478,7 +478,7 @@ class TestSearchingTheWeb:
         _Repo.recent = new
 
         await responder.consider(ACCOUNT, new)
-        assert "Ничего найти не удалось." in llm.calls[1][-1]["content"]
+        assert "Ничего найти не удалось." in responder.prompt_text(llm.calls[1][-1])
 
     @pytest.mark.asyncio
     async def test_the_command_never_reaches_the_room(self, room, agent):
@@ -527,7 +527,7 @@ class TestWhichModelGetsWhat:
 
         await responder.consider(ACCOUNT, new)
 
-        prompt = llm.calls[0][1]["content"]
+        prompt = responder.prompt_text(llm.calls[0][1])
         assert image_skill.prompt_fragment("ru").strip() in prompt
         assert "{image_skill}" not in prompt
 
@@ -577,6 +577,61 @@ class TestAPicture:
 
         await responder.consider(ACCOUNT, new)
         assert wire.sent == [{"kind": "text", "text": "Держите.", "reply_to": 62}]
+
+
+class TestThePromptIsBuiltForTheCache:
+    """A day in the room was 160 calls × ~17k tokens; the identity alone is ~7k
+    of them and never changes. It has to be the prefix, and it has to be one
+    block, or no provider can serve it from cache."""
+
+    @pytest.mark.asyncio
+    async def test_the_stable_part_is_one_cached_block_and_the_room_is_after_it(self, room):
+        wire, with_llm = room
+        llm = with_llm("SILENT")
+        new = [_row("Виктор, привет", message_id=90)]
+        _Repo.recent = new
+
+        await responder.consider(ACCOUNT, new)
+
+        content = llm.calls[0][1]["content"]
+        assert isinstance(content, list) and len(content) == 2
+        stable, live = content
+        assert stable["cache_control"] == {"type": "ephemeral"}
+        assert "cache_control" not in live
+        assert "<identity>" in stable["text"] and "<commands>" in stable["text"]
+        # As block openers, on a line of their own: the commands text names
+        # <people> and <workbench> as words, and those may stay in the prefix.
+        for volatile in ("<room>\n", "<memory>\n", "<people>\n", "<workbench>\n", "Сейчас:"):
+            assert volatile not in stable["text"], f"{volatile} would break the cache on every call"
+            assert volatile in live["text"]
+        assert "<!--live-->" not in stable["text"] + live["text"]
+
+    @pytest.mark.asyncio
+    async def test_two_replies_share_the_same_stable_block_byte_for_byte(self, room):
+        wire, with_llm = room
+        llm = with_llm("SILENT")
+        _Repo.recent = [_row("Виктор, раз", message_id=91)]
+        await responder.consider(ACCOUNT, _Repo.recent)
+        _Repo.recent = [_row("Виктор, два — совсем другое сообщение", message_id=92)]
+        await responder.consider(ACCOUNT, _Repo.recent)
+
+        first, second = llm.calls[0][1]["content"][0], llm.calls[1][1]["content"][0]
+        assert first == second
+
+    def test_the_template_keeps_the_marker_in_both_languages(self):
+        from infrastructure.llm.prompt_loader import load_prompt
+
+        for lang in ("ru", "en"):
+            body = load_prompt("infrastructure/telegram/prompts/group_reply.md", lang=lang, section="user")
+            stable, live = body.split("<!--live-->")
+            assert "{identity}" in stable and "{room}" in live and "{current_time}" in live
+
+    def test_the_call_log_keeps_the_cache_figures(self):
+        from infrastructure.llm.client import _billing
+
+        kept = _billing({"prompt_tokens": 17000, "completion_tokens": 900, "cost": 0.03,
+                         "prompt_tokens_details": {"cached_tokens": 9800, "cache_write_tokens": 0}})
+        assert kept["cached_tokens"] == 9800 and "cache_write_tokens" not in kept
 
 
 class TestTheTranscript:

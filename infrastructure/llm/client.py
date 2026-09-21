@@ -154,6 +154,14 @@ def _billing(usage: Optional[dict]) -> Optional[dict]:
         for key in ("cost", "prompt_tokens", "completion_tokens", "total_tokens")
         if usage.get(key) is not None
     }
+    # Whether the prompt's prefix was served from the provider's cache. Without
+    # this the corpus could not say whether caching happened at all — a day of
+    # the group chat cost $7 and the question "was any of it cached?" had no
+    # answer in the record.
+    details = usage.get("prompt_tokens_details") or {}
+    for key in ("cached_tokens", "cache_write_tokens"):
+        if details.get(key):
+            kept[key] = details[key]
     return kept or None
 
 

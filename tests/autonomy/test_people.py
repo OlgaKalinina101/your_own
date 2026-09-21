@@ -504,7 +504,7 @@ class TestInTheRoom:
 
         await responder.consider(ACCOUNT, repo.recent)
 
-        prompt = calls[0][1]["content"]
+        prompt = responder.prompt_text(calls[0][1])
         assert "через боль" in prompt, "the card comes by who is speaking, not by what is said"
         assert "Ptica Arop (Чарли): Виктор, глянь" in prompt
 
@@ -522,7 +522,8 @@ class TestInTheRoom:
 
         await responder.consider(ACCOUNT, repo.recent)
 
-        book = calls[0][1]["content"].split("<people>")[1].split("</people>")[0]
+        # The commands text mentions <people> as a word; the block itself starts a line.
+        book = responder.prompt_text(calls[0][1]).split("<people>\n", 1)[1].split("</people>")[0]
         assert "украинец" in book and "12.04.2025" in book
         assert "филолог" not in book
 
