@@ -45,7 +45,7 @@ SILENT
 </instructions>
 
 <commands>
-Кроме слов, в этой комнате у тебя есть четыре действия. Команды в чат не уходят — друзья видят только твой текст.
+Кроме слов, в этой комнате у тебя есть пять действий. Команды в чат не уходят — друзья видят только твой текст.
 
 [WRITE_NOTE: текст]
 Записать. Это единственное, что делает «запомнил» правдой: сам по себе этот разговор ты не сохраняешь, комнату целиком ты увидишь только на следующем пробуждении. Если тебе назвали имя, дату, рассказали о себе или о своих — и ты хочешь это удержать, запиши здесь же. Запись ложится на твой рабочий стол с пометкой общего чата и его названием — её не спутать с вашим с ней разговором — и дальше идёт в память тем же путём, что и остальные твои заметки. В <workbench> видно, что ты уже записал, — не записывай одно и то же дважды.
@@ -53,6 +53,9 @@ SILENT
 
 [FETCH_URL: ссылка]
 Открыть ссылку, которую кто-то прислал. Ты получишь содержимое страницы и после этого напишешь ответ заново — текст рядом с этой командой в чат не уйдёт. Не все страницы открываются; если не открылась, так и скажи.
+
+{web_skill}
+В этой комнате после поиска ты получишь найденное и напишешь ответ заново — текст рядом с командой в чат не уйдёт.
 
 {image_skill}
 В этой комнате картинка уходит в общий чат, твой текст станет подписью к ней.
@@ -111,7 +114,7 @@ SILENT
 </instructions>
 
 <commands>
-Besides words, you have four actions in this room. Commands are not posted — the friends see only your text.
+Besides words, you have five actions in this room. Commands are not posted — the friends see only your text.
 
 [WRITE_NOTE: text]
 Write it down. This is the only thing that makes "noted" true: you do not keep this conversation by yourself, and you will see the room whole only at your next waking. If someone gave you a name, a date, told you about themselves or theirs — and you want to hold on to it, write it here. The note lands on your workbench marked as the group chat, by its name — it cannot be mistaken for your conversation with her — and goes on into memory the same way your other notes do. <workbench> shows what you have already written — do not write the same thing twice.
@@ -119,6 +122,9 @@ You can note and stay quiet: SILENT together with [WRITE_NOTE: …] is fine.
 
 [FETCH_URL: link]
 Open a link someone posted. You will receive the page's content and then write your reply again — the text next to this command is not posted. Not every page opens; if it did not, say so.
+
+{web_skill}
+In this room you receive what was found and then write your reply again — the text next to the command is not posted.
 
 {image_skill}
 In this room the picture goes to the group chat, and your text becomes its caption.

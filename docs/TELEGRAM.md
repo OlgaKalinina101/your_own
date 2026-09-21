@@ -87,6 +87,7 @@ the token budget is never posted.
 |---|---|
 | `[WRITE_NOTE: text]` | The note lands on his workbench marked with the group's own title — `[общий чат «ИИ-СОПРОТИВЛЕНИЕ»]` / `[group chat «…»]`, or `[общий чат с друзьями]` when the title is not known. Not "from the chat": his conversation with her is a chat too. This is what makes "noted" true: on the first day of the live group he told three people he had written something down, with nothing to write with. A note may accompany `SILENT`. Whole notes are kept even when the reply itself was clipped. |
 | `[FETCH_URL: link]` | The link is opened through the research agent's web source; the page comes back to him and he writes the reply again. The draft next to the command is not posted. At most `MAX_ROUNDS` (3) model calls per reply. |
+| `[WEB_SEARCH: query]` | The private chat's web-search skill, reused: its description is inserted word for word, the query goes through the same research agent, and what comes back is worded by the skill's own `web_continuation` / `web_empty` sections. Shares the three-round limit with `FETCH_URL`. |
 | `[GENERATE_IMAGE: model \| prompt]` | The private chat's image skill, reused — including its own description of which model takes what, inserted word for word, plus one rule of the room's own: anything crude or bodily goes to `grok` only, `gpt5` and `gemini` are for the plainly innocent, and in doubt it is `grok`. The picture is posted with his words as the caption (`sendPhoto`); words longer than a caption go first as a message. |
 | `[REPLY_TO: #id]` | Answer under a particular line instead of the one that pulled him in. Ids he cannot see in the transcript are ignored. |
 
@@ -146,7 +147,7 @@ Where the group could leak into his long-term self, and what stops it:
 | Store | Risk | What happens instead |
 |---|---|---|
 | workbench | notes about friends push the two of them off the desk | notes from the room are marked, and every consumer but reflection sees the desk **without** them: the three entries in a private conversation are always theirs. Reflection and the rotator see everything, which is how the friends reach long-term memory and *My people* |
-| open threads | pins about friends fill the board | the room has four commands and none of them touches the board; pinning is reflection's and the private journal's alone |
+| open threads | pins about friends fill the board | the room has five commands and none of them touches the board; pinning is reflection's and the private journal's alone |
 | Chroma facts | friends' facts surface in the private chat | the room has no `SAVE_MEMORY`; a fact about a friend exists only if the rotator distilled it from his own notes, and then it surfaces by meaning like any other |
 | identity | friends seep into "Who she is" / "Our story" | a seventh section, **Мои люди / My people**, is where the friends belong. The rotator's consolidation and canon-promotion prompts know it; the five pillars that are theirs stay theirs |
 | reflection timing | a busy room keeps him awake | the group is not a message from her; only she moves the clock |

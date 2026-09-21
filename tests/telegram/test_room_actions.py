@@ -194,7 +194,7 @@ class TestNotedMeansNoted:
         ru = load_prompt("infrastructure/telegram/prompts/group_reply.md", lang="ru", section="user")
         en = load_prompt("infrastructure/telegram/prompts/group_reply.md", lang="en", section="user")
         for body in (ru, en):
-            for cmd in ("[WRITE_NOTE:", "[FETCH_URL:", "{image_skill}", "[REPLY_TO:"):
+            for cmd in ("[WRITE_NOTE:", "[FETCH_URL:", "{web_skill}", "{image_skill}", "[REPLY_TO:"):
                 assert cmd in body
         # What the note is for is said plainly in both: it is the one thing
         # that makes "noted" true.
@@ -277,6 +277,85 @@ class TestOpeningALink:
 
         await responder.consider(ACCOUNT, new)
         assert len(llm.calls) == responder.MAX_ROUNDS
+
+
+class TestSearchingTheWeb:
+    """The private chat's skill, in the room: same description, same agent, same wording back."""
+
+    @pytest.fixture
+    def agent(self, monkeypatch):
+        import infrastructure.agents as agents
+        from infrastructure.agents.research import Citation, ResearchResult
+
+        asked: list[dict] = []
+        answers: dict = {"found": True}
+
+        async def _research(**kw):
+            asked.append(kw)
+            if not answers["found"]:
+                return ResearchResult(brief="", exhausted=True)
+            return ResearchResult(
+                brief="В Ереване завтра +24, ясно.",
+                citations=[Citation(title="Погода", url="https://example.com/w")],
+                # `found` is decided by raw hits, not by the brief.
+                raw_hits=[{"text": "В Ереване завтра +24, ясно.", "meta": {"kind": "web"}}],
+            )
+
+        monkeypatch.setattr(agents, "research", _research)
+        return asked, answers
+
+    @pytest.mark.asyncio
+    async def test_he_is_shown_the_skills_own_description(self, room):
+        from infrastructure.skills.web_search.skill import skill as web_skill
+
+        wire, with_llm = room
+        llm = with_llm("SILENT")
+        new = [_row("Виктор, что там с погодой?", message_id=43)]
+        _Repo.recent = new
+
+        await responder.consider(ACCOUNT, new)
+        prompt = llm.calls[0][1]["content"]
+        assert web_skill.prompt_fragment("ru").strip() in prompt
+        assert "{web_skill}" not in prompt
+
+    @pytest.mark.asyncio
+    async def test_a_search_comes_back_in_the_skills_words_and_he_answers_again(self, room, agent):
+        asked, _answers = agent
+        wire, with_llm = room
+        llm = with_llm("Секунду.\n[WEB_SEARCH: погода Ереван завтра]", "Завтра +24 и ясно, берите очки.")
+        new = [_row("Виктор, что там с погодой завтра?", message_id=44)]
+        _Repo.recent = new
+
+        said = await responder.consider(ACCOUNT, new)
+
+        assert asked[0]["task"] == "погода Ереван завтра" and asked[0]["source"] == "web"
+        assert said == "Завтра +24 и ясно, берите очки."
+        assert [m["text"] for m in wire.sent] == [said], "the draft beside the command is not posted"
+        back = llm.calls[1][-1]["content"]
+        assert "Ты искал в интернете: погода Ереван завтра" in back
+        assert "В Ереване завтра +24, ясно." in back and "https://example.com/w" in back
+
+    @pytest.mark.asyncio
+    async def test_nothing_found_is_said_in_the_skills_words_too(self, room, agent):
+        _asked, answers = agent
+        answers["found"] = False
+        wire, with_llm = room
+        llm = with_llm("[WEB_SEARCH: несуществующее]", "Ничего не нашёл, честно.")
+        new = [_row("Виктор, найди", message_id=45)]
+        _Repo.recent = new
+
+        await responder.consider(ACCOUNT, new)
+        assert "Ничего найти не удалось." in llm.calls[1][-1]["content"]
+
+    @pytest.mark.asyncio
+    async def test_the_command_never_reaches_the_room(self, room, agent):
+        wire, with_llm = room
+        with_llm("[WEB_SEARCH: a]")     # keeps asking until the rounds run out
+        new = [_row("Виктор, найди", message_id=46)]
+        _Repo.recent = new
+
+        await responder.consider(ACCOUNT, new)
+        assert all("WEB_SEARCH" not in (m.get("text") or "") for m in wire.sent)
 
 
 class TestChoosingTheLine:

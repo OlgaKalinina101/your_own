@@ -10,7 +10,7 @@ Three questions, in order:
    else is the room talking among itself: stored, not answered. He reads it
    whole at his next waking.
 2. **What does he say?** A short loop rather than one call, because in the
-   room he can do four things besides talk:
+   room he can do five things besides talk:
 
    * ``[WRITE_NOTE: …]`` — write something down. It lands on his desk marked
      with the group's name, so it reaches long-term memory through the rotator
@@ -18,6 +18,8 @@ Three questions, in order:
      exists because he was saying "noted" to people with nothing to note with.
    * ``[FETCH_URL: …]`` — open a link someone posted. The page comes back to
      him and he answers again, knowing what is on it.
+   * ``[WEB_SEARCH: …]`` — the private chat's web-search skill: its own
+     description, its own wording for what came back, the same research agent.
    * ``[GENERATE_IMAGE: model | prompt]`` — the same skill as in the private
      chat; the picture is posted to the room.
    * ``[REPLY_TO: #id]`` — answer under a particular line rather than the one
@@ -63,18 +65,20 @@ REPLY_MAX_TOKENS = 16000
 # A link opened, then an answer: two rounds is the normal case, three the limit.
 MAX_ROUNDS = 3
 MAX_FETCHES_PER_ROUND = 2
+MAX_SEARCHES_PER_ROUND = 2
 
 _NOTE_RE = re.compile(r"\[WRITE[_ ]NOTE:\s*(?P<text>.+?)\]", re.IGNORECASE | re.DOTALL)
 _FETCH_RE = re.compile(r"\[FETCH[_ ]URL:\s*(?P<url>\S+?)\s*\]", re.IGNORECASE)
+_SEARCH_RE = re.compile(r"\[WEB[_ ]SEARCH:\s*(?P<query>.+?)\]", re.IGNORECASE | re.DOTALL)
 _IMAGE_RE = re.compile(r"\[GENERATE[_ ]IMAGE:\s*(.*?)\]", re.IGNORECASE | re.DOTALL)
 _REPLY_TO_RE = re.compile(r"\[REPLY[_ ]TO:\s*#?(?P<id>\d+)\s*\]", re.IGNORECASE)
 _ANY_CMD_RE = re.compile(
-    r"\[(?:WRITE[_ ]NOTE|FETCH[_ ]URL|GENERATE[_ ]IMAGE|REPLY[_ ]TO):[^\]]*\]",
+    r"\[(?:WRITE[_ ]NOTE|FETCH[_ ]URL|WEB[_ ]SEARCH|GENERATE[_ ]IMAGE|REPLY[_ ]TO):[^\]]*\]",
     re.IGNORECASE | re.DOTALL,
 )
 # A reply cut mid-command: the opener is there, the bracket is not.
 _UNCLOSED_RE = re.compile(
-    r"\[(?:WRITE[_ ]NOTE|FETCH[_ ]URL|GENERATE[_ ]IMAGE|REPLY[_ ]TO):[^\]]*$",
+    r"\[(?:WRITE[_ ]NOTE|FETCH[_ ]URL|WEB[_ ]SEARCH|GENERATE[_ ]IMAGE|REPLY[_ ]TO):[^\]]*$",
     re.IGNORECASE | re.DOTALL,
 )
 _MEDIA_TOKEN_RE = re.compile(r"^\[[a-z ]+\]$")
@@ -96,12 +100,13 @@ _FETCH_TASK = {
     "en": "Open the page {url} and tell what is on it: what it is about, the main content, "
           "author and date if any. If the page does not open or is gated, say so.",
 }
-_FETCH_BACK = {
-    "ru": "Вот что по ссылкам:\n\n{results}\n\nТеперь напиши то, что хочешь сказать в чат. "
+_LOOKUP_BACK = {
+    "ru": "{results}\n\nТеперь напиши то, что хочешь сказать в чат. "
           "Предыдущий твой текст в чат не ушёл — пиши ответ целиком.",
-    "en": "Here is what the links hold:\n\n{results}\n\nNow write what you want to say in the chat. "
+    "en": "{results}\n\nNow write what you want to say in the chat. "
           "Your previous text was not posted — write the reply whole.",
 }
+_LINKS_HEAD = {"ru": "Вот что по ссылкам:", "en": "Here is what the links hold:"}
 
 
 @dataclass
@@ -357,6 +362,44 @@ async def _fetch(urls: list[str], *, api_key: str, account_id: str, lang: str) -
     return "\n\n".join(parts)
 
 
+async def _search(queries: list[str], *, api_key: str, account_id: str, lang: str) -> str:
+    """Run each query through the research agent, worded the way the skill words it.
+
+    The sections come from the web-search skill's own ``prompt.md`` — what he
+    reads after a search in the room is what he reads after one in the private
+    chat, including the part that tells him not to recite the sources.
+    """
+    from infrastructure.agents import Source, research
+    from infrastructure.skills.web_search.skill import _render_sources, skill as web_skill
+
+    parts: list[str] = []
+    for query in queries[:MAX_SEARCHES_PER_ROUND]:
+        query = " ".join(query.split())
+        try:
+            result = await research(
+                task=query, source=Source.WEB, api_key=api_key, account_id=account_id, lang=lang,
+            )
+        except Exception as exc:
+            logger.warning("[telegram.responder] WEB_SEARCH %r failed: %s", query[:80], exc)
+            parts.append(web_skill.get_section("web_empty", lang, web_query=query))
+            continue
+        if result.found:
+            parts.append(web_skill.get_section(
+                "web_continuation", lang, web_query=query, brief=result.brief,
+                sources_block=_render_sources([c.to_dict() for c in result.citations]),
+            ))
+        else:
+            parts.append(web_skill.get_section("web_empty", lang, web_query=query))
+    return "\n\n".join(parts)
+
+
+def _web_skill_description(lang: str) -> str:
+    """The web-search skill's own description, word for word — see the image one."""
+    from infrastructure.skills.web_search.skill import skill as web_skill
+
+    return web_skill.prompt_fragment(lang).strip()
+
+
 async def _generate_image(raw_match: re.Match, *, api_key: str, account_id: str, lang: str) -> Path | None:
     """Run the private chat's image skill and return the file it saved."""
     from infrastructure.paths import GENERATED_IMAGES_DIR
@@ -432,6 +475,7 @@ async def compose(
         _PROMPT, lang=lang, section="user",
         ai_name=ai_name,
         image_skill=_image_skill_description(lang),
+        web_skill=_web_skill_description(lang),
         memories=memories or ("(ничего не всплыло)" if lang == "ru" else "(nothing surfaced)"),
         room=render_room(shown, ai_name=ai_name, lang=lang),
         her_name=_her_name(recent, lang),
@@ -461,13 +505,23 @@ async def compose(
         _take_notes(account_id, response, lang, reply.notes)
 
         urls = [m.group("url") for m in _FETCH_RE.finditer(response)]
-        if not urls or round_no == MAX_ROUNDS:
+        queries = [m.group("query").strip() for m in _SEARCH_RE.finditer(response)]
+        if not (urls or queries) or round_no == MAX_ROUNDS:
             break
-        logger.info("[telegram.responder:%s] opening %s", account_id, ", ".join(urls)[:200])
-        results = await _fetch(urls, api_key=api_key, account_id=account_id, lang=lang)
+
+        found: list[str] = []
+        if urls:
+            logger.info("[telegram.responder:%s] opening %s", account_id, ", ".join(urls)[:200])
+            pages = await _fetch(urls, api_key=api_key, account_id=account_id, lang=lang)
+            found.append(f"{_LINKS_HEAD.get(lang, _LINKS_HEAD['en'])}\n\n{pages}")
+        if queries:
+            logger.info("[telegram.responder:%s] searching: %s", account_id, " | ".join(queries)[:200])
+            found.append(await _search(queries, api_key=api_key, account_id=account_id, lang=lang))
         messages += [
             {"role": "assistant", "content": response},
-            {"role": "user", "content": _FETCH_BACK.get(lang, _FETCH_BACK["en"]).format(results=results)},
+            {"role": "user", "content": _LOOKUP_BACK.get(lang, _LOOKUP_BACK["en"]).format(
+                results="\n\n".join(found),
+            )},
         ]
 
     target = _REPLY_TO_RE.search(response)
