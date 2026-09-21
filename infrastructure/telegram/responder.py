@@ -95,6 +95,51 @@ _UNCLOSED_RE = re.compile(
 )
 _MEDIA_TOKEN_RE = re.compile(r"^\[[a-z ]+\]$")
 
+# Where a command starts. Where it *ends* is not a regex question: see _commands.
+_OPENER_RE = re.compile(
+    r"\[(?P<name>WRITE[_ ]NOTE|FETCH[_ ]URL|WEB[_ ]SEARCH|GENERATE[_ ]IMAGE|REPLY[_ ]TO|ANSWER[_ ]TO):",
+    re.IGNORECASE,
+)
+
+
+@dataclass
+class _Command:
+    name: str          # normalised: WRITE_NOTE, FETCH_URL, …
+    arg: str
+    start: int
+    end: int
+    closed: bool       # False: the reply ended before the bracket did
+
+
+def _commands(response: str) -> list[_Command]:
+    """Every command in *response*, each ending at the bracket that closes it.
+
+    The first version used ``\\[WRITE_NOTE: (.+?)\\]`` and so ended a note at the
+    first ``]`` it met. Then he began a note the way his desk shows them —
+    ``[WRITE_NOTE: [общий чат «…»] Зефирка …]`` — and the note was cut after
+    the mark: a stub went to the desk, and the rest of it, a private
+    observation about one of the friends, stayed in the text and was posted to
+    the room under his name. Brackets nest; they are counted.
+
+    An unclosed command runs to the end of the text. That is the safe
+    direction: words lost from a reply, never words leaked into it.
+    """
+    found: list[_Command] = []
+    pos = 0
+    while True:
+        opener = _OPENER_RE.search(response, pos)
+        if opener is None:
+            return found
+        depth, i = 1, opener.end()
+        while i < len(response) and depth:
+            depth += (response[i] == "[") - (response[i] == "]")
+            i += 1
+        closed = depth == 0
+        arg = response[opener.end(): i - 1 if closed else len(response)]
+        name = re.sub(r"[ _]+", "_", opener.group("name").upper())
+        found.append(_Command(name, arg.strip(), opener.start(), i if closed else len(response), closed))
+        pos = found[-1].end
+
 _WHY = {
     "ru": {
         "addressed": "к тебе обратились — по имени или ответом на твоё сообщение.",
@@ -327,8 +372,10 @@ def _take_notes(account_id: str, response: str, lang: str, already: list[str]) -
     from infrastructure.telegram import listener
 
     title = listener.room_title(account_id)
-    for match in _NOTE_RE.finditer(response):
-        note = match.group("text").strip()
+    for command in _commands(response):
+        if command.name != "WRITE_NOTE" or not command.closed:
+            continue
+        note = command.arg
         if not note or note in already:
             continue
         try:
@@ -438,7 +485,14 @@ def _image_skill_description(lang: str) -> str:
 
 
 def _clean(response: str) -> str:
-    text = _ANY_CMD_RE.sub("", response)
+    """The reply with every command cut out, whole — what the room may see."""
+    kept: list[str] = []
+    pos = 0
+    for command in _commands(response):
+        kept.append(response[pos:command.start])
+        pos = command.end
+    kept.append(response[pos:])
+    text = _ANY_CMD_RE.sub("", "".join(kept))      # belt and braces
     text = _UNCLOSED_RE.sub("", text)
     return re.sub(r"\n{3,}", "\n\n", text).strip()
 

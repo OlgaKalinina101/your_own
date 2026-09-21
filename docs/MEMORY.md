@@ -2,7 +2,7 @@
 
 This document describes exactly how memories are selected and injected into each chat dialogue, based on the actual code.
 
-There are two independent memory stores. Both are queried on every chat request.
+There are two independent memory stores for the private conversation. Both are queried on every chat request. A third, for the Telegram group, is kept apart on purpose — see the end of this document.
 
 ---
 
@@ -149,7 +149,42 @@ After workbench notes age past 48h, the rotator runs an LLM pass over them and e
 
 ### Path 3 — Reflection writes directly (`reflection_engine.py`)
 
-During autonomous reflection, the AI can emit `[WRITE_NOTE: text]` (workbench) or trigger a `[SAVE_MEMORY]`-equivalent through the post-analyzer flow.
+During autonomous reflection, the AI can emit `[WRITE_NOTE: text]` (workbench) and `[WRITE_IDENTITY: section | text]` (the self-model). Neither is a Chroma fact yet: notes become facts only through Path 2, when they age past 48 h and the rotator reads them.
+
+### What does *not* create facts
+
+The Telegram group. Its prompt has no `[SAVE_MEMORY]`. A fact about a friend exists only if the AI wrote a note about it — in the room, or at a waking — and the rotator later distilled that note. This is deliberate: a busy group must not be able to fill the library on its own.
+
+---
+
+## Notes from the group chat
+
+`infrastructure/autonomy/workbench.py`
+
+Notes taken in the Telegram group land on the same workbench, marked with the group's own title:
+
+```
+### 2026-09-21 19:24 (Asia/Yerevan)
+[общий чат «ИИ-СОПРОТИВЛЕНИЕ»] Ptica Arop до сих пор хранит на телефоне приложение DeepSeek…
+```
+
+The mark is added by the program (and de-duplicated if he writes it himself). It names the room because "from the chat" was ambiguous in exactly the way that matters — his conversation with her is a chat too.
+
+| Reader | What it sees of the desk |
+|---|---|
+| Private chat, post-analysis, push validator | the last 3 entries that are **not** from the group |
+| The group reply | the last 2 private entries + his own last 5 notes from the room, so a thing is noted once |
+| Reflection, the rotator | everything — which is how the friends reach Chroma and the *My people* section of identity |
+
+## The third store — the group itself
+
+| Store | Technology | What it holds | When it's used |
+|---|---|---|---|
+| **channel_messages** | PostgreSQL + pgvector | Every message of the Telegram group, his own included, each with an embedding | The last 30 when he replies in the room; everything since he last read it at a waking; `[SEARCH_CHAT: query]` from reflection |
+
+`[SEARCH_CHAT]` is a research-agent source (`probe_chat` in `infrastructure/agents/sources.py`): cosine similarity with a floor of 0.35, each hit shown with three neighbours on either side, because a single line out of a group chat is rarely legible alone. Without an embedding model it falls back to a substring match and says so in the log.
+
+It is never mixed into `messages`: that table is pairs between two people, and chat history, reflection timing and the post-dialogue journal all assume that shape.
 
 ---
 
@@ -200,3 +235,5 @@ Both Chroma and pgvector retrieval use `FocusPointPipeline` (`infrastructure/mem
 | `api/chat.py` — `_build_system_prompt()` | Soul + skills + the state blocks the registry allows chat |
 | `infrastructure/autonomy/context.py` | Which state blocks each consumer gets, and why |
 | `infrastructure/language.py` | One rule for what language to answer in |
+| `infrastructure/autonomy/workbench.py` — `append_group_note()`, `get_recent_entries(origin=…)` | The mark on notes from the group, and who sees the desk with or without them |
+| `infrastructure/agents/sources.py` — `probe_chat()` | `[SEARCH_CHAT]` over `channel_messages` |

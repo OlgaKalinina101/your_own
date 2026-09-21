@@ -165,6 +165,9 @@ def is_group_note(body: str) -> bool:
 def append_group_note(account_id: str, text: str, lang: str = "ru", room_title: str = "") -> None:
     """A note taken in the room: same desk, marked with which room it came from."""
     clean = _sanitize_note(text)
+    # He sees the mark on his desk and sometimes writes it himself. One is enough.
+    while is_group_note(clean) and "]" in clean:
+        clean = clean[clean.index("]") + 1:].lstrip()
     if not clean:
         return
     append(account_id, f"{group_note_mark(lang, room_title)} {clean}")

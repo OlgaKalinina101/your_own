@@ -111,6 +111,36 @@ This document describes the full data flow of the system — from a chat message
 
 
 ┌──────────────────────────────────────────────────────────────────────┐
+│  TELEGRAM GROUP  (infrastructure/telegram/)                          │
+│                                                                      │
+│  listener.py — one long poll per tick (getUpdates, 25 s)             │
+│    → every message of the chosen group → channel_messages            │
+│    → cursor + rooms seen in data/autonomy/{id}/telegram.json         │
+│                                                                      │
+│  responder.py — after a poll that stored new rows:                   │
+│    addressed?   name in any case / nickname / @handle / a reply      │
+│    in conversation?  he spoke here within the last 10 minutes        │
+│    neither →  stored, not answered; read whole at the next waking    │
+│                                                                      │
+│    Context: identity (whole) + 2 private desk entries + his 5        │
+│    latest notes from the room + Chroma facts + last 30 messages,     │
+│    her lines marked. NO board: the room is public.                   │
+│                                                                      │
+│    A short loop, at most 3 model calls:                              │
+│    [WRITE_NOTE: t]       → workbench, marked [общий чат «title»]     │
+│    [FETCH_URL: u]        → ResearchAgent (web) → he answers again    │
+│    [WEB_SEARCH: q]       → the chat's own skill, same wording back   │
+│    [GENERATE_IMAGE: m|p] → the chat's own skill → sendPhoto          │
+│    [REPLY_TO: #id]       → answer under that message                 │
+│    [ANSWER_TO: name]     → settings.telegram_aliases                 │
+│    SILENT                → a decision, logged as one                 │
+│    empty model reply     → a failure, logged as one                  │
+│                                                                      │
+│  The group never moves the reflection clock and never writes to      │
+│  the board or to Chroma. See docs/TELEGRAM.md.                       │
+└──────────────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────────────┐
 │  REFLECTION ENGINE  (reflection_engine.py)                           │
 │                                                                      │
 │  Trigger conditions (should_run):                                    │
@@ -142,6 +172,12 @@ This document describes the full data flow of the system — from a chat message
 │  │    If any identity section has ≥ 10 bullets                    │  │
 │  │    → LLM compresses to 5–7 bullets                             │  │
 │  │    → identity.replace_section() writes compressed version      │  │
+│  │                                                                │  │
+│  │  Step 5 — Canon promotion (if needed)                          │  │
+│  │    The canon holds 15–20 dated beams. Over the ceiling,        │  │
+│  │    → LLM picks beams that have done their work                 │  │
+│  │    → each moves into a pillar as an undated formulation        │  │
+│  │    → identity.promote_beam(); nothing is deleted               │  │
 │  └────────────────────────────────────────────────────────────────┘  │
 │                                                                      │
 │  Then: AGENT LOOP (up to 8 steps, extendable)                        │
@@ -152,6 +188,8 @@ This document describes the full data flow of the system — from a chat message
 │  - Last 3 dialogue pairs                                             │
 │  - All TIME tasks from last 24h (PENDING/DONE/CANCELLED)             │
 │  - Current local time                                                │
+│  - The Telegram group since he last read it, verbatim                │
+│    (<group_chat>; the cursor moves only if the waking happens)       │
 │                                                                      │
 │  Commands the AI can use during reflection:                          │
 │  [SEARCH_FACTS: q]          → ResearchAgent (facts) → Chroma key_info│
@@ -168,6 +206,12 @@ This document describes the full data flow of the system — from a chat message
 │  [PIN_THREAD: text]         → add a thread to the board              │
 │  [UNPIN_THREAD: #id]        → close it (the only way one leaves)     │
 │  [UPDATE_THREAD: #id|text]  → rewrite one in place                   │
+│  [SEARCH_DOCS: q]           → README + docs/, answered in prose      │
+│  [SEARCH_CHAT: q]           → ResearchAgent (chat) → the group       │
+│  [LIST_PROMPTS] / [SHOW_PROMPT: n] → his own prompts, verbatim       │
+│  [SEND_TO_CHAT: text]       → a line into the Telegram group         │
+│  [REPLY_TO_CHAT: #id|text]  → the same, under one message            │
+│  [ANSWER_TO: name]          → a nickname he answers to there         │
 │  [CANCEL_ALL_SCHEDULED]     → drop every pending message at once     │
 │  [VITALS]                   → his own instrument panel, on demand    │
 │  [EXTEND: N]                → add N more steps (max 3 extensions)    │
@@ -207,7 +251,8 @@ workbench_rotator:
   ├── archives entries to ChromaDB workbench_archive
   ├── extracts self-insights → ChromaDB key_info (Inspiration category)
   ├── reviews identity.md and may update sections
-  └── consolidates overlong sections
+  ├── consolidates overlong sections
+  └── promotes finished canon beams into the pillars
      │
      ▼
 identity.md evolves
@@ -220,10 +265,13 @@ reflection engine reads full identity.md
 identity.md grows with lived experience
 ```
 
-`identity.md` is **not** injected into the chat system prompt. It feeds into:
-- The reflection loop's awakening prompt (full content)
-- The post-analyzer context (whole)
-- The rotator's review and consolidation prompts
+`identity.md` is **not** injected whole into the chat system prompt — private chat gets only its **canon** section. The whole file feeds into:
+- The reflection loop's awakening prompt
+- The post-analyzer context
+- The Telegram group's reply prompt — in a room full of people, who she is and who he is are the two things he must not lose
+- The rotator's review, consolidation and canon-promotion prompts
+
+It has seven sections: *Who she is, Who I am, Our story, Our principles, Our home, My people, My canon*. **My people** is the one pillar that is not about the two of them — the friends from the group chat — and exists so the room has a place of its own rather than seeping into the rest.
 
 The soul (`data/soul.md`) **is** injected into every chat as the base system prompt. These are separate: soul is the fixed voice and character, identity is the living self-model that accumulates over time.
 
@@ -236,14 +284,20 @@ The soul (`data/soul.md`) **is** injected into every chat as the base system pro
 | AI voice and character | `data/soul.md` | Human (settings UI) | Every chat (system prompt) |
 | Distilled facts about user + AI | ChromaDB `key_info` | `[SAVE_MEMORY]`, rotator self-insights | Every chat (memory block), reflection search |
 | Raw past conversations | PostgreSQL `messages` | Chat handler | `[SEARCH_DIALOGUE]` skill |
+| The Telegram group, every message incl. his own | PostgreSQL `channel_messages` | Telegram listener, responder, `[SEND_TO_CHAT]` | The group reply (last 30), reflection (everything since he last read), `[SEARCH_CHAT]` |
+| Telegram polling cursor, rooms seen, bot identity | `data/autonomy/{id}/telegram.json` | Telegram listener | Listener, settings page |
+| How far he has read the group | `data/autonomy/{id}/group_seen_until.txt` | Reflection, after a waking that happened | Reflection |
 | Archived workbench notes | ChromaDB `workbench_archive` | Rotator | Reflection `[SEARCH_NOTES]` |
-| Short-term scratchpad | `data/autonomy/{id}/workbench.md` | Post-analyzer, reflection | Reflection reads it whole (rotation is its job); everyone else the last 3 entries |
-| Self-model | `data/autonomy/{id}/identity.md` | Rotator, reflection `[WRITE_IDENTITY]` | Reflection context, post-analyzer context |
+| Short-term scratchpad | `data/autonomy/{id}/workbench.md` | Post-analyzer, reflection, the group (`[WRITE_NOTE]`, marked `[общий чат «title»]`) | Reflection and the rotator read it whole; chat, post-analysis and the push validator the last 3 entries **not** taken in the group; the group the last 2 private + its own last 5 |
+| Self-model | `data/autonomy/{id}/identity.md` | Rotator, reflection `[WRITE_IDENTITY]` | Reflection, post-analyzer and the group whole; private chat the canon only |
 | Scheduled messages | PostgreSQL `autonomy_tasks` | Post-analyzer, reflection | Scheduled push worker, reflection context |
 | Open threads (the board) | `data/autonomy/{id}/threads.md` | Reflection, post-analyzer | Every consumer — chat included |
 | Instrument panel | `data/autonomy/{id}/vitals.json` | Reflection worker, heartbeat | Reflection (deltas unasked, full panel on `[VITALS]`) |
 | Every LLM call, in full | `data/dataset/calls-YYYY-MM.jsonl` (older months gzipped) | `llm/client.py` | Kept, not rotated — the record of his own thinking |
-| Settings + API keys | `data/settings.json` | Settings UI | Every component |
+| Settings + API keys | `data/settings.json` | Settings UI; he adds nicknames to `telegram_aliases` with `[ANSWER_TO]` | Every component |
+| What she attached | `user_uploads/` | Chat handler | Served back with a short-lived media signature |
+| Pictures he made | `generated_images/` | `[GENERATE_IMAGE]`, in chat and in the group | Chat UI, Telegram `sendPhoto` |
+| His face | `data/body/` (anchor + 5 generated states) | Body page | Desktop Body page, mobile Self screen |
 | Auth token | `data/auth_token.txt` | Generated on first run | Every request |
 
 ---
@@ -266,7 +320,7 @@ The soul (`data/soul.md`) **is** injected into every chat as the base system pro
 
 **Background (post-analyzer):**
 
-12. LLM sees conversation + identity excerpt + workbench (3 entries) + pending tasks
+12. LLM sees conversation + identity (whole) + board + workbench (3 entries) + pending tasks
 13. May write journal entry → workbench
 14. May schedule/cancel/rewrite pending messages
 
@@ -274,12 +328,18 @@ The soul (`data/soul.md`) **is** injected into every chat as the base system pro
 
 15. Due tasks sent via Pushy → DB → marked done
 
+**Background (continuously — Telegram listener):**
+
+16a. One long poll; every message of the chosen group → `channel_messages`
+16b. If he was called, or spoke within 10 minutes: one short loop → a reply, a note, a search, a picture, or `SILENT`
+16c. Otherwise nothing: the room is read whole at the next waking
+
 **Background (every 4–12h — reflection):**
 
 16. Rotator archives stale workbench entries → ChromaDB
 17. Rotator extracts self-insights → ChromaDB Inspiration facts
-18. Rotator reviews + possibly updates identity.md
-19. Agent loop: AI reads identity + workbench + history + pending tasks
+18. Rotator reviews + possibly updates identity.md; consolidates a section at 10 entries; promotes canon beams over the ceiling
+19. Agent loop: AI reads identity + board + workbench + history + pending tasks + the group since he last read it
 20. Searches memories, writes notes, sends/schedules messages
 21. All reasoning text auto-saved to workbench
 22. `[WRITE_IDENTITY]` bullets accumulate in identity.md
@@ -316,3 +376,11 @@ The soul (`data/soul.md`) **is** injected into every chat as the base system pro
 | `infrastructure/paths.py` | Where the project root and every data directory are |
 | `infrastructure/account.py` | One account, stated as an invariant rather than assumed |
 | `infrastructure/single_process.py` | One backend at a time — two would corrupt the state files |
+| `infrastructure/telegram/client.py` | Bot API on aiohttp: `getMe`, `getUpdates`, `sendMessage`, `sendPhoto` |
+| `infrastructure/telegram/listener.py` | One long poll → rows; the cursor; the rooms seen; the room's title |
+| `infrastructure/telegram/responder.py` | Addressed / in conversation; the reply loop and its six commands; bracket-counting command parser |
+| `infrastructure/telegram/addressing.py` | What he answers to: case forms by morphology, nicknames seeded once and added by him |
+| `infrastructure/database/models/channel_message.py` | The group's table — a room, not pairs |
+| `infrastructure/agents/research.py`, `sources.py` | The one orchestrator behind every search: web, dialogue, facts, notes, docs, chat |
+| `infrastructure/events.py`, `api/events_api.py` | The change channel: tells every open client the conversation changed |
+| `infrastructure/auth.py` | Bearer token, rotation, short-lived media signatures |

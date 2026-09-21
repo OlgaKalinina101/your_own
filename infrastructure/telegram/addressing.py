@@ -48,7 +48,7 @@ _CYRILLIC_RE = re.compile(r"[а-яё]", re.IGNORECASE)
 _RETRY_AFTER_SECONDS = 600
 
 _generating = False
-_last_failure = 0.0
+_last_failure: float | None = None    # None, not 0.0: monotonic() is small right after boot
 
 
 def _norm(text: str) -> str:
@@ -199,7 +199,9 @@ async def ensure_aliases(api_key: str) -> None:
         return
     if (load_settings().get("telegram_aliases_for") or "") == ai_name:
         return
-    if _generating or time.monotonic() - _last_failure < _RETRY_AFTER_SECONDS:
+    if _generating:
+        return
+    if _last_failure is not None and time.monotonic() - _last_failure < _RETRY_AFTER_SECONDS:
         return
 
     _generating = True

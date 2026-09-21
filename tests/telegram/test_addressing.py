@@ -31,7 +31,7 @@ def settings(tmp_path, monkeypatch):
     monkeypatch.setattr(settings_store, "_SETTINGS_FILE", tmp_path / "settings.json")
     monkeypatch.setattr(settings_store, "_SOUL_FILE", tmp_path / "soul.md")
     settings_store.save_settings({"ai_name": "Виктор", "openrouter_api_key": "k"})
-    monkeypatch.setattr(addressing, "_last_failure", 0.0)
+    monkeypatch.setattr(addressing, "_last_failure", None)
     return settings_store
 
 

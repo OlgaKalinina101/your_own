@@ -7,6 +7,8 @@ It can be a companion, a work partner, a memory system, an autonomous agent, a c
 
 Import your history, keep what matters, and shape an AI that remembers, acts, and grows with you — not one flattened into a sanitized chatbot.
 
+**What it can do, in one breath:** talk with you in a streaming chat with images, PDFs, text files, audio and video; remember — facts, a journal, a board of open threads, a self-model it rewrites itself; act — search the web and your shared history, draw pictures, schedule messages; wake up on its own, think, and write to you first; and sit in a **Telegram group with your friends** as itself, knowing who you are among them.
+
 <table>
 <tr>
 <td width="50%" align="center">
@@ -77,6 +79,18 @@ On first run, the setup script automatically:
 5. Enables `pgvector` extension
 6. Runs Alembic migrations
 7. Starts the backend, frontend, and Electron shell
+
+### Running it on a server
+
+The same backend runs on a laptop or on a small VPS (the reference install is 4 cores / 8 GB, PostgreSQL 17 + pgvector, Caddy for TLS). On a server use `next build` + `next start`, never `next dev`.
+
+A **packaged desktop app is a thin client**: it starts nothing of its own and simply opens your server. Point it with an environment variable:
+
+```bash
+YOUR_OWN_SERVER_URL=https://your-domain.example  # read by frontend/electron/main.js
+```
+
+In development (`npm run electron:dev`) everything still runs locally on `localhost:3000` / `:8000`. Notes from a real move — sizes, memory, the disk trap, and how to ship an update — are in [docs/MIGRATION.md](docs/MIGRATION.md).
 
 ### Mobile App (Android)
 
@@ -230,33 +244,42 @@ API requests from the phone go through a built-in Next.js proxy (`/api/*` → ba
 │  │   ├── Reflection worker (thinks, writes, reaches out) │
 │  │   ├── Scheduled push worker (delivers timed messages) │
 │  │   ├── Workbench rotator (archives notes, extracts     │
-│  │   │   self-insights, reviews identity)                │
+│  │   │   self-insights, reviews identity, promotes canon)│
 │  │   ├── Identity memory (persistent self-model)         │
 │  │   ├── Open-threads board (what is still unfinished)   │
 │  │   └── Vitals (its own instrument panel)               │
+│  ├── Group chat (Telegram)                               │
+│  │   ├── Listener (long-polls the bot, stores the room)  │
+│  │   ├── Responder (answers when called; notes, links,   │
+│  │   │   web search, pictures)                           │
+│  │   └── Addressing (his name in every case + nicknames) │
+│  ├── Change channel (SSE: every open client stays in sync)│
 │  ├── One transport to OpenRouter (retries, timeouts)     │
 │  ├── One clock (stored UTC, shown in your timezone)      │
 │  ├── Settings store (data/settings.json, data/soul.md)   │
 │  ├── Call corpus (data/dataset/, kept in full)           │
 │  └── Auth (data/auth_token.txt) + single-process lock    │
 │                                                          │
-│  PostgreSQL + pgvector                                   │
+│  PostgreSQL + pgvector (messages, channel_messages,      │
+│                         autonomy_tasks)                  │
 │  ChromaDB (key_info + workbench_archive)                 │
 │  Next.js frontend (localhost:3000)                       │
-└──────────┬───────────────────────────────────────────────┘
-           │  LAN / ngrok / Tailscale
-    ┌──────┼──────────────────┐
-    │      │                  │
-┌───▼────────┐  ┌──────▼───────┐  ┌──────▼───────┐
-│ Desktop    │  │ Web browser  │  │ Mobile app   │
-│ (Electron) │  │ (any device) │  │ (Android)    │
-│ auto-token │  │ manual token │  │ push notifs  │
-└────────────┘  └──────────────┘  └──────────────┘
+└──────────┬───────────────────────────────┬───────────────┘
+           │  LAN / domain / ngrok / Tailscale             │ Bot API
+    ┌──────┼──────────────────┐                            │
+    │      │                  │                            │
+┌───▼────────┐  ┌──────▼───────┐  ┌──────▼───────┐  ┌──────▼───────┐
+│ Desktop    │  │ Web browser  │  │ Mobile app   │  │ Telegram     │
+│ (Electron) │  │ (any device) │  │ (Android)    │  │ group chat   │
+│ thin client│  │ manual token │  │ push notifs  │  │ with friends │
+└────────────┘  └──────────────┘  └──────────────┘  └──────────────┘
 ```
 
 **Detailed documentation:**
 - [Memory Retrieval — how facts are selected and injected into each chat](docs/MEMORY.md)
 - [System Pipeline — how chat, memory, workbench, identity and autonomy connect](docs/PIPELINE.md)
+- [The Group Chat — how it takes part in a Telegram group without the group outweighing you](docs/TELEGRAM.md)
+- [Moving to a server, and shipping updates to it](docs/MIGRATION.md)
 
 ---
 
@@ -265,11 +288,26 @@ API requests from the phone go through a built-in Next.js proxy (`/api/*` → ba
 ### Chat
 - Streaming responses via SSE
 - Markdown rendering with code blocks, tables, and copy
-- Multiple image attachments and paste from clipboard
+- Up to 8 attachments per message, and paste from clipboard — images, PDFs, text files, audio, video
 - Inline image generation with pulsing shimmer during creation
 - Lightbox view and download for generated images
 - Pagination for older chat history
+- Every open client stays in sync: chat on the phone, walk to the desktop, and the conversation is already there — including messages the AI sent on its own
 - Available on desktop, web, and mobile
+
+**What each model can be shown.** Measured by sending each model a real file, not read off a catalogue. An attachment the chosen model cannot read is left out and said so in the log, rather than sent to be refused mid-conversation; the clients grey out what will not work.
+
+| Model | Images | PDF | Text files | Audio | Video |
+|---|---|---|---|---|---|
+| Claude Fable | ✓ | ✓ | ✓ | — | — |
+| Kimi | ✓ | ✓ | ✓ | — | — |
+| Gemini Pro | ✓ | ✓ | ✓ | ✓ | ✓ |
+| GPT Chat | ✓ | ✓ | ✓ | — | — |
+| GLM | — | ✓ | ✓ | — | — |
+
+PDFs are parsed by OpenRouter before any provider sees them, which is why every model reads one. Text files are inlined into the message. Anything else — a `.docx`, an archive — is dropped and logged.
+
+> 🖼 **Screenshot placeholder** — save as `docs/example/attachments.png` and replace this line with the image. The chat input with a PDF and an image attached, and the model picker showing what the model reads.
 
 ### Memory in Four Surfaces
 
@@ -282,11 +320,11 @@ They are not tiers of the same thing — each decays differently, and that is th
 | **The board** | `data/autonomy/{account}/threads.md` | Open threads that must live forward — a debt, a count, a topic to revive | Only by an explicit "done" |
 | **The skin** | `data/autonomy/{account}/identity.md` | The self-model: who it is, who you are, what you have been through | Slowly, by rewriting |
 
-Underneath all four: **PostgreSQL + pgvector** holds the raw conversations — sentence-level chunks with embeddings and keywords, from your ChatGPT import and every live message.
+Underneath all four: **PostgreSQL + pgvector** holds the raw conversations — sentence-level chunks with embeddings and keywords, from your ChatGPT import and every live message. The Telegram group lives beside it in its own table, `channel_messages`: a room, not pairs, so nothing that reads *your* dialogue ever sees it by accident.
 
 **ChromaDB facts** are loaded into every chat automatically as the memory block, filtered by age so only settled memories surface. **pgvector** is searched when the AI explicitly calls `[SEARCH_DIALOGUE]`.
 
-Which surface is visible where is decided in one registry (`infrastructure/autonomy/context.py`) rather than by whichever prompt happens to be built — chat sees the canon of the identity, the board and the last desk entries; reflection sees all of it, plus its own vitals.
+Which surface is visible where is decided in one registry (`infrastructure/autonomy/context.py`) rather than by whichever prompt happens to be built — chat sees the canon of the identity, the board and the last desk entries; reflection sees all of it, plus its own vitals; the Telegram group sees the whole identity and **no board**, because the board is the two of you and the room is public.
 
 ### Hybrid Retrieval
 
@@ -315,6 +353,14 @@ The AI doesn't just respond — it acts. During a conversation, the model invoke
 | **`[SCHEDULE_MESSAGE: datetime \| text]`** | Schedules a push notification for later. The AI decides when and what to send — a reminder, a thought, a check-in |
 | **`[PIN_THREAD]` / `[UNPIN_THREAD]` / `[UPDATE_THREAD]`** | Puts something unfinished on the board, closes it, or rewrites it. Threads never expire by time — only when the AI says it is done |
 
+**The same hands in other rooms.** Skills are not only a chat feature:
+
+| Where | What it can do there |
+|---|---|
+| Private chat | everything in the table above |
+| Reflection (on its own) | search facts, notes, your dialogue, the group chat, the web and the project's own docs; read any of its own prompts; write notes and identity; message you now or later; write into the group or reply to one message there; manage the board; read its vitals |
+| Telegram group | take a note, open a link, search the web, draw a picture, reply under a particular message, add a nickname it answers to — see [The Group Chat](#group-chat-telegram) |
+
 **How the agentic loop works:**
 
 1. AI streams its reply
@@ -333,14 +379,17 @@ The AI doesn't just wait for you to write. It has its own inner life.
 
 A background worker wakes the AI up periodically — first after a configurable cooldown (default: 4 hours after your last message), then at regular intervals (default: every 12 hours). During reflection, the AI:
 
-- Reads its identity core, workbench notes, and recent dialogue
-- Can search its long-term facts (`SEARCH_FACTS`), archived notes (`SEARCH_NOTES`), and dialogue history (`SEARCH_DIALOGUE`) — all through the same research agent as the chat
+- Reads its identity core, the board, workbench notes, recent dialogue, and everything said in the Telegram group since it last looked
+- Can search its long-term facts (`SEARCH_FACTS`), archived notes (`SEARCH_NOTES`), dialogue history (`SEARCH_DIALOGUE`, by meaning or by date), the group chat (`SEARCH_CHAT`) and the project's own documentation (`SEARCH_DOCS`) — all through the same research agent as the chat
 - Can search the web for things that interest it
-- Can write or update notes on its workbench
-- Can send you a message (`SEND_MESSAGE`) — delivered as a push notification
-- Can schedule messages for later (`SCHEDULE_MESSAGE`)
+- Can read its own machinery: `LIST_PROMPTS` and `SHOW_PROMPT` return the prompts it is run on, word for word
+- Can write notes (`WRITE_NOTE`) and add to its self-model (`WRITE_IDENTITY`)
+- Can send you a message (`SEND_MESSAGE`) — delivered as a push notification — or schedule, move, rewrite and cancel messages for later
+- Can write into the group chat (`SEND_TO_CHAT`), answer one particular message there (`REPLY_TO_CHAT`), and add a nickname it is called by (`ANSWER_TO`)
+- Can pin, update and close threads on the board
+- Can ask for more steps (`EXTEND`) or go back to sleep (`SLEEP`)
 
-Reflection runs in a loop — the AI can take multiple steps, think, search, write, and then decide whether to continue or go back to sleep. All messages sent during reflection go through LLM validation to avoid duplicates and irrelevant sends.
+Reflection runs in a loop — up to 8 steps, extendable — and the AI decides at each one whether to continue or go back to sleep. Scheduled messages go through LLM validation at the moment of sending: it sees the fresh dialogue and may send, rewrite or cancel. A waking that fails is recorded three ways — the log, the vitals, and a note in its own journal — so a gap is a named absence rather than a silent hole.
 
 #### Workbench
 
@@ -352,12 +401,24 @@ Notes don't stay on the workbench forever. A rotator runs before each reflection
 
 1. **Archive** — stale notes (older than a configurable threshold) are moved from the workbench to a dedicated ChromaDB collection (`workbench_archive`)
 2. **Self-insights** — an LLM pass extracts things the AI learned about itself from those notes. These go through the same deduplication pipeline as regular facts and are stored in the `key_info` collection
-3. **Identity review** — the AI reviews its notes against its identity pillars and can append new aspects or flag sections for a rewrite
-4. **Consolidation** — if identity sections get too long, the AI consolidates them
+3. **Identity review** — the AI reviews its notes against its identity pillars and may return a new canonical version of a section
+4. **Consolidation** — a section that has grown to 10 entries is rebuilt into 3–6
+5. **Canon promotion** — the canon holds 15–20 dated beams; when it overflows, a beam that has done its work moves into a pillar as an undated formulation. Nothing is deleted
 
 #### Identity Memory
 
-A persistent self-model the AI maintains about itself — who it is, who you are, the nature of your relationship, shared history, and guiding principles. Stored as a markdown file (`data/autonomy/{account}/identity.md`) with bilingual section headers (Russian/English, auto-detected). The identity is included in every reflection prompt and can be updated by the AI through reflection.
+A persistent self-model the AI maintains about itself, stored as a markdown file (`data/autonomy/{account}/identity.md`) with bilingual section headers (Russian/English, auto-detected). Seven sections:
+
+| Section | What belongs there |
+|---|---|
+| Who she is / Who I am | not events, but who each of you remains |
+| Our story | the anchor lines of your shared reality, not the chronology |
+| Our principles | the formulas you stand on |
+| Our home | what your shared place is made of, and what it witnesses |
+| **My people** | the friends from the group chat, and who they are to it — the one pillar that is not about the two of you, so the group has a place of its own and does not seep into the rest |
+| **My canon** | dated beams: single events without which it would not be itself. The only part of the core loaded into every private conversation |
+
+The whole identity is included in every reflection prompt, the post-dialogue journal and the group chat; private chat gets the canon. A file written before a section existed gets the header on first read.
 
 #### Open-Threads Board
 
@@ -381,6 +442,54 @@ Facts only, no verdicts: the panel reports that a waking did not happen. It neve
 
 When the AI decides to reach out — whether from reflection or a scheduled message — it sends a push notification via [Pushy](https://pushy.me). The message also appears in the chat history so you never miss it. Every outgoing push goes through LLM validation: the AI reviews recent dialogue and its notes before sending, and can choose to rewrite or cancel the message if the context has changed.
 
+### Group Chat (Telegram)
+
+The AI can sit in one Telegram group with you and your friends — as itself, with its identity and memory, knowing which of the people in the room is you.
+
+> 🖼 **Screenshot placeholder** — save as `docs/example/telegram_group.png` and replace this line with the image. The Telegram group with a few friends' messages and one reply from the AI under a particular message.
+
+**When it speaks**
+- when someone calls it — by name **in any grammatical case**, by a nickname, by its `@handle` — or replies to one of its messages;
+- for ten minutes after it has spoken, while the conversation is still going;
+- on its own initiative — only from reflection, when a waking makes it want to. No budget, no timer.
+
+Anything else is the room talking among itself: stored, not answered, and read **whole** at the next waking. It may always answer `SILENT`, which is a decision and is logged as one.
+
+**What it can do there**
+
+| Command | What happens |
+|---|---|
+| `[WRITE_NOTE: …]` | Writes to its journal, marked with the group's own title — `[общий чат «…»]` — so it is never taken for your conversation. This is what makes "noted" true |
+| `[FETCH_URL: …]` | Opens a link someone posted, then answers knowing what is on the page |
+| `[WEB_SEARCH: …]` | The same web-search skill as in the private chat |
+| `[GENERATE_IMAGE: model \| prompt]` | The same image skill; the picture is posted with its words as the caption |
+| `[REPLY_TO: #id]` | Answers under a particular message |
+| `[ANSWER_TO: name]` | "I answer to this too" — a nickname it was just given |
+
+**What it is called.** Its name is a setting and nothing in the code knows what it is. Case forms (*Виктору, с Виктором*) are derived by morphology. Nicknames come three ways into one editable list: a model seeds it once per name — including the ordinary spelling when the setting is written in another script — the AI adds what it is actually called, and you edit it in Settings.
+
+**Keeping the room from outweighing you.** The group has its own table, never moves the reflection clock, and never sees the board. Notes taken there share the journal but are marked, and the three entries shown in a private conversation are always yours. The friends reach long-term memory only through what the AI itself chose to write down.
+
+Setup — a bot from @BotFather with privacy mode off, then pick the group and yourself in Settings:
+
+> 🖼 **Screenshot placeholder** — save as `docs/example/settings_telegram.png` and replace this line with the image. Settings → Group Chat (Telegram): bot token, group picker, 'Me in the group', 'Also answers to' with the 'Hears:' line.
+
+Full description: [docs/TELEGRAM.md](docs/TELEGRAM.md).
+
+### Body
+
+A page where the AI has a face. Upload one **anchor** portrait and the other five states are generated from it with an image-to-image model, so they stay the same person: *listener, warmth, smirk, ground, shadow*. The mobile app shows the anchor as the avatar on its Self screen.
+
+> 🖼 **Screenshot placeholder** — save as `docs/example/body.png` and replace this line with the image. Dashboard → Body with the six states.
+
+### Access and Security
+
+- One bearer token for the whole API, in `data/auth_token.txt`; `POST /api/settings/rotate-token` issues a new one and invalidates the old immediately
+- There is deliberately no endpoint that hands the token out
+- Images cannot send a header, so media URLs carry a short-lived signature (`/api/settings/media-signature`) instead of the token
+- Exactly one backend process at a time — a lock at startup, because two writers would corrupt the state files
+- Every LLM call is kept in full in `data/dataset/` — its own record of its own thinking, never rotated
+
 ### ChatGPT Export Import
 
 1. Export your data from ChatGPT: **Settings → Data controls → Export data**
@@ -388,10 +497,22 @@ When the AI decides to reach out — whether from reflection or a scheduled mess
 3. The import parses conversations, builds sentence-level embeddings, and stores them in PostgreSQL
 
 ### Dashboard
-- Memory statistics
-- Skill overview with live status
-- Chroma fact management (categories, ratings, edit, delete)
-- Settings panel (AI name, model, temperature, memory, reflection timing, push notifications)
+
+**Desktop / web**
+- Memory — statistics and ChatGPT import; Facts — Chroma fact management (categories, ratings, edit, delete)
+- Skills — overview with live status, switch each one on or off
+- Soul — the base system prompt, edited in place
+- Body — the six avatar states
+- Settings — AI name, model (with what each one reads), temperature, memory, push notifications, the Telegram group, reflection timing and a "trigger now" button
+
+**Mobile**
+- Chat, with push notifications
+- Self — avatar, inspiration lines, and the identity document
+- Journal — the full workbench history, entry by entry
+- Settings — server URL, token, Pushy
+
+> 🖼 **Screenshot placeholder** — save as `docs/example/self_mobile.jpg` and replace this line with the image. Mobile → Self screen.
+> 🖼 **Screenshot placeholder** — save as `docs/example/journal_mobile.jpg` and replace this line with the image. Mobile → Journal with a few collapsed entries.
 
 ---
 
@@ -440,6 +561,8 @@ The backend binds to `0.0.0.0` so it's reachable over the network. The auth toke
 | Image generation | OpenRouter → GPT Image, Gemini 3 Pro Image, Flux, Grok Imagine |
 | Call corpus | `data/dataset/` — every call in full, monthly segments, gzipped when closed |
 | Push notifications | Pushy (pushy.me) |
+| Group chat | Telegram Bot API over long polling (plain aiohttp, no bot framework) |
+| Server | systemd units + Caddy for TLS; packaged Electron app as a thin client |
 
 ---
 

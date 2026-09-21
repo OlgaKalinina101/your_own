@@ -5,17 +5,22 @@ user and their friends, based on the actual code. It is the first room he is
 in with more than two people, and everything here is shaped by one rule: the
 room must not outweigh the two of them.
 
+> 🖼 **Screenshot placeholder** — save as `docs/example/telegram_group.png` and replace this line with the image. The group with a few friends' messages and one reply from him under a particular message.
+
 ---
 
 ## Setup
 
-Three settings, all on the desktop Settings page under *Group Chat (Telegram)*:
+Four settings, all on the desktop Settings page under *Group Chat (Telegram)*:
 
 | Setting | What it is |
 |---|---|
 | `telegram_bot_token` | A bot from @BotFather. Add the bot to the group and disable its privacy mode (`/setprivacy` → Disable) so it receives every message, not only mentions. |
 | `telegram_chat_id` | The one group he reads. Picked from the rooms the bot has been spoken to in. |
 | `telegram_owner_user_id` | The user's own Telegram account — how he tells her apart from everyone else. Picked from the people seen in the group. |
+| `telegram_aliases` | Nicknames he answers to besides `ai_name`. Seeded once per name by a model, added to by him, edited here. The page shows every spelling this expands to ("Hears: …"). |
+
+> 🖼 **Screenshot placeholder** — save as `docs/example/settings_telegram.png` and replace this line with the image. Settings → Group Chat (Telegram) with all four fields filled.
 
 `PUT /api/settings/telegram/verify` asks Telegram who the token belongs to;
 `GET /api/settings/telegram/status` returns the rooms and people seen so far.
@@ -176,13 +181,37 @@ Where the group could leak into his long-term self, and what stops it:
 
 ---
 
+## Reading the journal
+
+The group's modules log through the project's `setup_logger`, so `journalctl -u your_own-backend | grep telegram` tells the whole story of a reply:
+
+```
+[telegram.listener]  poll: 7 update(s), 7 from the room, 7 new
+[telegram.responder] the room is his to answer: addressed
+[telegram.responder] searching: Anthropic Claude Пентагон …
+[telegram.responder] noted: Ptica Arop — из Украины …
+[telegram.responder] said: По крупному — да, ты изложила верно …
+[telegram.responder] chose silence (conversation), notes=0
+[telegram.responder] the model returned nothing on round 1 — a failure, not a choice
+[telegram.addressing] he now answers to 'Звёздочка'
+```
+
+Two things worth knowing when the room seems quiet:
+
+- A reply is composed **inside** the polling task. While he thinks — minutes, on a reasoning model with a web search — the room is not being polled. Nothing is lost: Telegram holds the messages and the next poll takes them as one batch, answered once.
+- The reply budget is `REPLY_MAX_TOKENS` (8000). It also sets how long the client waits for the provider (`max_tokens // 25` seconds, three attempts). At 16000 a dead provider once cost 21 minutes of deafness, logged as "chose silence"; both are fixed, and the constant is the place to look if it happens again.
+
+Restart the backend only when the last responder line is an outcome (`said`, `chose silence`, `a failure`): the listener acknowledges messages before he answers, so a restart mid-reply loses that reply for good.
+
 ## Key files
 
 | File | Role |
 |---|---|
 | `infrastructure/telegram/client.py` | Bot API on aiohttp: `getMe`, `getUpdates`, `sendMessage` |
 | `infrastructure/telegram/listener.py` | poll → rows, the cursor, the rooms seen |
-| `infrastructure/telegram/responder.py` | addressed / in conversation, the reply, his own row |
+| `infrastructure/telegram/responder.py` | addressed / in conversation, the reply loop and its six commands, his own row |
+| `infrastructure/telegram/addressing.py` | what he answers to: case forms, nicknames, the one-time seeding |
+| `infrastructure/telegram/prompts/name_aliases.md` | the question the seeding asks |
 | `infrastructure/telegram/prompts/group_reply.md` | who he is in the room |
 | `infrastructure/database/models/channel_message.py` | the table |
 | `infrastructure/database/repositories/channel_repo.py` | reads and writes |
