@@ -184,7 +184,7 @@ Notes are for what is his — what stirred in him, what is happening today. What
 
 | Reader | What it gets |
 |---|---|
-| The group reply | cards of whoever is speaking (by Telegram id) or named (by name, any case) in the last 30 messages — up to 6 |
+| The group reply | cards of whoever is speaking (by Telegram id) or named (by name, any case) in the last 15 messages — up to 6 |
 | Reflection | cards of whoever spoke since he last read the room, an index of the rest, `[SHOW_PERSON]` |
 | Private chat | up to 2 cards, only when she names someone |
 | Post-analysis, push validator | nothing |
@@ -202,7 +202,7 @@ It is not a Chroma collection on purpose. Semantic retrieval answers "what is th
 
 | Store | Technology | What it holds | When it's used |
 |---|---|---|---|
-| **channel_messages** | PostgreSQL + pgvector | Every message of the Telegram group, his own included, each with an embedding | The last 30 when he replies in the room; everything since he last read it at a waking; `[SEARCH_CHAT: query]` from reflection |
+| **channel_messages** | PostgreSQL + pgvector | Every message of the Telegram group, his own included, each with an embedding | The last 15 when he replies in the room; everything since he last read it at a waking; `[SEARCH_CHAT: query]` from reflection |
 
 `[SEARCH_CHAT]` is a research-agent source (`probe_chat` in `infrastructure/agents/sources.py`): cosine similarity with a floor of 0.35, each hit shown with three neighbours on either side, because a single line out of a group chat is rarely legible alone. Without an embedding model it falls back to a substring match and says so in the log.
 

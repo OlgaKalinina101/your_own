@@ -124,7 +124,7 @@ nickname a friend gave him within the hour.
 
 | Command | What happens |
 |---|---|
-| `[WRITE_NOTE: text]` | The note lands on his workbench marked with the group's own title — `[общий чат «ИИ-СОПРОТИВЛЕНИЕ»]` / `[group chat «…»]`, or `[общий чат с друзьями]` when the title is not known. Not "from the chat": his conversation with her is a chat too. This is what makes "noted" true: on the first day of the live group he told three people he had written something down, with nothing to write with. A note may accompany `SILENT`. Whole notes are kept even when the reply itself was clipped. |
+| `[WRITE_NOTE: text]` | For what the room *did to him* — not for what was said in it: he reads the room whole at his waking, so a note that retells it is waste. Two days in, half his notes were minutes of the meeting («Лина принесла новость про Трампа»); the hint now says so, and facts about people go to `[ABOUT]`. The note lands on his workbench marked with the group's own title — `[общий чат «ИИ-СОПРОТИВЛЕНИЕ»]` / `[group chat «…»]`, or `[общий чат с друзьями]` when the title is not known. Not "from the chat": his conversation with her is a chat too. This is what makes "noted" true: on the first day of the live group he told three people he had written something down, with nothing to write with. A note may accompany `SILENT`. Whole notes are kept even when the reply itself was clipped. |
 | `[FETCH_URL: link]` | The link is opened through the research agent's web source; the page comes back to him and he writes the reply again. The draft next to the command is not posted. At most `MAX_ROUNDS` (3) model calls per reply. |
 | `[WEB_SEARCH: query]` | The private chat's web-search skill, reused: its description is inserted word for word, the query goes through the same research agent, and what comes back is worded by the skill's own `web_continuation` / `web_empty` sections. Shares the three-round limit with `FETCH_URL`. The room adds one pointer under it, not a rule: *sometimes a question asks not for accuracy but for a response*, and a search costs minutes the room spends waiting. On the first day with search he went to the web on five replies of eight. |
 | `[GENERATE_IMAGE: model \| prompt]` | The private chat's image skill, reused — including its own description of which model takes what, inserted word for word, plus one rule of the room's own: anything crude or bodily goes to `grok` only, `gpt5` and `gemini` are for the plainly innocent, and in doubt it is `grok`. The picture is posted with his words as the caption (`sendPhoto`); words longer than a caption go first as a message. |
@@ -150,7 +150,7 @@ Commands are stripped before posting; the friends see only his text.
 
 It exists because of what two days of the group left on his desk. Ten of fourteen notes were not journal entries — «Ptica Arop — из Украины», «у Сомни месяц с Гроком» — third person, short, true forever, on a surface that forgets in 48 hours. Traced through the rotator they went nowhere useful: the insight pass asks "is this about you?", the identity review wants pillars, and what is left is the notes archive, which the group reply never reads.
 
-- **Looked up by who, not by what.** Speakers by Telegram id; anyone named in the last 30 messages by name, in any grammatical case (the addressing module's morphology, reused). Up to six cards, each capped at 700 characters, newest lines kept.
+- **Looked up by who, not by what.** Speakers by Telegram id; anyone named in the last 15 messages by name, in any grammatical case (the addressing module's morphology, reused). Up to six cards, each capped at 700 characters, newest lines kept.
 
   Ptica writes «мне Элайя такое написал!» — he is handed **two** cards: Ptica's, because Ptica is speaking, and Элайя's, because Элайя was named. «Спросил у Элайи, а Панде не сказал» brings three. The name does not have to be in the latest line: the whole window is searched, so someone mentioned five messages ago is still in view.
 
@@ -172,7 +172,7 @@ It exists because of what two days of the group left on his desk. Ten of fourtee
 | workbench | last 2 private entries + last 5 notes from the chat | where the two of them are today, and what he has already written down here — so a thing is noted once |
 | open_threads | **no** | the board is the two of them; he is in public |
 | memory (Chroma facts) | yes | recalled from the lines that pulled him in |
-| last 30 messages of the room | yes | her lines marked *(она)*, his *(ты)*; every line carries its `#id`; an album of bare photos is folded into one line |
+| last 15 messages of the room | yes | her lines marked *(она)*, his *(ты)*; every line carries its `#id`; an album of bare photos is folded into one line |
 
 The prompt says out loud that the room is shared and that what is between the
 two of them stays between them by default.

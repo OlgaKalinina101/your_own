@@ -123,7 +123,7 @@ This document describes the full data flow of the system — from a chat message
 │    neither →  stored, not answered; read whole at the next waking    │
 │                                                                      │
 │    Context: identity (whole) + 2 private desk entries + his 5        │
-│    latest notes from the room + Chroma facts + last 30 messages,     │
+│    latest notes from the room + Chroma facts + last 15 messages,     │
 │    her lines marked. NO board: the room is public.                   │
 │                                                                      │
 │    A short loop, at most 3 model calls:                              │
@@ -292,7 +292,7 @@ The soul (`data/soul.md`) **is** injected into every chat as the base system pro
 | AI voice and character | `data/soul.md` | Human (settings UI) | Every chat (system prompt) |
 | Distilled facts about user + AI | ChromaDB `key_info` | `[SAVE_MEMORY]`, rotator self-insights | Every chat (memory block), reflection search |
 | Raw past conversations | PostgreSQL `messages` | Chat handler | `[SEARCH_DIALOGUE]` skill |
-| The Telegram group, every message incl. his own | PostgreSQL `channel_messages` | Telegram listener, responder, `[SEND_TO_CHAT]` | The group reply (last 30), reflection (everything since he last read), `[SEARCH_CHAT]` |
+| The Telegram group, every message incl. his own | PostgreSQL `channel_messages` | Telegram listener, responder, `[SEND_TO_CHAT]` | The group reply (last 15), reflection (everything since he last read), `[SEARCH_CHAT]` |
 | Telegram polling cursor, rooms seen, bot identity | `data/autonomy/{id}/telegram.json` | Telegram listener | Listener, settings page |
 | How far he has read the group | `data/autonomy/{id}/group_seen_until.txt` | Reflection, after a waking that happened | Reflection |
 | Archived workbench notes | ChromaDB `workbench_archive` | Rotator | Reflection `[SEARCH_NOTES]` |

@@ -196,10 +196,16 @@ class TestNotedMeansNoted:
         for body in (ru, en):
             for cmd in ("[WRITE_NOTE:", "[FETCH_URL:", "{web_skill}", "{image_skill}", "[REPLY_TO:"):
                 assert cmd in body
-        # What the note is for is said plainly in both: it is the one thing
-        # that makes "noted" true.
-        assert "единственное, что делает «запомнил» правдой" in ru
-        assert 'the only thing that makes "noted" true' in en
+        # The two shelves are told apart plainly in both: a fact makes "noted"
+        # true on a card; a note is for what the room did to him — and the room
+        # itself he will read whole at his waking, so retelling it is waste.
+        # Written after two days in which half his notes were minutes of the
+        # meeting: «Лина принесла новость про Трампа».
+        assert ru.index("единственное, что делает «запомнил» правдой") > ru.index("[ABOUT: имя")
+        assert "не пересказывай её" in ru and "Факт о человеке — в карточку" in ru
+        assert en.index('the only thing that makes "noted" true') > en.index("[ABOUT: name")
+        assert "do not retell it" in en and "A fact about a person goes on their card" in en
+        assert "что происходит сегодня" not in ru and "what is happening today" not in en
 
 
 class TestTheDeskStaysTheirs:

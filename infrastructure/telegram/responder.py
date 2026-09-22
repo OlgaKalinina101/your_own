@@ -64,8 +64,10 @@ _PROMPT = "infrastructure/telegram/prompts/group_reply.md"
 
 # How long after his last line the room still counts as talking with him.
 CONVERSATION_WINDOW_MINUTES = 10
-# How much of the room he is shown when deciding.
-ROOM_CONTEXT_MESSAGES = 30
+# How much of the room he is shown when deciding. Was 30; fifteen is enough to
+# follow a conversation, and the transcript is the largest part of every
+# prompt that the cache cannot serve (2026-09-22).
+ROOM_CONTEXT_MESSAGES = 15
 # The word that means "I choose not to".
 SILENT = "SILENT"
 # Reasoning models bill thinking against max_tokens, so the budget covers both.
