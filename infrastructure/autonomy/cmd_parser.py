@@ -100,9 +100,24 @@ class UpdateThread:
     new_text: str = ""
 
 
+@dataclass
+class About:
+    """A line on a person's card: ``[ABOUT: name | fact]``."""
+    who: str
+    fact: str
+
+
+@dataclass
+class Forget:
+    """Strike lines from a card, or the card: ``[FORGET: name | words]``."""
+    who: str
+    fragment: str = ""
+
+
 ParsedCommand = (
     SendMessage | SendToChat | ScheduleMessage | CancelMessage | CancelAllScheduled
     | RescheduleMessage | RewriteMessage | PinThread | UnpinThread | UpdateThread
+    | About | Forget
 )
 
 # ── Regexes ───────────────────────────────────────────────────────────────────
@@ -154,6 +169,14 @@ _UPDATE_THREAD_RE = re.compile(
     rf"\[UPDATE[_ ]THREAD:\s*{_ID}\s*\|\s*(?P<text>.+?)\]",
     re.IGNORECASE | re.DOTALL,
 )
+_ABOUT_RE = re.compile(
+    r"\[ABOUT:\s*(?P<who>[^|\]]+?)\s*\|\s*(?P<fact>[^\]]+?)\s*\]",
+    re.IGNORECASE | re.DOTALL,
+)
+_FORGET_RE = re.compile(
+    r"\[FORGET:\s*(?P<who>[^|\]]+?)\s*(?:\|\s*(?P<fragment>[^\]]*?)\s*)?\]",
+    re.IGNORECASE | re.DOTALL,
+)
 
 # All command regexes in one pass — used for stripping commands from free text.
 _ALL_CMDS_RE = re.compile(
@@ -161,7 +184,9 @@ _ALL_CMDS_RE = re.compile(
     r"|SEND[_ ]TO[_ ]CHAT:[^\]]*"
     r"|REPLY[_ ]TO[_ ]CHAT:[^\]]*"
     r"|CANCEL[_ ]ALL[_ ]SCHEDULED"
-    r"|(?:PIN|UNPIN|UPDATE)[_ ]THREAD:[^\]]*)\]",
+    r"|(?:PIN|UNPIN|UPDATE)[_ ]THREAD:[^\]]*"
+    r"|ABOUT:[^\]]*"
+    r"|FORGET:[^\]]*)\]",
     re.IGNORECASE | re.DOTALL,
 )
 
@@ -204,6 +229,12 @@ def parse_commands(response: str) -> list[ParsedCommand]:
     for m in _REWRITE_RE.finditer(response):
         ts = " ".join(m.group("ts").split())
         hits.append((m.start(), RewriteMessage(ts_str=ts, new_text=m.group("text").strip())))
+
+    for m in _ABOUT_RE.finditer(response):
+        hits.append((m.start(), About(who=m.group("who").strip(), fact=m.group("fact").strip())))
+
+    for m in _FORGET_RE.finditer(response):
+        hits.append((m.start(), Forget(who=m.group("who").strip(), fragment=(m.group("fragment") or "").strip())))
 
     for m in _UNPIN_THREAD_RE.finditer(response):
         hits.append((m.start(), UnpinThread(thread_id=m.group("id"))))

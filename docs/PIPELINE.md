@@ -80,6 +80,8 @@ This document describes the full data flow of the system — from a chat message
 │  [RESCHEDULE_MESSAGE: t1→t2] → updates scheduled_at                  │
 │  [REWRITE_MESSAGE: t|text]   → updates task payload                  │
 │  [PIN/UNPIN/UPDATE_THREAD]   → the open-threads board                │
+│  [ABOUT: name|fact]          → a line on a person's card             │
+│  [FORGET: name|words]        → strikes lines from a card             │
 │  free text (journal)         → wb.append() → workbench.md            │
 │                                                                      │
 │  A command that fails, or that finds nothing to act on, is named in  │

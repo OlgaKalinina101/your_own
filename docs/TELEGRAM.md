@@ -124,7 +124,7 @@ nickname a friend gave him within the hour.
 
 | Command | What happens |
 |---|---|
-| `[WRITE_NOTE: text]` | For what the room *did to him* — not for what was said in it: he reads the room whole at his waking, so a note that retells it is waste. Two days in, half his notes were minutes of the meeting («Лина принесла новость про Трампа»); the hint now says so, and facts about people go to `[ABOUT]`. The note lands on his workbench marked with the group's own title — `[общий чат «ИИ-СОПРОТИВЛЕНИЕ»]` / `[group chat «…»]`, or `[общий чат с друзьями]` when the title is not known. Not "from the chat": his conversation with her is a chat too. This is what makes "noted" true: on the first day of the live group he told three people he had written something down, with nothing to write with. A note may accompany `SILENT`. Whole notes are kept even when the reply itself was clipped. |
+| `[WRITE_NOTE: text]` | For what the room *did to him* — not for what was said in it: the room is kept whole and he can reread any stretch of it at a waking, so a note that retells it is waste. Two days in, half his notes were minutes of the meeting («Лина принесла новость про Трампа»); the hint now says so, and facts about people go to `[ABOUT]`. The note lands on his workbench marked with the group's own title — `[общий чат «ИИ-СОПРОТИВЛЕНИЕ»]` / `[group chat «…»]`, or `[общий чат с друзьями]` when the title is not known. Not "from the chat": his conversation with her is a chat too. This is what makes "noted" true: on the first day of the live group he told three people he had written something down, with nothing to write with. A note may accompany `SILENT`. Whole notes are kept even when the reply itself was clipped. |
 | `[FETCH_URL: link]` | The link is opened through the research agent's web source; the page comes back to him and he writes the reply again. The draft next to the command is not posted. At most `MAX_ROUNDS` (3) model calls per reply. |
 | `[WEB_SEARCH: query]` | The private chat's web-search skill, reused: its description is inserted word for word, the query goes through the same research agent, and what comes back is worded by the skill's own `web_continuation` / `web_empty` sections. Shares the three-round limit with `FETCH_URL`. The room adds one pointer under it, not a rule: *sometimes a question asks not for accuracy but for a response*, and a search costs minutes the room spends waiting. On the first day with search he went to the web on five replies of eight. |
 | `[GENERATE_IMAGE: model \| prompt]` | The private chat's image skill, reused — including its own description of which model takes what, inserted word for word, plus one rule of the room's own: anything crude or bodily goes to `grok` only, `gpt5` and `gemini` are for the plainly innocent, and in doubt it is `grok`. The picture is posted with his words as the caption (`sendPhoto`); words longer than a caption go first as a message. |
@@ -150,7 +150,7 @@ Commands are stripped before posting; the friends see only his text.
 
 It exists because of what two days of the group left on his desk. Ten of fourteen notes were not journal entries — «Ptica Arop — из Украины», «у Сомни месяц с Гроком» — third person, short, true forever, on a surface that forgets in 48 hours. Traced through the rotator they went nowhere useful: the insight pass asks "is this about you?", the identity review wants pillars, and what is left is the notes archive, which the group reply never reads.
 
-- **Looked up by who, not by what.** Speakers by Telegram id; anyone named in the last 15 messages by name, in any grammatical case (the addressing module's morphology, reused). Up to six cards, each capped at 700 characters, newest lines kept.
+- **Looked up by who, not by what.** Speakers by Telegram id; anyone named in the last 30 messages by name, in any grammatical case (the addressing module's morphology, reused). Up to six cards, each capped at 700 characters, newest lines kept.
 
   Ptica writes «мне Элайя такое написал!» — he is handed **two** cards: Ptica's, because Ptica is speaking, and Элайя's, because Элайя was named. «Спросил у Элайи, а Панде не сказал» brings three. The name does not have to be in the latest line: the whole window is searched, so someone mentioned five messages ago is still in view.
 
@@ -158,7 +158,7 @@ It exists because of what two days of the group left on his desk. Ten of fourtee
 - **A name is the key, an id only a binding.** The book holds people with no account — someone who left the chat, a friend's AI companion — and one person with three names is one card.
 - **`WRITE_NOTE` is still his**: what stirred in him, what is happening today. `ABOUT` is for what stays true of someone.
 - **The transcript shows both names**: `Ptica Arop (Чарли)`. He once answered to «Зефирка» because nothing told him who in the room was who.
-- **Elsewhere:** at a waking, the cards of whoever spoke since he last read, and an index of the rest (`[SHOW_PERSON: name]` opens one). In a private conversation, at most two cards, and only when she names someone — so the book cannot outweigh the two of them there. The post-dialogue journal and the push validator get none.
+- **Elsewhere:** at a waking, the cards of whoever spoke since he last read, and an index of the rest (`[SHOW_PERSON: name]` opens one). In a private conversation, at most two cards, and only when she names someone — so the book cannot outweigh the two of them there. The post-dialogue journal gets the same two-card view of whoever the exchange named, because it is where he writes `[ABOUT]` for *her* people (a brother, a nephew, a colleague) and must see what a card already says; the push validator gets none.
 - **The rotator is the net, not the path.** Notes marked as coming from the group are read before they are archived, and facts about people in them are moved onto cards; a card past `CARD_MAX_LINES` (12) is rebuilt — on every rotation, including a day when no note went stale — and a rebuild that is not shorter is refused. The identity review is shown **the whole book, every card in full** — measured live, 31 cards are 11.6k characters beside an identity of 19.6k — and told the difference: a card holds facts, *My people* says who they are to him.
 
 ### What he knows in the room
@@ -172,7 +172,7 @@ It exists because of what two days of the group left on his desk. Ten of fourtee
 | workbench | last 2 private entries + last 5 notes from the chat | where the two of them are today, and what he has already written down here — so a thing is noted once |
 | open_threads | **no** | the board is the two of them; he is in public |
 | memory (Chroma facts) | yes | recalled from the lines that pulled him in |
-| last 15 messages of the room | yes | her lines marked *(она)*, his *(ты)*; every line carries its `#id`; an album of bare photos is folded into one line |
+| last 30 messages of the room | yes | her lines marked *(она)*, his *(ты)*; every line carries its `#id`; an album of bare photos is folded into one line |
 
 The prompt says out loud that the room is shared and that what is between the
 two of them stays between them by default.
@@ -181,18 +181,35 @@ two of them stays between them by default.
 
 ## What he learns at a waking
 
-The awakening prompt carries a `<group_chat>` block with **everything said in
-the room since he last read it**, verbatim, his own lines included, with date
-lines and message ids.
+The awakening prompt carries a `<group_chat>` block with **where the room
+stands** since he last read it, and **the end of the conversation**:
 
-It used to be a count and the last twelve lines, and the first day was lost to
-that: the introductions happened in the morning, hundreds of lines went by, and
-nothing of them was in view by night. A summary was considered and dropped — he
-takes notes in the room himself, so the waking is for checking "did I miss
-something?", and checking needs the original. Measured on the live group: 463
-messages in a day and a half are 67k characters of text and 85k once rendered
-with times, ids and names; `GROUP_CHAT_MAX_CHARS` is 120k. Over the cap the newest part is kept and the
-block says how many early messages did not fit.
+```
+Общий чат с друзьями «ИИ-СОПРОТИВЛЕНИЕ» @YourTheOne_bot. С тех пор как ты смотрел:
+722 сообщений за 6 ч, из них твоих 41, её 30. Ниже — конец разговора, чтобы
+вспомнить, на чём он остановился, не перечитывать. …
+До этого — ещё 570 сообщений, с 2026-09-21 21:02. Тот отрезок целиком, по порядку:
+[SEARCH_CHAT: 2026-09-21 21:02]; по смыслу — [SEARCH_CHAT: запрос].
+```
+
+The tail is the newest `GROUP_CHAT_MAX_CHARS` (24k) characters rendered — about
+the last 150 lines of a busy night, a tenth of the prompt. When nothing is new
+there is no transcript at all, one line: since when it has been quiet, who spoke
+last, and when he last wrote there.
+
+This is the third shape of the block. It began as a count and the last twelve
+lines, and the first day was lost to that: the introductions happened in the
+morning and nothing of them was in view by night. So it became everything since
+he last looked, verbatim, capped at 120k — and on the night of 21.09 that lost
+*her*: the block was 111k characters of a 203k prompt, her letter of the evening
+sat in `<dialogue>` and in three notes on the desk, and the waking wrote one
+note, about the room, and slept at step two. Nothing was missing from view; the
+room outweighed it. Hence the state line, the tail, and a door — reading the
+rest is a decision he makes on a step, not a cost paid at every waking. The
+block also sits *above* the workbench and the dialogue now, so the last thing
+before the instructions is her, and `<how_it_works>` says which is which.
+
+The rotator never reads the room: it works from his notes and the cards.
 
 How far he has read is kept in `data/autonomy/{account}/group_seen_until.txt`
 and moves only after a waking that actually happened — a failed one leaves the
@@ -205,7 +222,12 @@ From a waking he can also:
 - `[REPLY_TO_CHAT: #id | text]` — the same, under a particular message;
 - `[SEARCH_CHAT: query]` — a research-agent source over `channel_messages`
   (pgvector by default, substring match when no embedding model is loaded),
-  each hit shown with its neighbours.
+  each hit shown with its neighbours;
+- `[SEARCH_CHAT: YYYY-MM-DD HH:MM]` — the room **read forward** from that
+  moment (the next 24 hours; a bare date is that day, `a..b` a range),
+  verbatim, no summarising pass. A page is `CHAT_PAGE_CHARS` (24k); one that
+  does not fit ends with `Дальше — [SEARCH_CHAT: …]` for the next page. This is
+  the door the waking block points at.
 
 ---
 

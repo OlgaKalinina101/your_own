@@ -5,6 +5,7 @@ Covers what each probe turns storage rows into:
   2. Facts — Chroma key_info rows with category and id.
   3. Notes — Chroma archive filtered by distance, plus the live workbench.
   4. Registry — every Source has a probe.
+  5. Chat — the room read forward from a moment, paged.
 
 Chroma, the workbench and Postgres are all stubbed; nothing here touches a
 real store.
@@ -18,7 +19,7 @@ from __future__ import annotations
 import os
 import sys
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
@@ -280,3 +281,113 @@ class TestRegistry:
             if not name.startswith("_") and isinstance(value, str)
         }
         assert declared == set(sources.PROBES)
+
+
+# ── Chat by time ──────────────────────────────────────────────────────────────
+
+class TestChatByTime:
+    """``[SEARCH_CHAT: 2026-09-21 21:00]`` reads the room forward from there.
+
+    The waking block shows the end of a stretch and points here for the rest;
+    a page that does not fit ends with the same command for the next page.
+    """
+
+    @staticmethod
+    def _row(i, text="реплика", is_self=False, is_owner=False):
+        import uuid
+
+        from infrastructure.database.models.channel_message import ChannelMessage
+        return ChannelMessage(
+            id=uuid.uuid4(), account_id="default", channel="telegram", chat_id="-100",
+            message_id=i, sender_id="1", sender_name="Чарли", is_owner=is_owner, is_self=is_self,
+            text=f"{text} {i}", created_at=datetime(2026, 9, 21, 17, 0, tzinfo=timezone.utc) + timedelta(minutes=i),
+        )
+
+    @pytest.fixture
+    def room(self, monkeypatch):
+        import infrastructure.database.repositories.channel_repo as repo_mod
+        from infrastructure import settings_store
+
+        settings_store.save_settings({"telegram_chat_id": "-100"})
+        captured = {}
+
+        class FakeRepo:
+            rows: list = []
+
+            def __init__(self, session):
+                pass
+
+            async def get_between(self, account_id, chat_id, start, end, limit=600):
+                captured["start"], captured["end"] = start, end
+                return [r for r in FakeRepo.rows if start <= r.created_at <= end][:limit]
+
+        monkeypatch.setattr(repo_mod, "ChannelRepository", FakeRepo)
+        FakeRepo.captured = captured
+        return FakeRepo
+
+    @pytest.mark.asyncio
+    async def test_a_moment_reads_the_next_day_verbatim_with_no_summary(self, room):
+        room.rows = [self._row(i) for i in range(1, 6)]
+
+        result = await sources.probe_chat("2026-09-21 21:00", make_ctx())
+
+        assert room.captured["end"] - room.captured["start"] == timedelta(hours=24)
+        assert result.is_brief, "a page is read as it is, not retold"
+        assert len(result.hits) == 1 and result.hits[0]["meta"]["kind"] == "chat"
+        text = result.hits[0]["text"]
+        assert "реплика 1" in text and "реплика 5" in text and "#3 " in text
+        assert "Дальше" not in text
+
+    @pytest.mark.asyncio
+    async def test_a_bare_date_is_that_day_and_a_range_is_the_range(self, room):
+        room.rows = []
+        await sources.probe_chat("2026-09-21", make_ctx())
+        a = room.captured["start"], room.captured["end"]
+        assert (a[1] - a[0]) == timedelta(hours=23, minutes=59, seconds=59)
+
+        await sources.probe_chat("2026-09-19..2026-09-21", make_ctx())
+        b = room.captured["start"], room.captured["end"]
+        assert (b[1] - b[0]) == timedelta(days=2, hours=23, minutes=59, seconds=59)
+
+    @pytest.mark.asyncio
+    async def test_a_page_that_does_not_fit_ends_with_the_next_page(self, room, monkeypatch):
+        from infrastructure.clock import format_local
+
+        monkeypatch.setattr(sources, "CHAT_PAGE_CHARS", 400)
+        room.rows = [self._row(i, "длинная реплика " + "х" * 30) for i in range(1, 41)]
+
+        result = await sources.probe_chat("2026-09-21 21:00", make_ctx())
+
+        text = result.hits[0]["text"]
+        assert "реплика 1\n" in text or "х 1" in text or "#1 " in text, "reading forward keeps the oldest"
+        assert "#40 " not in text
+        shown = [int(m) for m in __import__("re").findall(r"#(\d+) ", text)]
+        nxt = room.rows[len(shown)]
+        assert f"Дальше — [SEARCH_CHAT: {format_local(nxt.created_at)}]" in text
+
+    @pytest.mark.asyncio
+    async def test_a_range_page_keeps_its_end_on_the_pointer(self, room, monkeypatch):
+        monkeypatch.setattr(sources, "CHAT_PAGE_CHARS", 400)
+        room.rows = [self._row(i, "длинная реплика " + "х" * 30) for i in range(1, 41)]
+
+        result = await sources.probe_chat("2026-09-21..2026-09-22", make_ctx())
+        assert "..2026-09-22]" in result.hits[0]["text"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("arg", ["2026-13-01", "2026-09-21 25:00", "2026-09-22..2026-09-21"])
+    async def test_a_bad_stamp_is_empty_not_an_error(self, room, arg):
+        room.rows = [self._row(1)]
+        assert (await sources.probe_chat(arg, make_ctx())).hits == []
+
+    @pytest.mark.asyncio
+    async def test_only_a_stamp_turns_the_page(self, room, monkeypatch):
+        """A query is a query; the page reader is reached by a stamp alone."""
+        called = []
+
+        async def fake_by_time(arg, ctx, chat_id):
+            called.append(arg)
+            return sources.ProbeResult()
+
+        monkeypatch.setattr(sources, "_chat_by_time", fake_by_time)
+        await sources.probe_chat(" 2026-09-21 21:00 ", make_ctx())
+        assert called == ["2026-09-21 21:00"]

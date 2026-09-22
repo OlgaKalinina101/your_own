@@ -44,8 +44,9 @@ class TestPromptLoading:
             current_time="2026-03-17 22:00",
             identity="Я — Victor. Я забочусь о тебе.",
             workbench="[2026-03-17 21:00] Она устала.",
-            open_threads="1. Ютуб — вернуть — с 17.03.2026 · #a1b2",
+            open_threads="1. [#a1b2 · 3 дн без изменений] Ютуб — вернуть",
             pending_pushes_block="",
+            people="",
             timezone_label="Asia/Yerevan",
         )
         return system, user
@@ -67,15 +68,33 @@ class TestPromptLoading:
         _, user = self._build("ru")
         for cmd in ["SCHEDULE_MESSAGE", "CANCEL_MESSAGE",
                     "RESCHEDULE_MESSAGE", "REWRITE_MESSAGE",
-                    "PIN_THREAD", "UNPIN_THREAD", "UPDATE_THREAD"]:
+                    "PIN_THREAD", "UNPIN_THREAD", "UPDATE_THREAD", "ABOUT", "FORGET"]:
             assert cmd in user, f"Command {cmd} missing from RU prompt"
 
     def test_en_has_all_commands(self):
         _, user = self._build("en")
         for cmd in ["SCHEDULE_MESSAGE", "CANCEL_MESSAGE",
                     "RESCHEDULE_MESSAGE", "REWRITE_MESSAGE",
-                    "PIN_THREAD", "UNPIN_THREAD", "UPDATE_THREAD"]:
+                    "PIN_THREAD", "UNPIN_THREAD", "UPDATE_THREAD", "ABOUT", "FORGET"]:
             assert cmd in user, f"Command {cmd} missing from EN prompt"
+
+    @pytest.mark.parametrize("lang", ["ru", "en"])
+    def test_the_board_hint_says_what_a_thread_is_and_where_the_rest_goes(self, lang):
+        """By 22.09 the board held 34 threads averaging 533 characters, each a
+        chronicle rewritten 82 times in ten days from here, carrying people,
+        lessons and calendars — because the old hint said only «нельзя
+        уронить» and never said where else anything could go."""
+        _, user = self._build(lang)
+        if lang == "ru":
+            assert "одна-две фразы" in user and "переписать её, а не дописать" in user
+            assert "Факт о человеке — в карточку, [ABOUT]" in user
+            assert "Нить без следующего хода — не нить" in user
+            assert "нельзя уронить" not in user
+        else:
+            assert "one or two sentences" in user and "rewriting it, not appending" in user
+            assert "goes on their card, [ABOUT]" in user
+            assert "A thread with no next move is not a thread" in user
+            assert "must not drop" not in user
 
     def test_pending_pushes_block_injected(self):
         user = get_prompt(
@@ -86,6 +105,7 @@ class TestPromptLoading:
             identity="...",
             workbench="...",
             open_threads="(пусто)",
+            people="(пусто)",
             pending_pushes_block="Запланированные: [22:30] «Привет»",
             timezone_label="Asia/Yerevan",
         )
@@ -277,3 +297,30 @@ def test_simulated_llm_response(desc, response, expected_types, note_fragment):
     assert [type(c) for c in cmds] == expected_types, f"[{desc}] wrong command types"
     if note_fragment:
         assert note_fragment in note, f"[{desc}] note missing expected fragment"
+
+
+class TestTheBookFromTheJournal:
+    """[ABOUT] and [FORGET] parse into typed commands and strip from the note."""
+
+    def test_about_parses_with_its_two_halves(self):
+        from infrastructure.autonomy.cmd_parser import About
+
+        parsed = parse_commands("Брат. [ABOUT: Шурин | младший брат, в армии, звонит ~21:00]")
+        assert parsed == [About(who="Шурин", fact="младший брат, в армии, звонит ~21:00")]
+
+    def test_forget_with_and_without_words(self):
+        from infrastructure.autonomy.cmd_parser import Forget
+
+        assert parse_commands("[FORGET: Шурин | в армии]") == [Forget(who="Шурин", fragment="в армии")]
+        assert parse_commands("[FORGET: Шурин]") == [Forget(who="Шурин", fragment="")]
+
+    def test_both_are_stripped_from_the_note(self):
+        note = strip_commands("Она рассказала про брата. [ABOUT: Шурин | в армии]\n[FORGET: Гор | йога]")
+        assert note == "Она рассказала про брата."
+
+    def test_the_two_names_are_shared_with_the_sanitiser(self):
+        from infrastructure.autonomy.commands import LEAKABLE_COMMANDS, NAMES
+        from infrastructure.autonomy.cmd_parser import About, Forget
+
+        assert NAMES[About] == "ABOUT" and NAMES[Forget] == "FORGET"
+        assert "ABOUT" in LEAKABLE_COMMANDS and "FORGET" in LEAKABLE_COMMANDS

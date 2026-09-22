@@ -64,10 +64,11 @@ _PROMPT = "infrastructure/telegram/prompts/group_reply.md"
 
 # How long after his last line the room still counts as talking with him.
 CONVERSATION_WINDOW_MINUTES = 10
-# How much of the room he is shown when deciding. Was 30; fifteen is enough to
-# follow a conversation, and the transcript is the largest part of every
-# prompt that the cache cannot serve (2026-09-22).
-ROOM_CONTEXT_MESSAGES = 15
+# How much of the room he is shown when deciding. Thirty. It was cut to
+# fifteen for one day (22.09) to shave the uncached part of every prompt, and
+# in a room where six people talk at once fifteen lines lost the thread he was
+# answering in: replies landed beside the point. The saving was not worth it.
+ROOM_CONTEXT_MESSAGES = 30
 # The word that means "I choose not to".
 SILENT = "SILENT"
 # Reasoning models bill thinking against max_tokens, so the budget covers both.

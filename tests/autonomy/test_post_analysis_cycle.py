@@ -132,6 +132,33 @@ class TestWhatHeWritesDown:
 
         assert [t[2] for t in threads.list_threads(ACCOUNT)] == ["усталость"]
 
+    @pytest.mark.asyncio
+    async def test_a_fact_about_her_people_reaches_a_card_not_the_board(self, analysis):
+        """Her brother lived on the board for a month (#79c3, 469 characters)
+        because the journal had no other place to put him."""
+        from infrastructure.autonomy import people
+
+        analysis.chunks = ["Брат. [ABOUT: Шурин | её младший брат, в армии, видеозвонки ~21:00]"]
+
+        await _run(user_text="Шурин звонил из блиндажа", assistant_text="передай ему привет")
+
+        card = people.find(ACCOUNT, "Шурин")
+        assert card is not None and "в армии" in people.render_card(card)
+        assert threads.list_threads(ACCOUNT) == []
+        assert "ABOUT" not in workbench.read(ACCOUNT)
+
+    @pytest.mark.asyncio
+    async def test_the_journal_is_shown_the_card_of_whoever_was_named(self, analysis):
+        from infrastructure.autonomy import people
+
+        people.add_fact(ACCOUNT, "Шурин", "её младший брат")
+        analysis.chunks = ["SKIP"]
+
+        await _run(user_text="Шурин звонил", assistant_text="рад")
+
+        sent = analysis.requests[-1]["messages"][-1]["content"]
+        assert "<people>" in sent and "её младший брат" in sent
+
 
 class TestWhenSomethingHeAskedForDoesNotHappen:
     """His journal is what he reads to remember. It must not describe a plan

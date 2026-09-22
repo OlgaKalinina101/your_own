@@ -9,6 +9,17 @@ A fourth memory layer, distinct from the other three:
     just above the workbench. Nothing leaves by time — only by an explicit
     "done" (unpin). That is the whole point: the board is present-continuous.
 
+A thread is a line, not a log. By 22.09 the board held 34 threads averaging
+533 characters — each one a chronicle («НОВОЕ 21.08», «20.09 ЧЕТВЁРТАЯ ТОЧКА»)
+that ``update`` had replaced wholesale, history and all, 82 times in ten days
+from the post-dialogue journal alone. 18k characters rode on every chat
+message. The desk decays in 48 hours, identity is gated to pillars, and the
+cards were reachable only from the group, so the board was the one shelf that
+kept things: people, lessons, calendars all landed here. The hint now says what
+a thread is and where the rest goes; the renderer shows the id first, so there
+is no trailing label to copy back into the text; and the date moves on
+``update``, so the age means "untouched for", not "pinned on".
+
 Stored at ``data/autonomy/{account_id}/threads.md``, one line per thread:
 
     # Доска открытых нитей
@@ -20,17 +31,32 @@ updated from autonomy (indices would shift as threads come and go).
 """
 from __future__ import annotations
 
-import logging
 import re
 import uuid
 from datetime import datetime
 from pathlib import Path
 from threading import Lock
 
+from infrastructure.logging.logger import setup_logger
 from infrastructure.paths import AUTONOMY_DIR
 from infrastructure.state_file import atomic_write_text
 
-logger = logging.getLogger("autonomy.threads")
+logger = setup_logger("autonomy.threads")
+
+#: Past this many threads the block says so, once, at the top.
+BOARD_IN_VIEW = 15
+
+# The rendered label he used to see after the text — «— с 30.08.2026 · 23 дн · #8296»
+# — and copied into UPDATE_THREAD six times out of thirty-four, stale numbers
+# and all. The renderer no longer prints it there, and a leftover is trimmed.
+_ECHO_RE = re.compile(
+    r"\s*[—-]\s*(?:с|since)\s+\d{2}\.\d{2}\.\d{4}(?:\s*·\s*(?:\d+\s*(?:дн|d)|сегодня|today))?(?:\s*·\s*#[0-9a-f]{3,})?\s*$",
+    re.IGNORECASE,
+)
+
+
+def _clean(text: str) -> str:
+    return _ECHO_RE.sub("", (text or "").strip()).strip()
 
 _DATA_DIR = AUTONOMY_DIR
 _lock = Lock()
@@ -98,7 +124,7 @@ def pin(account_id: str, text: str) -> str | None:
     """
     from infrastructure.clock import TIME_FMT, now_local
 
-    clean = (text or "").strip()
+    clean = _clean(text)
     if not clean:
         return None
 
@@ -149,9 +175,16 @@ def unpin(account_id: str, thread_id: str, *, archive: bool = True) -> bool:
 
 
 def update(account_id: str, thread_id: str, new_text: str) -> bool:
-    """Replace a thread's text, keeping its id and original date (age preserved)."""
+    """Replace a thread's text, keeping its id; the date becomes now.
+
+    The date used to be preserved, so a thread he rewrote every evening still
+    read «23 дн» — the age of the pin, which nobody needed. What he needs to
+    see is how long a thread has gone untouched.
+    """
+    from infrastructure.clock import TIME_FMT, now_local
+
     tid = (thread_id or "").lstrip("#").strip().lower()
-    clean = (new_text or "").strip()
+    clean = _clean(new_text)
     if not clean:
         return False
 
@@ -160,7 +193,7 @@ def update(account_id: str, thread_id: str, new_text: str) -> bool:
     updated: list[Thread] = []
     for t in threads:
         if t[0].lower() == tid:
-            updated.append((t[0], t[1], clean))
+            updated.append((t[0], now_local().strftime(TIME_FMT), clean))
             found = True
         else:
             updated.append(t)
@@ -175,7 +208,7 @@ def update(account_id: str, thread_id: str, new_text: str) -> bool:
 
 
 def _age_label(ts_str: str, lang: str) -> str:
-    """Render a thread's touch-date as 'с DD.MM.YYYY' plus its age in days."""
+    """How long a thread has gone untouched: «сегодня», «15 дн без изменений»."""
     from infrastructure.clock import TIME_FMT, now_local, user_tz
 
     try:
@@ -183,20 +216,18 @@ def _age_label(ts_str: str, lang: str) -> str:
     except ValueError:
         return ""
 
-    date_part = ts.strftime("%d.%m.%Y")
     days = (now_local() - ts).days
     if days <= 0:
-        age = "сегодня" if lang == "ru" else "today"
-    elif lang == "ru":
-        age = f"{days} дн"
-    else:
-        age = f"{days}d"
-    return f"с {date_part} · {age}" if lang == "ru" else f"since {date_part} · {age}"
+        return "сегодня" if lang == "ru" else "today"
+    return f"{days} дн без изменений" if lang == "ru" else f"{days}d untouched"
 
 
 def render_block(account_id: str, lang: str = "ru", empty_label: str = "") -> str:
-    """Render the board as a numbered, dated list for injection into a prompt.
+    """Render the board as a numbered list for injection into a prompt.
 
+    The id and the age come first — ``1. [#7e74 · 15 дн без изменений] Элла…``
+    — so the line ends with his own words and there is nothing after them to
+    copy back. Past ``BOARD_IN_VIEW`` threads the block opens with the count.
     Returns *empty_label* when the board is empty.
     """
     threads = list_threads(account_id)
@@ -204,6 +235,12 @@ def render_block(account_id: str, lang: str = "ru", empty_label: str = "") -> st
         return empty_label
 
     lines: list[str] = []
+    if len(threads) > BOARD_IN_VIEW:
+        lines.append(
+            f"На доске {len(threads)} нитей — больше, чем помещается в поле зрения."
+            if lang == "ru" else
+            f"{len(threads)} threads on the board — more than fit in view."
+        )
     for i, (tid, ts, text) in enumerate(threads, 1):
-        lines.append(f"{i}. {text} — {_age_label(ts, lang)} · #{tid}")
+        lines.append(f"{i}. [#{tid} · {_age_label(ts, lang)}] {text}")
     return "\n".join(lines)

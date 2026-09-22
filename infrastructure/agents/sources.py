@@ -13,12 +13,13 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 from infrastructure.agents.research import Citation, ProbeResult, ResearchContext, Source
 
+from infrastructure.clock import format_local, local_to_utc
 from infrastructure.paths import PROJECT_ROOT
 logger = logging.getLogger("agents.sources")
 
@@ -430,10 +431,98 @@ async def probe_docs(query: str, ctx: ResearchContext) -> ProbeResult:
 
 CHAT_MIN_SIMILARITY = 0.35
 CHAT_NEIGHBOURS = 3
+#: One page of the room read forward: about as much as the waking block itself
+#: carries, so a step that turns the page has the same budget as the waking.
+CHAT_PAGE_CHARS = 24_000
+CHAT_PAGE_ROWS = 600
+_STAMP_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})(?:[ T](\d{2}):(\d{2}))?$")
+
+
+def _parse_stamp(text: str, *, end: bool) -> datetime | None:
+    """A local ``YYYY-MM-DD`` or ``YYYY-MM-DD HH:MM`` as a UTC instant.
+
+    A bare date means its start — or, for the end of a range, its last second.
+    He writes local times because we show him local times.
+    """
+    m = _STAMP_RE.match(text.strip())
+    if not m:
+        return None
+    try:
+        day = datetime.strptime(m.group(1), "%Y-%m-%d")
+    except ValueError:
+        return None
+    if m.group(2) is not None:
+        hour, minute = int(m.group(2)), int(m.group(3))
+        if hour > 23 or minute > 59:
+            return None
+        day = day.replace(hour=hour, minute=minute)
+    elif end:
+        day = day.replace(hour=23, minute=59, second=59)
+    return local_to_utc(day)
+
+
+async def _chat_by_time(arg: str, ctx: ResearchContext, chat_id: str) -> ProbeResult:
+    """The room read forward from a moment — the door the waking block points at.
+
+    ``2026-09-21 21:00`` reads the next 24 hours; ``2026-09-21`` that day;
+    ``a..b`` the range. What does not fit on one page ends with a pointer to
+    the next: the same command from the first line that was left out.
+    """
+    from infrastructure.autonomy.helpers import get_ai_name
+    from infrastructure.database.repositories.channel_repo import ChannelRepository
+    from infrastructure.telegram.responder import render_room
+
+    start_s, _, end_s = arg.partition("..")
+    start = _parse_stamp(start_s, end=False)
+    if start is None:
+        logger.warning("[sources.chat] bad time argument: %r", arg)
+        return ProbeResult()
+    if end_s.strip():
+        end = _parse_stamp(end_s, end=True)
+    elif _STAMP_RE.match(start_s.strip()).group(2) is not None:
+        end = start + timedelta(hours=24)
+    else:
+        end = _parse_stamp(start_s, end=True)
+    if end is None or end < start:
+        logger.warning("[sources.chat] bad time range: %r", arg)
+        return ProbeResult()
+
+    rows = await ChannelRepository(ctx.db).get_between(
+        ctx.account_id, chat_id, start, end, limit=CHAT_PAGE_ROWS + 1,
+    )
+    if not rows:
+        logger.info("[sources.chat] nothing between %s and %s", start, end)
+        return ProbeResult()
+
+    ai_name = get_ai_name()
+    kept = rows[:CHAT_PAGE_ROWS]
+    text = render_room(kept, ai_name=ai_name, lang=ctx.lang, with_dates=True)
+    while len(text) > CHAT_PAGE_CHARS and len(kept) > 1:
+        kept = kept[: max(1, len(kept) * 9 // 10)]
+        text = render_room(kept, ai_name=ai_name, lang=ctx.lang, with_dates=True)
+    if len(kept) < len(rows):
+        next_stamp = format_local(rows[len(kept)].created_at)
+        tail = f"..{end_s.strip()}" if end_s.strip() else ""
+        text += (
+            f"\nДальше — [SEARCH_CHAT: {next_stamp}{tail}]" if ctx.lang == "ru"
+            else f"\nNext — [SEARCH_CHAT: {next_stamp}{tail}]"
+        )
+    span = f"{format_local(kept[0].created_at)} — {format_local(kept[-1].created_at)}"
+    hit = {
+        "text": text,
+        "meta": {"kind": "chat", "time": span, "message_id": kept[0].message_id,
+                 "score": None, "sender": kept[0].sender_name},
+    }
+    # Verbatim is the point of reading forward: no summarising pass.
+    return ProbeResult(hits=[hit], citations=[Citation(title=span, ref=str(kept[0].message_id))], is_brief=True)
 
 
 async def probe_chat(query: str, ctx: ResearchContext) -> ProbeResult:
-    """Lines from the group chat that resemble the query, each with context."""
+    """Lines from the group chat that resemble the query, each with context.
+
+    A ``YYYY-MM-DD[ HH:MM]`` (or ``a..b``) argument reads the room forward from
+    that moment instead — see ``_chat_by_time``.
+    """
     if ctx.db is None:
         logger.warning("[sources.chat] no db session — search skipped")
         return ProbeResult()
@@ -446,6 +535,9 @@ async def probe_chat(query: str, ctx: ResearchContext) -> ProbeResult:
     if not chat_id:
         logger.info("[sources.chat] no group configured")
         return ProbeResult()
+
+    if _DATE_RE.match(query.strip()):
+        return await _chat_by_time(query.strip(), ctx, chat_id)
 
     top_n = int(ctx.extras.get("top_n", 6))
     params: dict = {"a": ctx.account_id, "c": chat_id, "n": top_n}

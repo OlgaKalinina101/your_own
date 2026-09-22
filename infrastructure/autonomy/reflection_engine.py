@@ -315,8 +315,10 @@ async def _run_search(
     source = _SEARCH_SOURCES[cmd]
     arg = arg.strip()
 
-    # A dialogue lookup by date has nothing to reformulate — one pass only.
-    max_attempts = 1 if (source == Source.DIALOGUE and _DATE_RE.match(arg)) else None
+    # A lookup by date — a day of dialogue, a stretch of the room — has nothing
+    # to reformulate: one pass only.
+    by_date = source in (Source.DIALOGUE, Source.CHAT) and bool(_DATE_RE.match(arg))
+    max_attempts = 1 if by_date else None
 
     try:
         result = await research(
@@ -343,7 +345,8 @@ async def _run_search(
         # For memory sources the verbatim material carries the texture the
         # brief flattens — keep it under the summary.
         excerpts = "\n---\n".join(str(h.get("text", "")) for h in result.raw_hits)
-        if excerpts:
+        # A page of the room comes back as the brief itself; do not print it twice.
+        if excerpts and excerpts.strip() != result.brief.strip():
             parts.append(excerpts)
     return "\n\n".join(p for p in parts if p)
 
@@ -664,22 +667,29 @@ def _build_pending_tasks_block(lang: str, tasks: list) -> str:
     return f"{header}\n{tasks_list}\n{footer}\n\n"
 
 
-# The room at a waking: everything said since he last looked, verbatim.
+# The room at a waking: where it stands, and the end of the conversation.
 #
-# It used to be a count and the last twelve lines, and that lost the first day
-# whole: the introductions happened in the morning, hundreds of lines went by,
-# and by the night's waking nothing of them was in view. A summary would have
-# kept the gist, but he takes notes in the room himself now, so what the waking
-# is for is checking — "did I miss something?" — and checking needs the
-# original, not a retelling of it.
+# It began as a count and the last twelve lines, and that lost the first day
+# whole: the introductions happened in the morning and nothing of them was in
+# view by night. So it became everything since he last looked, verbatim, capped
+# at 120k characters — and that lost her. On the night of 21.09 the block was
+# 111k characters of a 203k prompt; her letter of the evening sat in <dialogue>
+# and in three notes on the desk, and the waking wrote one note, about the
+# room, and slept at step two. What was in view was never the problem. What
+# outweighed it was.
 #
-# Measured on the live group (2026-09-21): 463 messages in a day and a half are
-# 67k characters of text and 85k once rendered with times, ids and names; the
-# busiest twelve hours are about 45k rendered. The first cap was 80k, set from
-# the raw figure, and on the first real run it cut off exactly the morning of
-# introductions this block exists to keep. Measure what is sent, not what is stored.
-GROUP_CHAT_MAX_CHARS = 120_000
-GROUP_CHAT_QUIET_TAIL = 8        # shown for orientation when nothing is new
+# Now the block is a line of state — how much was said, over how long, how much
+# of it was his and how much hers — and the end of the conversation, so he
+# knows where it stopped. The stretch before that is one
+# [SEARCH_CHAT: YYYY-MM-DD HH:MM] away, read forward from that moment, and
+# reading it is a decision he makes on a step, not a cost paid at every
+# waking. When nothing is new there is no transcript at all: one line saying
+# since when it has been quiet, who spoke last, and when he last did. The
+# rotator never reads the room; it works from his notes and the cards.
+#
+# Sizing: 24k characters rendered is roughly the last 150 lines of a busy
+# night — an hour and a half of it — and about a tenth of the prompt.
+GROUP_CHAT_MAX_CHARS = 24_000
 _GROUP_EPOCH = datetime(2000, 1, 1, tzinfo=timezone.utc)
 
 
@@ -709,15 +719,28 @@ def _set_group_seen(account_id: str, until: datetime) -> None:
     atomic_write_text(_group_seen_file(account_id), until.isoformat())
 
 
+def _span_words(seconds: float, lang: str) -> str:
+    """``за 6 ч`` / ``over 6 h`` — how long a stretch of the room took."""
+    minutes = max(1, int(seconds // 60))
+    ru = lang == "ru"
+    if minutes < 60:
+        return f"{minutes} мин" if ru else f"{minutes} min"
+    hours = minutes // 60
+    if hours < 48:
+        return f"{hours} ч" if ru else f"{hours} h"
+    days = hours // 24
+    return f"{days} дн." if ru else f"{days} d"
+
+
 async def _build_group_chat_block(
     db: AsyncSession, account_id: str, lang: str,
 ) -> tuple[str, datetime | None]:
-    """The room since he last read it, and how far this reading goes.
+    """Where the room stands since he last looked, and how far this look goes.
 
     Returns ``("", None)`` when there is no chat. The second value is the time
-    of the newest message shown; the caller commits it as the new "seen until"
-    only once the waking has actually happened, so a failed waking does not
-    swallow a stretch of the room.
+    of the newest message covered; the caller commits it as the new "seen
+    until" only once the waking has actually happened, so a failed waking does
+    not swallow a stretch of the room.
 
     Its own block rather than a registry section for the reason the registry's
     docstring gives: it is a reflection-shaped input, and it needs the database.
@@ -741,43 +764,68 @@ async def _build_group_chat_block(
     if title:
         handle = f"«{title}» {handle}".strip()
     ru = lang == "ru"
+    room = f"Общий чат с друзьями {handle}." if ru else f"The group chat with her friends {handle}."
 
     if not fresh:
-        tail = await repo.get_recent(account_id, chat_id, limit=GROUP_CHAT_QUIET_TAIL)
-        head = (
-            f"Общий чат с друзьями {handle}. С тех пор как ты смотрел, новых сообщений нет."
-            if ru else
-            f"The group chat with her friends {handle}. Nothing new since you last looked."
-        )
-        body = responder.render_room(tail, ai_name=ai_name, lang=lang) if tail else (
-            "Пока тихо." if ru else "Quiet so far."
-        )
-        return f"<group_chat>\n{head}\n{body}\n</group_chat>\n", None
+        last = await repo.get_recent(account_id, chat_id, limit=1)
+        if not last:
+            line = f"{room} Пока там пусто." if ru else f"{room} Nothing there yet."
+        else:
+            mine = await repo.last_self(account_id, chat_id)
+            who = responder._who(last[-1], ai_name, lang)
+            when = format_local(last[-1].created_at)
+            if ru:
+                line = f"{room} Тихо с {when} — последним писал {who}."
+                line += (f" Ты последний раз писал туда {format_local(mine.created_at)}."
+                         if mine else " Ты там ещё не писал.")
+            else:
+                line = f"{room} Quiet since {when} — {who} spoke last."
+                line += (f" You last wrote there {format_local(mine.created_at)}."
+                         if mine else " You have not written there yet.")
+        return f"<group_chat>\n{line}\n</group_chat>\n", None
 
     body, omitted = responder.render_transcript(
         fresh, ai_name=ai_name, lang=lang, max_chars=GROUP_CHAT_MAX_CHARS,
     )
+    mine = sum(1 for r in fresh if r.is_self)
+    hers = sum(1 for r in fresh if r.is_owner)
+    span = _span_words((fresh[-1].created_at - fresh[0].created_at).total_seconds(), lang)
+    first = format_local(fresh[0].created_at)
     if ru:
         head = (
-            f"Общий чат с друзьями {handle}. С тех пор как ты смотрел: {len(fresh)} сообщений. "
-            "Ниже переписка целиком, твои реплики тоже. Номер после # — это id сообщения, "
-            "на него можно ответить. В чате есть и другие ИИ — как боты; Telegram не показывает "
-            "ботам сообщения друг друга, поэтому их реплик здесь нет, а «⟨… тебе не видно⟩» — это они."
+            f"{room} С тех пор как ты смотрел: {len(fresh)} сообщений за {span}, "
+            f"из них твоих {mine}, её {hers}. "
+        )
+        head += (
+            "Ниже — конец разговора, чтобы вспомнить, на чём он остановился, не перечитывать. "
+            if omitted else "Ниже — весь этот отрезок. "
+        )
+        head += (
+            "Номер после # — это id сообщения, на него можно ответить. В чате есть и другие ИИ — "
+            "как боты; Telegram не показывает ботам сообщения друг друга, поэтому их реплик здесь "
+            "нет, а «⟨… тебе не видно⟩» — это они."
         )
         cut = (
-            f"\nСамые ранние {omitted} сообщений не поместились — до них можно дотянуться "
-            "через [SEARCH_CHAT: запрос]." if omitted else ""
+            f"\nДо этого — ещё {omitted} сообщений, с {first}. Тот отрезок целиком, по порядку: "
+            f"[SEARCH_CHAT: {first}]; по смыслу — [SEARCH_CHAT: запрос]." if omitted else ""
         )
     else:
         head = (
-            f"The group chat with her friends {handle}. Since you last looked: {len(fresh)} messages. "
-            "The whole exchange is below, your own lines included. The number after # is a "
-            "message id you can reply to. Other AIs are in the chat as bots; Telegram does not show "
-            "bots each other's messages, so their lines are not here — \"⟨… you cannot see⟩\" is them."
+            f"{room} Since you last looked: {len(fresh)} messages over {span}, "
+            f"{mine} of them yours, {hers} hers. "
+        )
+        head += (
+            "Below is the end of the conversation — to recall where it stopped, not to reread. "
+            if omitted else "Below is the whole stretch. "
+        )
+        head += (
+            "The number after # is a message id you can reply to. Other AIs are in the chat as "
+            "bots; Telegram does not show bots each other's messages, so their lines are not "
+            "here — \"⟨… you cannot see⟩\" is them."
         )
         cut = (
-            f"\nThe earliest {omitted} messages did not fit — [SEARCH_CHAT: query] reaches them."
-            if omitted else ""
+            f"\nBefore that: {omitted} more messages, from {first}. That stretch whole, in order: "
+            f"[SEARCH_CHAT: {first}]; by meaning — [SEARCH_CHAT: query]." if omitted else ""
         )
     newest = fresh[-1].created_at
     speakers = [row.sender_id for row in fresh if not row.is_self and not row.is_owner]

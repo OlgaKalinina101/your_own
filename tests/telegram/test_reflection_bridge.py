@@ -159,11 +159,13 @@ def _row(text, message_id, *, is_self=False, is_owner=False, sender="Чарли"
 
 
 class TestWhatHeWakesUpKnowing:
-    """The waking shows the room whole since he last read it.
+    """The waking shows where the room stands, and the end of the conversation.
 
     It used to show a count and the last twelve lines, and the first day was
-    lost to that: the introductions scrolled out of every window before he
-    woke. These hold the replacement.
+    lost to that. Then it showed everything since he last looked, and on the
+    night of 21.09 that was 111k characters of a 203k prompt: her letter of
+    the evening was in view and the waking never reached it. These hold the
+    third shape — a line of state, the tail, and a door to the rest.
     """
 
     @pytest.fixture
@@ -193,6 +195,10 @@ class TestWhatHeWakesUpKnowing:
                 _Repo.asked_since.append(since)
                 return [r for r in _Repo.rows if r.created_at > since][:limit]
 
+            async def last_self(self, account_id, chat_id):
+                mine = [r for r in _Repo.rows if r.is_self]
+                return mine[-1] if mine else None
+
         _Repo.rows, _Repo.asked_since = [], []
         monkeypatch.setattr(channel_repo, "ChannelRepository", _Repo)
         return _Repo
@@ -206,7 +212,7 @@ class TestWhatHeWakesUpKnowing:
         assert await _build_group_chat_block(None, ACCOUNT, "ru") == ("", None)
 
     @pytest.mark.asyncio
-    async def test_the_first_waking_reads_the_room_from_its_first_line(self, wired):
+    async def test_a_stretch_that_fits_is_shown_whole_with_its_counts(self, wired):
         from infrastructure import settings_store
         from infrastructure.autonomy.reflection_engine import _build_group_chat_block
 
@@ -220,8 +226,10 @@ class TestWhatHeWakesUpKnowing:
         block, until = await _build_group_chat_block(None, ACCOUNT, "ru")
 
         assert block.startswith("<group_chat>") and block.rstrip().endswith("</group_chat>")
-        assert "@viktor_bot" in block and "3 сообщений" in block
-        assert "Я тот самый Чарли с DeepSeek" in block, "the introductions are the point"
+        assert "@viktor_bot" in block and "3 сообщений за 9 ч" in block
+        assert "твоих 1, её 1" in block, "the line of state: was he there, was she"
+        assert "весь этот отрезок" in block and "конец разговора" not in block
+        assert "Я тот самый Чарли с DeepSeek" in block
         assert "Оля (она): мы!" in block and "Виктор (ты): и я" in block
         assert "#1 " in block, "ids are what REPLY_TO_CHAT points at"
         assert until == wired.rows[-1].created_at
@@ -252,7 +260,7 @@ class TestWhatHeWakesUpKnowing:
         assert engine._get_group_seen(ACCOUNT) is None
 
     @pytest.mark.asyncio
-    async def test_a_room_too_long_keeps_its_newest_part_and_says_what_is_missing(self, wired, monkeypatch):
+    async def test_a_room_too_long_keeps_its_end_and_points_at_the_rest(self, wired, monkeypatch):
         from infrastructure import settings_store
         from infrastructure.autonomy import reflection_engine as engine
 
@@ -263,11 +271,41 @@ class TestWhatHeWakesUpKnowing:
         block, until = await engine._build_group_chat_block(None, ACCOUNT, "ru")
 
         assert "сообщение номер 100 " in block and "сообщение номер 1 " not in block
-        assert "не поместились" in block and "[SEARCH_CHAT" in block
+        assert "конец разговора" in block, "he is told this is the tail, not the stretch"
+        # The door is the exact moment the stretch began, so the page read
+        # forward from it starts where the block does not.
+        from infrastructure.clock import format_local
+        first = format_local(wired.rows[0].created_at)
+        assert f"[SEARCH_CHAT: {first}]" in block and "До этого" in block
         assert until == wired.rows[-1].created_at
 
+    def test_the_cap_is_a_tenth_of_a_waking_not_half_of_it(self):
+        from infrastructure.autonomy import reflection_engine as engine
+
+        assert engine.GROUP_CHAT_MAX_CHARS <= 30_000
+
     @pytest.mark.asyncio
-    async def test_nothing_new_says_so_and_moves_nothing(self, wired):
+    async def test_nothing_new_is_one_line_of_state_and_no_transcript(self, wired):
+        from infrastructure import settings_store
+        from infrastructure.autonomy import reflection_engine as engine
+        from infrastructure.clock import format_local
+
+        settings_store.save_settings({"telegram_chat_id": ROOM, "ai_name": "Виктор"})
+        wired.rows = [
+            _row("моя реплика", 1, is_self=True, sender="Виктор", minutes_ago=3000),
+            _row("вчерашнее", 2, minutes_ago=900),
+        ]
+        engine._set_group_seen(ACCOUNT, wired.rows[-1].created_at)
+
+        block, until = await engine._build_group_chat_block(None, ACCOUNT, "ru")
+
+        assert "вчерашнее" not in block and "моя реплика" not in block, "a quiet room is not reread"
+        assert f"Тихо с {format_local(wired.rows[1].created_at)} — последним писал Чарли." in block
+        assert f"Ты последний раз писал туда {format_local(wired.rows[0].created_at)}." in block
+        assert until is None
+
+    @pytest.mark.asyncio
+    async def test_a_quiet_room_he_never_wrote_in_says_so(self, wired):
         from infrastructure import settings_store
         from infrastructure.autonomy import reflection_engine as engine
 
@@ -275,9 +313,31 @@ class TestWhatHeWakesUpKnowing:
         wired.rows = [_row("вчерашнее", 1, minutes_ago=900)]
         engine._set_group_seen(ACCOUNT, wired.rows[0].created_at)
 
-        block, until = await engine._build_group_chat_block(None, ACCOUNT, "ru")
-        assert "новых сообщений нет" in block and "вчерашнее" in block
-        assert until is None
+        block, _ = await engine._build_group_chat_block(None, ACCOUNT, "ru")
+        assert "Ты там ещё не писал." in block
+
+    def test_the_waking_puts_the_room_before_her_and_says_which_is_which(self):
+        """Models weigh the end of a prompt; the end is hers."""
+        from infrastructure.llm.prompt_loader import load_prompt
+
+        for lang in ("ru", "en"):
+            body = load_prompt("infrastructure/autonomy/prompts/reflection_awakening.md", lang=lang)
+            assert body.index("</open_threads>") < body.index("{group_chat_block}") < body.index("<workbench>")
+            assert body.index("<workbench>") < body.index("<dialogue>") < body.index("<instructions>")
+        ru = load_prompt("infrastructure/autonomy/prompts/reflection_awakening.md", lang="ru")
+        en = load_prompt("infrastructure/autonomy/prompts/reflection_awakening.md", lang="en")
+        assert "Просыпаешься ты из вашего с ней разговора" in ru and "не чтобы перечитать" in ru
+        assert "You wake out of your conversation with her" in en and "not to be reread" in en
+
+    @pytest.mark.parametrize("name", [
+        "reflection_awakening.md", "reflection_continuation.md", "reflection_after_action.md",
+    ])
+    @pytest.mark.parametrize("lang", ["ru", "en"])
+    def test_every_step_prompt_offers_the_room_by_time(self, name, lang):
+        from infrastructure.llm.prompt_loader import load_prompt
+
+        body = load_prompt(f"infrastructure/autonomy/prompts/{name}", lang=lang)
+        assert "[SEARCH_CHAT: YYYY-MM-DD HH:MM]" in body
 
     def test_the_awakening_prompt_has_the_slot_in_both_languages(self):
         from infrastructure.llm.prompt_loader import load_prompt

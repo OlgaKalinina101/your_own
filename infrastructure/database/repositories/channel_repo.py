@@ -110,6 +110,43 @@ class ChannelRepository:
         )
         return list((await self._session.execute(q)).scalars().all())
 
+    async def get_between(
+        self,
+        account_id: str,
+        chat_id: str,
+        start: datetime,
+        end: datetime,
+        limit: int = 600,
+    ) -> list[ChannelMessage]:
+        """The room from *start* to *end* inclusive, oldest first.
+
+        This is how a stretch is read forward — ``[SEARCH_CHAT: 2026-09-21 21:00]``
+        at a waking — as opposed to ``get_since``, which is how the waking
+        itself learns what is new.
+        """
+        q = (
+            select(ChannelMessage)
+            .where(ChannelMessage.account_id == account_id)
+            .where(ChannelMessage.chat_id == chat_id)
+            .where(ChannelMessage.created_at >= start)
+            .where(ChannelMessage.created_at <= end)
+            .order_by(ChannelMessage.created_at.asc(), ChannelMessage.message_id.asc())
+            .limit(limit)
+        )
+        return list((await self._session.execute(q)).scalars().all())
+
+    async def last_self(self, account_id: str, chat_id: str) -> Optional[ChannelMessage]:
+        """His own newest line in the room, or ``None`` if he has not written there."""
+        q = (
+            select(ChannelMessage)
+            .where(ChannelMessage.account_id == account_id)
+            .where(ChannelMessage.chat_id == chat_id)
+            .where(ChannelMessage.is_self.is_(True))
+            .order_by(ChannelMessage.created_at.desc(), ChannelMessage.message_id.desc())
+            .limit(1)
+        )
+        return (await self._session.execute(q)).scalars().first()
+
     async def count_since(self, account_id: str, chat_id: str, since: datetime) -> int:
         q = (
             select(func.count())

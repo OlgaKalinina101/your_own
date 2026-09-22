@@ -34,6 +34,8 @@ from infrastructure.autonomy.cmd_parser import (
     SendToChat,
     UnpinThread,
     UpdateThread,
+    About,
+    Forget,
 )
 from infrastructure.logging.logger import setup_logger
 
@@ -129,6 +131,8 @@ NAMES: dict[type, str] = {
     PinThread: "PIN_THREAD",
     UnpinThread: "UNPIN_THREAD",
     UpdateThread: "UPDATE_THREAD",
+    About: "ABOUT",
+    Forget: "FORGET",
 }
 
 # Said to him, so his language. The Russian wording is the one reflection
@@ -246,5 +250,18 @@ async def execute(
     if isinstance(cmd, UpdateThread):
         found = threads.update(account_id, cmd.thread_id.strip(), cmd.new_text.strip())
         return None if found else _say(lang, "no_thread", tid=cmd.thread_id.strip())
+
+    if isinstance(cmd, About):
+        # Her people — a brother, a nephew, a colleague — used to have no card,
+        # because only the room and the waking could write one; the journal
+        # after each exchange, where he actually learns of them, could not.
+        from infrastructure.autonomy import people
+
+        return people.add_fact(account_id, cmd.who, cmd.fact, lang=lang)
+
+    if isinstance(cmd, Forget):
+        from infrastructure.autonomy import people
+
+        return people.forget(account_id, cmd.who, cmd.fragment, lang=lang)
 
     raise ValueError(f"unknown command: {type(cmd).__name__}")

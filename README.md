@@ -382,8 +382,8 @@ The AI doesn't just wait for you to write. It has its own inner life.
 
 A background worker wakes the AI up periodically — first after a configurable cooldown (default: 4 hours after your last message), then at regular intervals (default: every 12 hours). During reflection, the AI:
 
-- Reads its identity core, the board, workbench notes, recent dialogue, and everything said in the Telegram group since it last looked
-- Can search its long-term facts (`SEARCH_FACTS`), archived notes (`SEARCH_NOTES`), dialogue history (`SEARCH_DIALOGUE`, by meaning or by date), the group chat (`SEARCH_CHAT`) and the project's own documentation (`SEARCH_DOCS`) — all through the same research agent as the chat
+- Reads its identity core, the board, workbench notes, recent dialogue, and where the Telegram group stands since it last looked — a line of counts and the end of the conversation, with the rest one `SEARCH_CHAT` away
+- Can search its long-term facts (`SEARCH_FACTS`), archived notes (`SEARCH_NOTES`), dialogue history (`SEARCH_DIALOGUE`, by meaning or by date), the group chat (`SEARCH_CHAT`, by meaning or read forward from a moment) and the project's own documentation (`SEARCH_DOCS`) — all through the same research agent as the chat
 - Can search the web for things that interest it
 - Can read its own machinery: `LIST_PROMPTS` and `SHOW_PROMPT` return the prompts it is run on, word for word
 - Can write notes (`WRITE_NOTE`) and add to its self-model (`WRITE_IDENTITY`)

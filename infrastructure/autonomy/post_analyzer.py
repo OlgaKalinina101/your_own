@@ -240,7 +240,10 @@ async def run_post_analysis(
 
     state = context.build(
         context.Consumer.POST_ANALYSIS,
-        context.Request(account_id=account_id, lang=lang),
+        context.Request(
+            account_id=account_id, lang=lang,
+            extras={"text": [current_user_text, current_assistant_text]},
+        ),
     )
     pending_block = await _build_pending_pushes_block(account_id, lang)
 

@@ -30,8 +30,10 @@ EXPECTED: dict[Consumer, set[str]] = {
         "identity", "workbench", "open_threads", "vitals",
         "current_time", "timezone_label",
     },
+    # The journal gets the cards of whoever the exchange named: it is where he
+    # writes [ABOUT] for her people, and must see what a card already says.
     Consumer.POST_ANALYSIS: {
-        "identity", "workbench", "open_threads", "current_time", "timezone_label",
+        "identity", "workbench", "open_threads", "people", "current_time", "timezone_label",
     },
     Consumer.PUSH_VALIDATION: {
         "workbench", "open_threads", "current_time", "timezone_label",

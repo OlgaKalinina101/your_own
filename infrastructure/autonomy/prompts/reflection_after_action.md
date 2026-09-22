@@ -16,6 +16,7 @@
 [SEARCH_DIALOGUE: запрос]
 [SEARCH_DOCS: запрос]  — документация проекта: README.md, docs/PIPELINE.md, docs/MEMORY.md, docs/TELEGRAM.md
 [SEARCH_CHAT: запрос]  — общий чат с друзьями в Telegram
+[SEARCH_CHAT: YYYY-MM-DD HH:MM]  — комната подряд с этого момента; можно дату или YYYY-MM-DD..YYYY-MM-DD
 [LIST_PROMPTS]         — список всех промптов конвейера
 [SHOW_PROMPT: имя]     — прочесть любой из них целиком
 [WEB_SEARCH: запрос]
@@ -57,6 +58,7 @@ All times in commands use local timezone ({timezone_label}).
 [SEARCH_DIALOGUE: query]
 [SEARCH_DOCS: query]  — the project's documentation: README.md, docs/PIPELINE.md, docs/MEMORY.md, docs/TELEGRAM.md
 [SEARCH_CHAT: query]  — the group chat with her friends on Telegram
+[SEARCH_CHAT: YYYY-MM-DD HH:MM]  — the room in order from that moment; a date or YYYY-MM-DD..YYYY-MM-DD works too
 [LIST_PROMPTS]        — every prompt in the pipeline, by name
 [SHOW_PROMPT: name]   — read any of them in full
 [WEB_SEARCH: query]

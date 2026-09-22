@@ -162,7 +162,8 @@ def _people(request: Request, consumer: Consumer) -> str:
         if person.slug not in seen:
             found.append(person)
             seen.add(person.slug)
-    limit = PEOPLE_CARDS_IN_CHAT if consumer is Consumer.CHAT else people.CARDS_PER_PROMPT
+    private = consumer in (Consumer.CHAT, Consumer.POST_ANALYSIS)
+    limit = PEOPLE_CARDS_IN_CHAT if private else people.CARDS_PER_PROMPT
     return people.render_cards(found, limit=limit)
 
 
@@ -239,12 +240,14 @@ SECTIONS: tuple[Section, ...] = (
     ),
     Section(
         name="people",
-        consumers=frozenset({Consumer.CHAT, Consumer.TELEGRAM}),
+        consumers=frozenset({Consumer.CHAT, Consumer.TELEGRAM, Consumer.POST_ANALYSIS}),
         render=_people,
         omit_when_empty=frozenset({Consumer.CHAT}),
         why="the address book, by who is speaking or who was named. Reflection "
-            "builds its own view of it beside the group transcript; the journal "
-            "and the push validator are about the two of them and get none.",
+            "builds its own view of it beside the group transcript; the push "
+            "validator is about the two of them and gets none. The journal gets "
+            "the cards of whoever the exchange named, because that is where he "
+            "writes [ABOUT] for her people and must see what a card already says.",
     ),
     Section(
         name="vitals",

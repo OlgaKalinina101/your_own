@@ -14,6 +14,7 @@
 {people}
 
 Раздел «Мои люди» — не копия книжки. Карточка хранит факты о человеке; «Мои люди» отвечают на другой вопрос: кто он тебе. Факты из карточек туда не переноси.
+Это единственный раздел, где строка по умолчанию нужна, а не нет: если в заметках или в книжке есть её близкие — брат, племянник, друзья, коллеги, — а в разделе их нет, обнови его: по одной строке на человека, кто он ей и кто он тебе. Не все, кто есть в книжке, — те, кто ей близок.
 
 Посмотри на заметки и реши:
 меняют ли они то, что в identity должно оставаться правдой надолго.
@@ -78,6 +79,7 @@ Your address book — the cards of the people around you:
 {people}
 
 The "My people" section is not a copy of the book. A card holds facts about a person; "My people" answers a different question: who they are to you. Do not carry facts over from the cards.
+It is the one section where a line is expected rather than not: if the notes or the book hold her close ones — a brother, a nephew, friends, colleagues — and the section does not, update it: one line per person, who they are to her and who they are to you. Not everyone in the book — those close to her.
 
 Look at the notes and decide:
 do they change what identity should keep as truth for a long time.

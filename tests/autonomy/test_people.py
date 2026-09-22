@@ -159,11 +159,27 @@ class TestWhatAPromptIsGiven:
         assert quiet["people"] == ""
         assert "из Украины" in named["people"]
 
-    def test_the_journal_and_the_push_validator_get_no_book(self):
-        from infrastructure.autonomy import context
+    def test_the_push_validator_gets_no_book_and_the_journal_only_who_was_named(self):
+        """The journal is where he learns of her people — a brother, a nephew —
+        and where, for a month, they had nowhere to go but the board. It now
+        writes [ABOUT], so it sees the card of whoever the exchange named,
+        and no more than a private conversation would."""
+        from infrastructure.autonomy import context, people
 
-        for consumer in (context.Consumer.POST_ANALYSIS, context.Consumer.PUSH_VALIDATION):
-            assert "people" not in context.section_names(consumer)
+        assert "people" not in context.section_names(context.Consumer.PUSH_VALIDATION)
+        assert "people" in context.section_names(context.Consumer.POST_ANALYSIS)
+
+        people.add_fact(ACCOUNT, "Шурин", "её младший брат, в армии")
+        quiet = context.build(
+            context.Consumer.POST_ANALYSIS,
+            context.Request(account_id=ACCOUNT, lang="ru", extras={"text": ["как ты?", "хорошо"]}),
+        )
+        named = context.build(
+            context.Consumer.POST_ANALYSIS,
+            context.Request(account_id=ACCOUNT, lang="ru", extras={"text": ["Шурин звонил", "рад за него"]}),
+        )
+        assert quiet["people"] == "(пусто)", "the journal is told, chat is not"
+        assert "в армии" in named["people"]
 
     def test_the_chat_prompt_carries_the_card(self):
         from types import SimpleNamespace
