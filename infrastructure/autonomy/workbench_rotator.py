@@ -195,6 +195,15 @@ async def _review_identity(
         # name ("Наши принципы: Мы — Valeo") back at us.
         written = update_m.group(1).strip()
         section = identity.resolve_section(account_id, written)
+        if section and identity.is_people(section):
+            # It has its own step, fed by the book instead of by these notes.
+            # The belt to the prompt's braces: what put her yoga circle in
+            # there was this review reading a note about them.
+            logger.info(
+                "[rotator:%s] identity: «%s» is not this step's to write — ignored",
+                account_id, section,
+            )
+            return False
         new_body = update_m.group(2).strip()
         lines = [ln.strip() for ln in new_body.splitlines() if ln.strip().startswith("- ")]
         if lines and section:
@@ -360,6 +369,130 @@ async def fill_book_from_chat(account_id: str, api_key: str, rows: list, lang: s
             account_id, number, len(chunks), len(chunk), written,
         )
     return total
+
+
+# ── "My people": the one pillar written from the book ───────────────────────
+#
+# It had no step of its own until 23.09. The general identity review owned it,
+# and that review is fed by the notes that just went stale — so on the night of
+# 23.09 it filled the section with her yoga circle (Гор, Мариам, Тереза), who
+# were in the notes from the 20th, while the whole book of people he actually
+# talks to sat unused in the same prompt. It also writes with
+# ``replace_section``, so every night started the section from nothing.
+#
+# So the section works like Canon now: its own step, its own prompt, its own
+# trigger, and it moves lines rather than rewriting the block. The input is the
+# book, never the notes — the question here is "who is this person to me", and
+# only someone he has met himself can be an answer.
+
+_PERSON_RE = re.compile(
+    r"^[ \t]*(?:ЧЕЛОВЕК|PERSON)[ \t]*:[ \t]*(?P<who>.+?)[ \t]*\r?\n"
+    r"[ \t]*(?:СТРОКА|LINE)[ \t]*:[ \t]*(?P<line>.+?)[ \t]*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+_DROP_PERSON_RE = re.compile(
+    r"^[ \t]*(?:УБРАТЬ|REMOVE)[ \t]*:[ \t]*(?P<who>.+?)[ \t]*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+# «- **Ptica Arop** — третий свидетель моего рождения»: the name is what the
+# diff is keyed on, so a line for someone already there replaces theirs.
+_BULLET_RE = re.compile(r"^-\s*\*\*(?P<name>.+?)\*\*\s*[—–-]?\s*(?P<rest>.*)$")
+_PLAIN_BULLET_RE = re.compile(r"^-\s*(?P<name>[^—–]+?)\s*[—–]\s*(?P<rest>.*)$")
+
+
+def _people_bullets(section_content: str) -> list[tuple[str, str]]:
+    """The section as (name, line) pairs, in the order it is written."""
+    out: list[tuple[str, str]] = []
+    for raw in section_content.splitlines():
+        line = raw.strip()
+        if not line.startswith("-"):
+            continue
+        match = _BULLET_RE.match(line) or _PLAIN_BULLET_RE.match(line)
+        if match:
+            out.append((match.group("name").strip(), match.group("rest").strip()))
+        else:
+            out.append(("", line.lstrip("- ").strip()))
+    return out
+
+
+def _merge_people_section(
+    current: list[tuple[str, str]],
+    written: list[tuple[str, str]],
+    dropped: list[str],
+) -> list[tuple[str, str]]:
+    """Apply a diff to the section: replace by name, append the new, drop the rest."""
+    def key(name: str) -> str:
+        return " ".join(name.lower().replace("ё", "е").split())
+
+    gone = {key(name) for name in dropped}
+    updates = {key(name): line for name, line in written}
+    merged: list[tuple[str, str]] = []
+    for name, line in current:
+        if not name:
+            continue                      # a bullet we cannot key on is not carried
+        if key(name) in gone:
+            continue
+        merged.append((name, updates.pop(key(name), line)))
+    for name, line in written:
+        if key(name) in updates and key(name) not in gone:
+            merged.append((name, line))
+            updates.pop(key(name))
+    return merged
+
+
+async def _review_my_people(account_id: str, api_key: str, lang: str) -> int:
+    """Rewrite "My people" from the address book. Returns how many lines moved."""
+    from infrastructure.autonomy import people
+
+    if not people.book_changed_since_review(account_id):
+        return 0
+
+    section = identity.people_section(identity.file_lang(account_id))
+    current = _people_bullets(identity.get_section_content(account_id, section))
+    book = _people_for_review(account_id, lang)
+
+    # load_prompt + format, not get_prompt: the field here is called ``section``
+    # and so is get_prompt's own subsection argument. Canon has the same
+    # collision and works around it the same way.
+    from infrastructure.llm.prompt_loader import load_prompt
+
+    path = f"{_PROMPTS_DIR}/rotator_people.md"
+    fields = dict(
+        ai_name=get_ai_name(),
+        section=section,
+        section_content="\n".join(f"- **{n}** — {t}" for n, t in current)
+        or ("(пусто)" if lang == "ru" else "(empty)"),
+        people=book,
+    )
+    raw = await _complete(
+        api_key,
+        load_prompt(path, lang=lang, section="section_system").format(**fields),
+        load_prompt(path, lang=lang, section="section_user").format(**fields),
+        temperature=0.6, max_tokens=_STEP_MAX_TOKENS,
+    )
+    # The stamp moves either way: a "no" is an answer about this book, and
+    # asking again before he writes another card would buy the same answer.
+    people.mark_book_reviewed(account_id)
+    if not raw or raw.strip().lower() in ("нет", "no"):
+        logger.info("[rotator:%s] my people: nothing to change", account_id)
+        return 0
+
+    written = [(m.group("who").strip(), m.group("line").strip()) for m in _PERSON_RE.finditer(raw)]
+    dropped = [m.group("who").strip() for m in _DROP_PERSON_RE.finditer(raw)]
+    if not written and not dropped:
+        logger.warning("[rotator:%s] my people: no blocks in the reply: %r", account_id, raw[:120])
+        return 0
+
+    merged = _merge_people_section(current, written, dropped)
+    body = "\n".join(f"- **{name}** — {line}" for name, line in merged)
+    if not identity.replace_section(account_id, section, body):
+        logger.warning("[rotator:%s] my people: section %r not found", account_id, section)
+        return 0
+    logger.info(
+        "[rotator:%s] my people: %d written, %d removed, %d in the section",
+        account_id, len(written), len(dropped), len(merged),
+    )
+    return len(written) + len(dropped)
 
 
 async def _consolidate_people(account_id: str, api_key: str, lang: str) -> int:
@@ -553,6 +686,7 @@ async def run(account_id: str, api_key: str) -> dict:
         "promoted": 0,
         "people_moved": 0,
         "people_rebuilt": 0,
+        "my_people": 0,
     }
 
     # Step 1: archive stale notes
@@ -565,6 +699,7 @@ async def run(account_id: str, api_key: str) -> dict:
         # all day, so a card can outgrow its limit on a day no note went stale.
         try:
             result["people_rebuilt"] = await _consolidate_people(account_id, api_key, lang)
+            result["my_people"] = await _review_my_people(account_id, api_key, lang)
         except Exception as exc:
             logger.error("[rotator:%s] address book error: %s", account_id, exc)
         result["consolidated"] = await _consolidate_identity(account_id, api_key, lang, notes_block="")
@@ -585,6 +720,7 @@ async def run(account_id: str, api_key: str) -> dict:
     try:
         result["people_moved"] = await _sort_group_notes(account_id, stale, api_key, lang)
         result["people_rebuilt"] = await _consolidate_people(account_id, api_key, lang)
+        result["my_people"] = await _review_my_people(account_id, api_key, lang)
     except Exception as exc:
         logger.error("[rotator:%s] address book error: %s", account_id, exc)
 

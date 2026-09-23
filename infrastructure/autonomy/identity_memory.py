@@ -70,6 +70,17 @@ def canon_section(lang: str = "ru") -> str:
     return CANON_RU if lang == "ru" else CANON_EN
 
 
+PEOPLE_SECTIONS = {PEOPLE_RU, PEOPLE_EN}
+
+
+def is_people(section: str) -> bool:
+    return section in PEOPLE_SECTIONS
+
+
+def people_section(lang: str = "ru") -> str:
+    return PEOPLE_RU if lang == "ru" else PEOPLE_EN
+
+
 def consolidation_threshold(section: str) -> int:
     """Entry count at which *section* needs attention.
 

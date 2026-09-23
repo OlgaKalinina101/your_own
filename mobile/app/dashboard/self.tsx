@@ -1,9 +1,10 @@
 /**
- * Self — avatar + journal shortcut + inspiration tickers  |  identity viewer.
+ * Self — avatar + journal shortcut + inspiration tickers | identity | people.
  *
- * Two ambient toggles in the top-right corner switch between:
- *   WB  — avatar silhouette, JOURNAL card, scrolling inspiration lines
- *   ID  — collapsible identity document
+ * Three ambient toggles in the top-right corner switch between:
+ *   WB   — avatar silhouette, JOURNAL card, scrolling inspiration lines
+ *   ID   — collapsible identity document
+ *   PPL  — his address book, one card per person
  */
 import React, { useEffect, useRef, useState } from "react";
 import {
@@ -18,7 +19,14 @@ import {
   View,
 } from "react-native";
 import { useRouter } from "expo-router";
-import { getBackendUrl, loadWorkbenchEntries, loadIdentity, loadInspirationFacts } from "@/lib/api";
+import {
+  getBackendUrl,
+  loadWorkbenchEntries,
+  loadIdentity,
+  loadInspirationFacts,
+  loadPeople,
+  type PersonCard,
+} from "@/lib/api";
 import { buildChatImageSource } from "@/lib/chatImages";
 import Collapsible from "@/components/Collapsible";
 import Marquee from "@/components/Marquee";
@@ -26,65 +34,69 @@ import { Empty, Loading, LoadFailed } from "@/components/ScreenState";
 import { useResource } from "@/lib/useResource";
 
 const SCREEN_W = Dimensions.get("window").width;
+const PILL_SEGMENT_W = 48;
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
-type Tab = "wb" | "id";
+type Tab = "wb" | "id" | "ppl";
+
+const TABS: { key: Tab; label: string }[] = [
+  { key: "wb", label: "WB" },
+  { key: "id", label: "ID" },
+  { key: "ppl", label: "PPL" },
+];
 
 // ── Ambient toggle pill ──────────────────────────────────────────────────────
 
 function TogglePill({
-  left,
-  right,
+  options,
   active,
   onToggle,
 }: {
-  left: string;
-  right: string;
+  options: { key: Tab; label: string }[];
   active: Tab;
   onToggle: (t: Tab) => void;
 }) {
-  const slide = useRef(new Animated.Value(active === "wb" ? 0 : 1)).current;
+  const index = Math.max(0, options.findIndex((o) => o.key === active));
+  const slide = useRef(new Animated.Value(index)).current;
 
   useEffect(() => {
     Animated.timing(slide, {
-      toValue: active === "wb" ? 0 : 1,
+      toValue: index,
       duration: 220,
       easing: Easing.out(Easing.quad),
       useNativeDriver: false,
     }).start();
-  }, [active]);
+  }, [index]);
 
-  const knobLeft = slide.interpolate({
-    inputRange: [0, 1],
-    outputRange: ["0%", "50%"],
-  });
+  // interpolate needs at least two stops, and one segment needs no animation.
+  const knobLeft =
+    options.length > 1
+      ? slide.interpolate({
+          inputRange: options.map((_, i) => i),
+          outputRange: options.map((_, i) => `${(i * 100) / options.length}%`),
+        })
+      : "0%";
 
   return (
-    <View style={sty.pill}>
-      <Animated.View style={[sty.pillKnob, { left: knobLeft }]} />
-      <TouchableOpacity
-        style={sty.pillHalf}
-        activeOpacity={0.7}
-        onPress={() => onToggle("wb")}
-      >
-        <Text
-          style={[sty.pillLabel, active === "wb" && sty.pillLabelActive]}
+    <View style={[sty.pill, { width: PILL_SEGMENT_W * options.length }]}>
+      <Animated.View
+        style={[sty.pillKnob, { left: knobLeft, width: `${100 / options.length}%` }]}
+      />
+      {options.map((option) => (
+        <TouchableOpacity
+          key={option.key}
+          style={sty.pillHalf}
+          activeOpacity={0.7}
+          onPress={() => onToggle(option.key)}
         >
-          {left}
-        </Text>
-      </TouchableOpacity>
-      <TouchableOpacity
-        style={sty.pillHalf}
-        activeOpacity={0.7}
-        onPress={() => onToggle("id")}
-      >
-        <Text
-          style={[sty.pillLabel, active === "id" && sty.pillLabelActive]}
-        >
-          {right}
-        </Text>
-      </TouchableOpacity>
+          <Text
+            style={[sty.pillLabel, active === option.key && sty.pillLabelActive]}
+          >
+            {option.label}
+          </Text>
+        </TouchableOpacity>
+      ))}
     </View>
   );
 }
@@ -192,6 +204,72 @@ function IdentityView({ text }: { text: string }) {
           </Collapsible>
         );
       })}
+    </Animated.ScrollView>
+  );
+}
+
+// ── People tab: the address book ────────────────────────────────────────────
+
+/**
+ * One card per person, newest line last, the people he talks to at the top.
+ *
+ * The book is his and he writes it himself — in the group chat the moment he
+ * learns something, and in the journal after a conversation here. Before this
+ * screen the only way to read it was to open the files on the server.
+ */
+function PeopleTab() {
+  const { resource, reload } = useResource(
+    () => loadPeople().then((d) => d.people),
+    [],
+  );
+
+  if (resource.status === "loading") return <Loading />;
+  if (resource.status === "error") {
+    return <LoadFailed message={resource.message} onRetry={reload} />;
+  }
+  if (resource.data.length === 0) return <Empty text="the book is empty" />;
+  return <PeopleView people={resource.data} />;
+}
+
+function PeopleView({ people }: { people: PersonCard[] }) {
+  const opacity = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    opacity.setValue(0);
+    Animated.timing(opacity, {
+      toValue: 1,
+      duration: 400,
+      easing: Easing.out(Easing.quad),
+      useNativeDriver: true,
+    }).start();
+  }, [people]);
+
+  return (
+    <Animated.ScrollView
+      style={[sty.idScroll, { opacity }]}
+      contentContainerStyle={sty.idContent}
+      showsVerticalScrollIndicator={false}
+    >
+      <Text style={sty.peopleCount}>
+        {people.length} {people.length === 1 ? "CARD" : "CARDS"}
+      </Text>
+      {people.map((person) => (
+        <Collapsible
+          key={person.slug}
+          title={person.aka.length > 0 ? `${person.name} · ${person.aka[0]}` : person.name}
+        >
+          <View>
+            {person.lines.map((line, i) => (
+              <View key={i} style={sty.personLine}>
+                {line.date ? (
+                  <Text style={sty.personDate}>{line.date}</Text>
+                ) : null}
+                <Text style={sty.idBody}>{line.text}</Text>
+              </View>
+            ))}
+          </View>
+        </Collapsible>
+      ))}
     </Animated.ScrollView>
   );
 }
@@ -313,15 +391,10 @@ export default function SelfScreen() {
       {/* Toggle row */}
       <View style={sty.header}>
         <View style={sty.spacer} />
-        <TogglePill
-          left="WB"
-          right="ID"
-          active={tab}
-          onToggle={setTab}
-        />
+        <TogglePill options={TABS} active={tab} onToggle={setTab} />
       </View>
 
-      {tab === "wb" ? <WbView /> : <IdentityTab />}
+      {tab === "wb" ? <WbView /> : tab === "id" ? <IdentityTab /> : <PeopleTab />}
     </SafeAreaView>
   );
 }
@@ -341,10 +414,9 @@ const sty = StyleSheet.create({
   },
   spacer: { flex: 1 },
 
-  // Toggle pill
+  // Toggle pill — one segment per tab, so the width follows the list
   pill: {
     flexDirection: "row",
-    width: 96,
     height: 28,
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.12)",
@@ -355,7 +427,6 @@ const sty = StyleSheet.create({
   pillKnob: {
     position: "absolute",
     top: 0,
-    width: "50%",
     height: "100%",
     backgroundColor: "rgba(255,255,255,0.07)",
     borderRadius: 14,
@@ -458,5 +529,25 @@ const sty = StyleSheet.create({
     letterSpacing: 3,
     textTransform: "uppercase",
     fontWeight: "500",
+  },
+
+  // ── People ──────────────────────────────────────────────────────────────
+  peopleCount: {
+    color: "rgba(255,255,255,0.25)",
+    fontSize: 9,
+    letterSpacing: 3,
+    fontWeight: "500",
+    marginBottom: 12,
+  },
+  personLine: {
+    marginBottom: 12,
+    paddingLeft: 22,
+  },
+  personDate: {
+    color: "rgba(255,255,255,0.22)",
+    fontSize: 9,
+    letterSpacing: 2,
+    fontWeight: "400",
+    marginBottom: 3,
   },
 });

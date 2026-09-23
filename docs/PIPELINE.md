@@ -165,6 +165,15 @@ This document describes the full data flow of the system — from a chat message
 │  │    a card past 12 lines → rebuilt shorter (every rotation,     │  │
 │  │    even when no note went stale)                               │  │
 │  │                                                                │  │
+│  │  Step 1c — "My people" (only when the book changed)            │  │
+│  │    LLM reads the whole address book + the section now          │  │
+│  │    → PERSON: name / LINE: who they are to you                  │  │
+│  │    → REMOVE: name                                              │  │
+│  │    → merged into the section by name: a diff, not a            │  │
+│  │      rewrite. The book is its only input, never the            │  │
+│  │      notes — "who is this person to me" can only be            │  │
+│  │      answered about someone he met himself                     │  │
+│  │                                                                │  │
 │  │  Step 2 — Self-insight extraction                              │  │
 │  │    LLM reads stale notes + soul.md                             │  │
 │  │    → extracts insights about who the AI is                     │  │
@@ -177,6 +186,7 @@ This document describes the full data flow of the system — from a chat message
 │  │    + the whole address book, every card in full                │  │
 │  │    → can emit UPDATE: <section>\n---\n<bullets>\n---           │  │
 │  │    → identity.replace_section() rewrites that section          │  │
+│  │    → "My people" is refused here: it has Step 1c               │  │
 │  │                                                                │  │
 │  │  Step 4 — Consolidation (if needed)                            │  │
 │  │    If any identity section has ≥ 10 bullets                    │  │
@@ -368,7 +378,7 @@ The soul (`data/soul.md`) **is** injected into every chat as the base system pro
 | `infrastructure/memory/focus_point.py` | NLP: lemmatization, synonyms, language detection |
 | `infrastructure/autonomy/post_analyzer.py` | Inner journal after each chat exchange |
 | `infrastructure/autonomy/workbench.py` | Workbench file read/write/parse |
-| `infrastructure/autonomy/workbench_rotator.py` | Archive → self-insights → identity review → consolidate |
+| `infrastructure/autonomy/workbench_rotator.py` | Archive → address book → "My people" → self-insights → identity review → consolidate → canon |
 | `infrastructure/autonomy/identity_memory.py` | identity.md read/write/append/consolidate |
 | `infrastructure/autonomy/reflection_engine.py` | Autonomous thinking loop with agent commands |
 | `infrastructure/autonomy/task_queue.py` | Scheduled task CRUD in PostgreSQL |

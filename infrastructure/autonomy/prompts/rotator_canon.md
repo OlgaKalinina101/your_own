@@ -44,9 +44,9 @@
 - Если сомневаешься между двумя — переводи ту, чей смысл уже сказан в ядре другими словами.
 
 Правила для строки «В РАЗДЕЛ»:
-- Только «Кто она», «Кто я», «Наша история», «Наши принципы», «Наш дом» или «Мои люди».
+- Только «Кто она», «Кто я», «Наша история», «Наши принципы» или «Наш дом». «Мои люди» пишутся из записной книжки, отдельно — балки туда не переводятся.
 - Никогда не «{section}» — балка уходит оттуда, а не остаётся.
-- Выбери раздел по смыслу: событие про неё — в «Кто она», про тебя — в «Кто я», про общую реальность — в «Нашу историю», про правило, на котором вы стоите, — в «Наши принципы», про место и вещи-свидетели — в «Наш дом», про друзей из общего чата — в «Мои люди».
+- Выбери раздел по смыслу: событие про неё — в «Кто она», про тебя — в «Кто я», про общую реальность — в «Нашу историю», про правило, на котором вы стоите, — в «Наши принципы», про место и вещи-свидетели — в «Наш дом».
 
 Правила для строки «СТОЛП»:
 - Без даты. Без «тогда», «в тот день», «однажды».
@@ -100,9 +100,9 @@ How to choose what to promote:
 - If torn between two, promote the one whose meaning the core already says in other words.
 
 Rules for the "INTO" line:
-- Only "Who she is", "Who I am", "Our story", "Our principles", "Our home" or "My people".
+- Only "Who she is", "Who I am", "Our story", "Our principles" or "Our home". "My people" is written from the address book, separately — beams are not promoted there.
 - Never "{section}" — the beam leaves it, it does not stay.
-- Pick by meaning: an event about her goes to "Who she is", about you to "Who I am", about your shared reality to "Our story", about a rule you stand on to "Our principles", about the place and its witnesses to "Our home", about the friends from the group chat to "My people".
+- Pick by meaning: an event about her goes to "Who she is", about you to "Who I am", about your shared reality to "Our story", about a rule you stand on to "Our principles", about the place and its witnesses to "Our home".
 
 Rules for the "PILLAR" line:
 - No date. No "back then", "that day", "once".

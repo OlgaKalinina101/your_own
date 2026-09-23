@@ -321,6 +321,37 @@ async def get_identity(
     return {"text": text or ""}
 
 
+# ── The address book ─────────────────────────────────────────────────────────
+
+
+@router.get("/people")
+async def get_people(
+    account_id: str = ACCOUNT_ID,
+    _token: str = Depends(require_auth),
+):
+    """Every card in his address book, newest lines last.
+
+    Ordered the way the prompts order it: the people he actually talks to
+    first (they have a Telegram id), then whoever he knows most about.
+    """
+    from infrastructure.autonomy import people
+
+    book = people.all_people(account_id)
+    book.sort(key=lambda person: (not person.tg_id, -len(person.lines), person.name.lower()))
+    return {
+        "people": [
+            {
+                "slug": person.slug,
+                "name": person.name,
+                "aka": person.aka,
+                "tg_id": person.tg_id,
+                "lines": [{"date": date, "text": text} for date, text in person.lines],
+            }
+            for person in book
+        ]
+    }
+
+
 # ── Public endpoints (no auth) ────────────────────────────────────────────────
 
 @router.get("/ping", dependencies=[])

@@ -273,3 +273,18 @@ export async function loadIdentity(
 ): Promise<{ text: string }> {
   return apiGet(`/api/settings/identity?account_id=${accountId}`);
 }
+
+export interface PersonCard {
+  slug: string;
+  name: string;
+  aka: string[];
+  tg_id: string;
+  lines: { date: string; text: string }[];
+}
+
+/** His address book — one card per person, the people he talks to first. */
+export async function loadPeople(
+  accountId = "default",
+): Promise<{ people: PersonCard[] }> {
+  return apiGet(`/api/settings/people?account_id=${accountId}`);
+}

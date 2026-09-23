@@ -404,8 +404,12 @@ class TestTheRotatorsNet:
         assert result["rotated"] == 0 and result["people_rebuilt"] == 1
         assert len(people.find(ACCOUNT, "Галя").lines) == 2
 
-    @pytest.mark.parametrize("lang,needle", [("ru", "не копия книжки"), ("en", "not a copy of the book")])
-    def test_the_identity_review_sees_the_book_and_is_told_the_difference(self, lang, needle):
+    @pytest.mark.parametrize("lang,needle", [
+        ("ru", "этим шагом не трогай"), ("en", 'Do not touch the "My people" section in this step'),
+    ])
+    def test_the_identity_review_sees_the_book_but_may_not_write_my_people(self, lang, needle):
+        """It sees the book only to know who the notes are talking about.
+        Writing the section is a step of its own now — see test_my_people.py."""
         from infrastructure.llm.prompt_loader import load_prompt
 
         body = load_prompt("infrastructure/autonomy/prompts/rotator_identity.md", lang=lang, section="user")

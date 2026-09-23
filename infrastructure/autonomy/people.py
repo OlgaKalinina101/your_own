@@ -144,6 +144,37 @@ def _save(account_id: str, person: Person) -> None:
         atomic_write_text(_dir(account_id) / f"{person.slug}.md", _render_file(person))
 
 
+def _reviewed_file(account_id: str) -> Path:
+    return _DATA_DIR / account_id / "my_people_seen.txt"
+
+
+def book_stamp(account_id: str) -> str:
+    """A cheap mark of the book's state: how many cards, how many lines."""
+    book = all_people(account_id)
+    return f"{len(book)}:{sum(len(p.lines) for p in book)}"
+
+
+def book_changed_since_review(account_id: str) -> bool:
+    """Has anything been written in the book since "My people" last looked?
+
+    The identity section is rewritten from the book, and the book only changes
+    when he writes a card. Without this the step would pay for a model call on
+    every rotation to be told nothing has changed.
+    """
+    path = _reviewed_file(account_id)
+    try:
+        return path.read_text(encoding="utf-8").strip() != book_stamp(account_id)
+    except OSError:
+        return True
+
+
+def mark_book_reviewed(account_id: str) -> None:
+    from infrastructure.state_file import atomic_write_text
+
+    _dir(account_id)        # the account directory exists after this
+    atomic_write_text(_reviewed_file(account_id), book_stamp(account_id))
+
+
 def all_people(account_id: str) -> list[Person]:
     people: list[Person] = []
     for path in sorted(_dir(account_id).glob("*.md")):

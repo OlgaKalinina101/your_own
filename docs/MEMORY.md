@@ -187,8 +187,30 @@ Notes are for what is his — what stirred in him, what is happening today. What
 | The group reply | cards of whoever is speaking (by Telegram id) or named (by name, any case) in the last 15 messages — up to 6 |
 | Reflection | cards of whoever spoke since he last read the room, an index of the rest, `[SHOW_PERSON]` |
 | Private chat | up to 2 cards, only when she names someone |
-| Post-analysis, push validator | nothing |
-| Rotator | **the whole book, every card in full**, for the identity review — with the rule that a card holds facts and *My people* says who they are to him. Not cut to fit: 31 cards measured 11.6k characters beside an identity of 19.6k |
+| Post-analysis | up to 2 cards, only when the exchange names someone — it writes `[ABOUT]` for *her* people |
+| Push validator | nothing |
+| Rotator | **the whole book, every card in full**, for the "My people" step and for the identity review. Not cut to fit: 31 cards measured 11.6k characters beside an identity of 19.6k |
+| The app | every card, on the **PPL** tab of the Self screen (`GET /api/settings/people`) |
+
+### "My people" — the one identity section written from the book
+
+It is not a copy of the book. A card holds facts about a person; the section
+answers who they are *to him*, and it rides in every prompt, so a line there is
+expensive.
+
+Who belongs: people he has spoken with himself, and only those of them he wants
+to keep that way. Who does not: people he has only heard about from her — her
+colleagues, her circle — and anyone he has a card for but no relationship with.
+Most of the book does not belong there.
+
+It had no step of its own until 23.09, and the general identity review owned it.
+That review is fed by the notes that just went stale, so the section filled with
+her yoga circle — who were in the notes from the 20th — while the book of people
+he actually talks to sat unused in the same prompt. Now it works like Canon: its
+own step, its own prompt, and it moves lines by name (`PERSON` / `LINE` /
+`REMOVE`) instead of rewriting the block. It runs only when the book has changed
+since it last looked (`data/autonomy/{account}/my_people_seen.txt`), and both the
+identity review and canon promotion are refused the section in code.
 
 How a card is found, in the order it is tried:
 
